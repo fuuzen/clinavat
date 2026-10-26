@@ -1,0 +1,425 @@
+@media (min-width: 1600px) {
+  .app-shell {
+    grid-template-columns: 270px minmax(0, 1fr);
+  }
+  .app-shell.with-inspector {
+    grid-template-columns: 270px minmax(0, 1fr) 360px;
+  }
+  .welcome {
+    padding-top: 95px;
+  }
+  .welcome h1 {
+    font-size: 35px;
+  }
+  .welcome-features {
+    margin-top: 55px;
+  }
+  .sidebar-brand {
+    padding-left: 23px;
+  }
+  .version-badge {
+    font-size: 7px;
+  }
+  .conversation {
+    padding-top: 42px;
+  }
+}
+@media (max-width: 1200px) {
+  .app-shell {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+  .app-shell.with-inspector {
+    grid-template-columns: 224px minmax(0, 1fr) 275px;
+  }
+  .sidebar-brand {
+    padding: 0 16px;
+    gap: 8px;
+  }
+  .version-badge {
+    font-size: 5px;
+  }
+  .conversation {
+    padding: 25px;
+  }
+  .composer-area {
+    padding: 10px 23px 17px;
+  }
+  .welcome {
+    padding: 70px 35px 30px;
+  }
+  .welcome h1 {
+    font-size: 27px;
+  }
+  .welcome-features small {
+    font-size: 7px;
+  }
+  .welcome-features {
+    gap: 7px;
+  }
+  .project-welcome {
+    padding-top: 45px;
+  }
+  .prompt-suggestions {
+    gap: 6px;
+  }
+  .prompt-suggestions button {
+    font-size: 9px;
+    padding: 14px 10px;
+  }
+  .permission-note {
+    display: none;
+  }
+  .with-inspector .welcome {
+    padding: 55px 24px 25px;
+  }
+  .with-inspector .welcome h1 {
+    font-size: 24px;
+  }
+  .with-inspector .welcome-features {
+    gap: 8px;
+  }
+  .with-inspector .welcome-features small {
+    display: none;
+  }
+  .with-inspector .project-welcome h1 {
+    font-size: 24px;
+  }
+  .with-inspector .prompt-suggestions {
+    grid-template-columns: 1fr;
+  }
+  .with-inspector .prompt-suggestions button {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+  }
+  .with-inspector .prompt-suggestions button > svg:last-child {
+    bottom: auto;
+    top: 15px;
+  }
+}
+@media (max-width: 960px) {
+  .app-shell.with-inspector {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+  .inspector {
+    position: fixed;
+    width: 320px;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    box-shadow: -15px 0 50px #0006;
+  }
+  .app-shell.with-inspector .welcome {
+    padding: 60px 35px 30px;
+  }
+  .with-inspector .welcome-features small {
+    display: block;
+  }
+  .with-inspector .prompt-suggestions {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .with-inspector .prompt-suggestions button {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px 10px;
+  }
+  .with-inspector .prompt-suggestions button > svg:last-child {
+    top: auto;
+    bottom: 16px;
+  }
+  .connection-status {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .app-shell,
+  .app-shell.with-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: -270px;
+    width: 260px;
+    transition: left 0.2s;
+    z-index: 60;
+    box-shadow: 10px 0 40px #0005;
+  }
+  .sidebar.sidebar-open {
+    left: 0;
+  }
+  .sidebar-brand .mobile-only {
+    margin-left: auto;
+  }
+  .sidebar-brand .version-badge {
+    display: none;
+  }
+  .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: #0008;
+    z-index: 50;
+    display: none;
+  }
+  .sidebar-overlay.visible {
+    display: block;
+  }
+  .workspace-header {
+    padding: 0 15px;
+    height: 54px;
+    gap: 10px;
+  }
+  .workspace-header > .icon-button {
+    margin-left: -5px;
+  }
+  .header-actions {
+    gap: 5px;
+  }
+  .breadcrumb {
+    gap: 8px;
+  }
+  .breadcrumb > span:first-child {
+    font-size: 10px;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .breadcrumb strong {
+    font-size: 9px;
+  }
+  .inspector {
+    width: min(340px, 100vw);
+    z-index: 40;
+  }
+  .welcome,
+  .app-shell.with-inspector .welcome {
+    padding: 55px 23px 30px;
+  }
+  .welcome h1 {
+    font-size: 28px;
+  }
+  .welcome-symbol {
+    height: 64px;
+    width: 64px;
+  }
+  .welcome-features {
+    gap: 10px;
+    margin-top: 36px;
+    padding: 23px 0;
+  }
+  .welcome-features small,
+  .with-inspector .welcome-features small {
+    font-size: 7px;
+  }
+  .welcome-features strong {
+    font-size: 10px;
+  }
+  .welcome-features > div > span {
+    margin-bottom: 10px;
+  }
+  .workspace-footer {
+    padding: 13px 18px;
+    font-size: 7px;
+  }
+  .workspace-footer > span:last-child {
+    display: none;
+  }
+  .conversation {
+    padding: 25px 20px;
+  }
+  .project-welcome,
+  .with-inspector .project-welcome {
+    padding: 45px 0 15px;
+  }
+  .project-welcome h1,
+  .with-inspector .project-welcome h1 {
+    font-size: 27px;
+  }
+  .project-welcome > p {
+    font-size: 11px;
+  }
+  .prompt-suggestions,
+  .with-inspector .prompt-suggestions {
+    grid-template-columns: 1fr;
+    margin-top: 28px;
+    gap: 8px;
+  }
+  .prompt-suggestions button,
+  .with-inspector .prompt-suggestions button {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    font-size: 11px;
+  }
+  .prompt-suggestions button > svg:last-child,
+  .with-inspector .prompt-suggestions button > svg:last-child {
+    top: 15px;
+    bottom: auto;
+    right: 14px;
+  }
+  .project-location {
+    margin-top: 25px;
+    font-size: 8px;
+  }
+  .composer-area {
+    padding: 10px 15px 16px;
+  }
+  .composer > textarea {
+    font-size: 12px;
+    padding-top: 13px;
+    min-height: 74px;
+  }
+  .composer-toolbar {
+    padding-bottom: 9px;
+  }
+  .composer-footer {
+    font-size: 7px;
+  }
+  .keyboard-hint {
+    display: none;
+  }
+  .markdown {
+    font-size: 12px;
+    padding-left: 0;
+  }
+  .message-author {
+    margin-bottom: 14px;
+  }
+  .message {
+    padding-bottom: 27px;
+  }
+  .tools-list {
+    padding-left: 0;
+  }
+  .approval-card {
+    margin-left: 0;
+  }
+  .hover-action {
+    opacity: 0.65;
+  }
+  .sidebar-search input {
+    font-size: 11px;
+  }
+  .host-select {
+    font-size: 12px;
+  }
+  .project-row .tree-row,
+  .session-row .tree-row {
+    font-size: 11px;
+  }
+  .tree-row {
+    min-height: 35px;
+  }
+  .section-label {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 700px) {
+  .modal-backdrop {
+    padding: 16px;
+    align-items: center;
+  }
+  .modal {
+    max-height: calc(100dvh - 32px);
+    border-radius: 10px;
+  }
+  .modal-header {
+    padding: 21px 20px 18px;
+  }
+  .modal-header h2 {
+    font-size: 18px;
+  }
+  .modal-header p {
+    font-size: 10px;
+  }
+  .modal-form {
+    padding: 20px 20px 0;
+    gap: 17px;
+  }
+  .modal input,
+  .modal textarea,
+  .modal select {
+    font-size: 12px;
+  }
+  .modal-form label {
+    font-size: 11px;
+  }
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+  .settings-nav {
+    display: flex;
+    gap: 5px;
+    padding: 10px 13px;
+    border-right: 0;
+    border-bottom: 1px solid #3a512d;
+    overflow: auto;
+  }
+  .settings-nav > button {
+    width: auto;
+    white-space: nowrap;
+    margin: 0;
+    font-size: 10px;
+    padding: 9px;
+  }
+  .settings-nav > button.active {
+    padding: 8px;
+  }
+  .settings-body {
+    padding: 20px 18px;
+  }
+  .settings-section-heading h3 {
+    font-size: 12px;
+  }
+  .modal-wide {
+    width: 520px;
+  }
+  .account-card {
+    padding: 12px;
+  }
+  .account-card > .badge {
+    display: none;
+  }
+  .form-row {
+    gap: 10px;
+  }
+  .slot-admin-card {
+    padding: 12px;
+  }
+  .modal-actions .button {
+    font-size: 11px;
+    padding: 9px 13px;
+  }
+  .engine-choice > button {
+    padding: 14px;
+  }
+  .engine-choice > button > small {
+    font-size: 8px;
+  }
+  .key-instructions > p {
+    font-size: 10px;
+  }
+  .key-instructions pre {
+    font-size: 9px;
+  }
+  .notices {
+    right: 13px;
+    bottom: 13px;
+    width: calc(100vw - 26px);
+  }
+  .notice > span {
+    font-size: 11px;
+  }
+  .notice {
+    padding: 12px;
+  }
+  .confirm-copy {
+    font-size: 12px;
+  }
+}

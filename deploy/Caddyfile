@@ -1,0 +1,27 @@
+{
+	admin off
+	auto_https off
+}
+
+http://:{$CC_POOL_WEB_PORT:8080} {
+	bind {$CC_POOL_WEB_BIND:127.0.0.1}
+	root * "{$CC_POOL_FRONTEND_DIR}"
+	request_body {
+		max_size 1MiB
+	}
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	}
+	handle /api/* {
+		reverse_proxy {$CC_POOL_HOST:127.0.0.1}:{$CC_POOL_PORT:3001} {
+			flush_interval -1
+		}
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

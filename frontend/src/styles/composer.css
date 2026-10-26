@@ -1,0 +1,130 @@
+.composer-area {
+  flex-shrink: 0;
+  padding: 12px 35px 20px;
+  max-width: 840px;
+  width: 100%;
+  margin: 0 auto;
+  position: relative;
+}
+.composer {
+  background: #1b211c;
+  border: 1px solid #3b473c;
+  box-shadow: 0 5px 22px #0000001a;
+  border-radius: 15px;
+  transition: border-color 0.2s;
+}
+.composer:focus-within {
+  border-color: #627c54;
+  box-shadow:
+    0 0 0 3px #6b8d560a,
+    0 5px 22px #0000001a;
+}
+.composer > textarea {
+  border: 0;
+  border-radius: 15px;
+  background: none;
+  resize: none;
+  padding: 16px 17px 5px;
+  outline: none;
+  width: 100%;
+  font-size: 11px;
+  line-height: 1.9;
+  min-height: 80px;
+  max-height: 200px;
+  box-shadow: none;
+  color: #cadac0;
+}
+.composer > textarea::placeholder {
+  color: #6c8460;
+}
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px 9px;
+}
+.permission-note {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  color: #849181;
+  font-size: 10px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.send-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #b0d897;
+  color: #2c431f;
+  margin-left: auto;
+  border: 1px solid #bedda7;
+  flex-shrink: 0;
+}
+.send-button:hover:not(:disabled) {
+  background: #c8e9b1;
+}
+.send-button:disabled {
+  opacity: 1;
+  color: #536947;
+  background: #2b3a23;
+  border-color: #3c5130;
+}
+.stop-button {
+  background: #adc897;
+}
+.composer-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 2px 0;
+  color: #566e4b;
+  font-size: 7px;
+}
+.composer-footer > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.composer-footer .status-dot {
+  height: 4px;
+  width: 4px;
+}
+.keyboard-hint {
+  margin-left: 7px;
+  color: #485f3d;
+}
+.composer-warning {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  color: #c2b57c;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #4a402522;
+  border: 1px solid #5c512d;
+}
+.scroll-bottom {
+  position: absolute;
+  top: -23px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #435a36;
+  background: #283821;
+  color: #abc49d;
+  font-size: 9px;
+  border-radius: 15px;
+  padding: 6px 10px;
+  box-shadow: 0 5px 20px #0005;
+  z-index: 2;
+}

@@ -1,0 +1,20 @@
+{
+  "name": "cc-pool",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["backend", "frontend"],
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "dev": "concurrently -n hub,web -c cyan,magenta \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "check": "npm run check -w backend && npm run check -w frontend",
+    "start": "npm run start -w backend",
+    "admin:reset-password": "npm run admin:reset-password -w backend --",
+    "host:install": "node deploy/host.mjs install",
+    "host:start": "node deploy/host.mjs start",
+    "host:stop": "node deploy/host.mjs stop",
+    "host:status": "node deploy/host.mjs status",
+    "host:logs": "node deploy/host.mjs logs"
+  },
+  "devDependencies": { "concurrently": "^9.2.1" }
+}

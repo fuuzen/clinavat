@@ -1,0 +1,92 @@
+.turn-process {
+  margin: -10px 0 24px 31px;
+  min-width: 0;
+}
+.activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 0;
+  color: #8fa780;
+  font-size: 10px;
+  text-align: left;
+  border-radius: 5px;
+}
+.activity-toggle:hover {
+  color: #c2d6b4;
+}
+.activity-toggle:focus-visible {
+  outline: 1px solid #91b77d;
+  outline-offset: 3px;
+}
+.activity-toggle > svg {
+  flex-shrink: 0;
+}
+.activity-toggle > span {
+  overflow-wrap: anywhere;
+}
+.activity-toggle > svg:last-child {
+  color: #6c895d;
+  transition: transform 0.2s;
+}
+.turn-toggle {
+  color: #78936a;
+}
+.turn-details {
+  border-left: 1px solid #35472c;
+  padding: 8px 0 2px 14px;
+  margin: 4px 0 0 6px;
+}
+.activity-text {
+  margin-bottom: 12px;
+}
+.activity-text .markdown {
+  padding-left: 0;
+  color: #a2b59a;
+  font-size: 11px;
+}
+.activity-reasoning .markdown {
+  color: #8da180;
+}
+.reasoning-label {
+  display: block;
+  color: #718c63;
+  font-size: 8px;
+  margin-bottom: 6px;
+}
+.activity-placeholder {
+  color: #78936a;
+  font-size: 10px;
+  padding: 2px 0 10px;
+}
+.execution-group {
+  margin-bottom: 9px;
+  min-width: 0;
+}
+.execution-toggle {
+  padding: 8px 0;
+  color: #8fa780;
+}
+.execution-details {
+  padding: 0 0 2px 2px;
+}
+.execution-details .tool-card {
+  margin: 6px 0;
+}
+.tool-card > button:focus-visible {
+  outline: 1px solid #91b77d;
+  outline-offset: -2px;
+}
+.tool-details pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .turn-process {
+    margin-left: 0;
+  }
+  .turn-details {
+    padding-left: 11px;
+  }
+}

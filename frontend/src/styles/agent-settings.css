@@ -1,0 +1,207 @@
+.agent-settings {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 3px;
+}
+.settings-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #b7c2b4;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.settings-trigger:hover:not(:disabled),
+.settings-trigger[aria-expanded="true"] {
+  color: #e0e8dc;
+  background: #ffffff09;
+}
+.settings-trigger:focus-visible {
+  outline: 1px solid #9bc58b;
+  outline-offset: 1px;
+}
+.settings-trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.settings-trigger > svg {
+  color: #83917d;
+}
+.settings-trigger > svg:last-child {
+  transition: transform 0.15s;
+}
+.settings-trigger[aria-expanded="true"] > svg:last-child:not(.spin) {
+  transform: rotate(180deg);
+}
+.settings-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-trigger {
+  max-width: 230px;
+  flex: 0 1 auto;
+}
+.effort-trigger {
+  flex: 0 0 auto;
+  color: #98a793;
+  max-width: 115px;
+}
+.settings-trigger-error > svg:last-child {
+  color: #d3b67b;
+}
+.engine-symbol {
+  flex-shrink: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+.engine-claude {
+  color: #dcad8e;
+}
+.engine-codex {
+  color: #a8d3a5;
+}
+.settings-menu {
+  padding: 6px;
+  border: 1px solid #3a443a;
+  border-radius: 12px;
+  background: #202621;
+  color: #dbe3d8;
+  box-shadow: 0 12px 40px #0006, 0 2px 8px #0003;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  outline: none;
+}
+.settings-menu-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px;
+  color: #a1ae9d;
+  font-size: 11px;
+  font-weight: 500;
+}
+.settings-menu-heading > span:last-child:not(:first-child) {
+  color: #788775;
+  font-size: 10px;
+}
+.settings-engine-choices {
+  display: flex;
+  gap: 3px;
+  margin: 0 3px 7px;
+  padding: 3px;
+  border-radius: 8px;
+  background: #161c17;
+}
+.settings-engine-choices > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: #8e9b8a;
+  font-size: 11px;
+}
+.settings-engine-choices > button[aria-checked="true"] {
+  background: #303a2f;
+  color: #e0e8dc;
+  box-shadow: 0 1px 3px #0003;
+}
+.settings-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  text-align: left;
+  color: #cbd5c7;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-menu-item:hover:not(:disabled),
+.settings-menu-item:focus-visible {
+  background: #ffffff08;
+}
+.settings-menu-item:focus-visible,
+.settings-engine-choices > button:focus-visible {
+  outline: 1px solid #92b77f;
+  outline-offset: -1px;
+}
+.settings-menu-item[aria-checked="true"] {
+  color: #d9eacc;
+}
+.settings-item-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.settings-item-copy > small {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: #8d9b88;
+}
+.settings-item-check {
+  color: #b6d7a3;
+  opacity: 0;
+}
+[aria-checked="true"] > .settings-item-check {
+  opacity: 1;
+}
+.settings-menu-status,
+.settings-menu-footnote {
+  padding: 8px 10px;
+  color: #8d9b88;
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.settings-menu-error {
+  color: #d3b67b;
+}
+.settings-menu-footnote {
+  margin-top: 5px;
+  border-top: 1px solid #323b30;
+}
+@media (max-width: 700px) {
+  .composer-toolbar {
+    gap: 5px;
+  }
+  .agent-settings {
+    gap: 1px;
+  }
+  .settings-trigger {
+    gap: 5px;
+    height: 32px;
+    padding: 0 6px;
+  }
+  .model-trigger {
+    max-width: 200px;
+  }
+  .effort-trigger {
+    max-width: 90px;
+  }
+  .settings-menu-item {
+    min-height: 42px;
+  }
+}

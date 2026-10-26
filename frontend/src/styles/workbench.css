@@ -1,0 +1,243 @@
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background:
+    radial-gradient(ellipse at 50% 25%, #2130200d, transparent 70%), #111412;
+}
+.workspace-header {
+  height: 58px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #282e28;
+  display: flex;
+  align-items: center;
+  padding: 0 23px;
+  gap: 13px;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+  font-size: 10px;
+}
+.breadcrumb > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b9c5b6;
+  white-space: nowrap;
+}
+.breadcrumb > span:first-child svg {
+  color: #7d9376;
+}
+.breadcrumb-divider {
+  color: #4d5e49;
+}
+.breadcrumb strong {
+  color: #6f8668;
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+}
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #697d64;
+  font-size: 8px;
+  white-space: nowrap;
+}
+.connection-status .status-dot {
+  width: 4px;
+  height: 4px;
+}
+.connection-status.connected .status-dot {
+  background: #8cb581;
+}
+.header-actions > .icon-button {
+  height: 25px;
+  width: 25px;
+}
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+.welcome {
+  max-width: 770px;
+  width: 100%;
+  padding: 68px 46px 35px;
+  margin: 0 auto;
+  text-align: center;
+}
+.welcome-symbol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+  height: 70px;
+  width: 70px;
+  color: #b2ce9e;
+  background: radial-gradient(circle at 30% 30%, #38452d88, #1d271b);
+  border: 1px solid #435637;
+  border-radius: 20px;
+  position: relative;
+  box-shadow:
+    0 0 70px #86a86d0d,
+    0 10px 24px #00000017;
+  transform: rotate(-4deg);
+}
+.welcome-symbol > svg {
+  transform: rotate(4deg);
+}
+.welcome-symbol > span {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: #a9cc91;
+  right: 10px;
+  top: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #a9cc9188;
+}
+.welcome > .eyebrow {
+  justify-content: center;
+  font-size: 8px;
+  letter-spacing: 0.21em;
+  color: #7a926c;
+  margin-bottom: 15px;
+}
+.welcome h1 {
+  font-size: 31px;
+  line-height: 1.6;
+  letter-spacing: -0.8px;
+  font-weight: 450;
+  color: #d8e1d2;
+  margin-bottom: 17px;
+}
+.welcome > p {
+  font-size: 11px;
+  color: #7c8f73;
+  line-height: 1.95;
+  margin-bottom: 23px;
+}
+.welcome-actions {
+  display: flex;
+  justify-content: center;
+}
+.welcome-actions .button {
+  font-size: 10px;
+  padding: 9px 15px;
+  gap: 8px;
+  background: #b5dca1;
+  border-color: #c1e4b1;
+  color: #263b1e;
+}
+.welcome-features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 43px 0 0;
+  border-top: 1px solid #2b3528;
+  border-bottom: 1px solid #2b3528;
+  padding: 25px 0;
+  gap: 10px;
+}
+.welcome-features > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.welcome-features > div > span {
+  color: #829c74;
+  margin-bottom: 12px;
+}
+.welcome-features strong {
+  font-size: 10px;
+  font-weight: 500;
+  color: #aabca0;
+  margin-bottom: 8px;
+}
+.welcome-features small {
+  font-size: 8px;
+  color: #617759;
+}
+.welcome-features > div + div {
+  border-left: 1px solid #283325;
+}
+.recent-projects {
+  margin: 24px 0 0;
+  text-align: left;
+}
+.recent-projects .section-label {
+  padding: 0 1px 9px;
+  font-size: 8px;
+  color: #6a8261;
+}
+.recent-projects .section-label > span:last-child {
+  font-size: 7px;
+  color: #4f6847;
+}
+.recent-projects > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #2b3827;
+  margin-top: 6px;
+  border-radius: 6px;
+  background: #1b251a44;
+  text-align: left;
+}
+.recent-projects > button:hover {
+  background: #28382455;
+}
+.recent-projects > button > svg:first-child {
+  color: #89a77a;
+}
+.recent-projects > button > svg:last-child {
+  margin-left: auto;
+  color: #5c7952;
+}
+.recent-projects > button strong {
+  font-size: 10px;
+  font-weight: 500;
+  display: block;
+  color: #a9bfa0;
+}
+.recent-projects > button small {
+  display: block;
+  font-size: 8px;
+  font-family: var(--mono);
+  margin-top: 4px;
+  color: #5e7855;
+}
+.workspace-footer {
+  padding: 15px 25px;
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  color: #4f6449;
+  font-size: 8px;
+}
+.workspace-footer > span {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.workspace-footer > span:last-child {
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
