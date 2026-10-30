@@ -3,7 +3,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { KeyStore } from './keys.js';
 import { atomicWrite, checkedCommand, runCommand } from './process.js';
-import { assertHostOwner, assertRemotePath, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
+import { assertHostOwner, assertRemotePath, remoteBash, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
 
 function configQuote(value: string): string {
   if (/[\r\n\0]/.test(value)) throw new Error('SSH 配置包含无效字符');
@@ -90,10 +90,10 @@ export class SshManager {
     };
   }
 
-  async exec(userId: string, host: DevHost, command: string, timeout = 30_000) {
+  async exec(userId: string, host: DevHost, command: string, timeout = 30_000, maxBytes?: number) {
     await this.addHost(userId, host);
     this.masters.set(`${userId}:${host.id}`, {userId, host});
-    return runCommand(this.config.sshBinary ?? 'ssh', ['-F', this.configPath(userId), this.alias(host), command], {timeout});
+    return runCommand(this.config.sshBinary ?? 'ssh', ['-F', this.configPath(userId), this.alias(host), remoteBash(command)], {timeout, maxBytes});
   }
 
   async listDirectories(userId: string, host: DevHost, path = '/'): Promise<{path: string; entries: {name: string; path: string; type: 'directory'}[]}> {

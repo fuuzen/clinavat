@@ -17,7 +17,11 @@ export interface ConversationTurn {
   started_at: string;
   completed_at: string | null;
   duration_ms: number | null;
-  status: 'running' | 'completed' | 'interrupted' | 'error';
+  paused_at: string | null;
+  paused_ms: number;
+  slot_id: string | null;
+  credential_revision: number | null;
+  status: 'running' | 'pausing' | 'paused' | 'completed' | 'interrupted' | 'error';
   items: ActivityItem[];
 }
 
@@ -39,14 +43,15 @@ export class ConversationStore {
         ? this.active.get(sessionId)!.turn : { ...row, items: JSON.parse(row.items) as ActivityItem[] });
   }
 
-  start(sessionId: string, userMessageId: string): ConversationTurn {
+  start(sessionId: string, userMessageId: string, authorization: { slotId: string; credentialRevision: number }, turnId = userMessageId): ConversationTurn {
     const turn: ConversationTurn = {
-      id: userMessageId, session_id: sessionId, user_message_id: userMessageId,
+      id: turnId, session_id: sessionId, user_message_id: userMessageId,
       assistant_message_id: null, started_at: new Date().toISOString(),
-      completed_at: null, duration_ms: null, status: 'running', items: [],
+      completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: 'running', items: [],
+      slot_id: authorization.slotId, credential_revision: authorization.credentialRevision,
     };
-    this.store.run('INSERT INTO session_turns(id,session_id,user_message_id,started_at) VALUES(?,?,?,?)',
-      turn.id, sessionId, userMessageId, turn.started_at);
+    this.store.run('INSERT INTO session_turns(id,session_id,user_message_id,started_at,slot_id,credential_revision) VALUES(?,?,?,?,?,?)',
+      turn.id, sessionId, userMessageId, turn.started_at, turn.slot_id, turn.credential_revision);
     this.active.set(sessionId, { turn });
     this.emit(turn);
     return turn;
@@ -95,12 +100,32 @@ export class ConversationStore {
     if (pending) pending.turn.assistant_message_id = messageId;
   }
 
+  setState(sessionId: string, status: 'running' | 'pausing' | 'paused', turnId?: string): void {
+    const pending = this.active.get(sessionId);
+    if (!pending || (turnId && pending.turn.id !== turnId)) return;
+    const turn = pending.turn;
+    const now = Date.now();
+    if (turn.paused_at && status !== 'paused') {
+      turn.paused_ms += Math.max(0, now - Date.parse(turn.paused_at));
+      turn.paused_at = null;
+    }
+    if (status === 'paused' && !turn.paused_at) turn.paused_at = new Date(now).toISOString();
+    turn.status = status;
+    turn.duration_ms = status === 'paused'
+      ? Math.max(0, Date.parse(turn.paused_at!) - Date.parse(turn.started_at) - turn.paused_ms) : null;
+    this.flush(sessionId);
+  }
+
   finish(sessionId: string, status: ConversationTurn['status'], turnId?: string): void {
     const pending = this.active.get(sessionId);
     if (!pending || (turnId && pending.turn.id !== turnId)) return;
+    if (pending.turn.paused_at) {
+      pending.turn.paused_ms += Math.max(0, Date.now() - Date.parse(pending.turn.paused_at));
+      pending.turn.paused_at = null;
+    }
     pending.turn.status = status;
     pending.turn.completed_at = new Date().toISOString();
-    pending.turn.duration_ms = Math.max(0, Date.now() - Date.parse(pending.turn.started_at));
+    pending.turn.duration_ms = Math.max(0, Date.now() - Date.parse(pending.turn.started_at) - pending.turn.paused_ms);
     for (const item of pending.turn.items) {
       if (item.tool && ['running', 'waiting'].includes(item.tool.status || ''))
         item.tool.status = status === 'completed' ? 'completed' : status;
@@ -115,8 +140,8 @@ export class ConversationStore {
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = undefined;
     const turn = pending.turn;
-    this.store.run('UPDATE session_turns SET assistant_message_id=?,completed_at=?,duration_ms=?,status=?,items=? WHERE id=?',
-      turn.assistant_message_id, turn.completed_at, turn.duration_ms, turn.status, JSON.stringify(turn.items), turn.id);
+    this.store.run('UPDATE session_turns SET assistant_message_id=?,completed_at=?,duration_ms=?,paused_at=?,paused_ms=?,status=?,items=? WHERE id=?',
+      turn.assistant_message_id, turn.completed_at, turn.duration_ms, turn.paused_at, turn.paused_ms, turn.status, JSON.stringify(turn.items), turn.id);
     this.emit(turn);
   }
 

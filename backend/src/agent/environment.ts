@@ -1,4 +1,5 @@
-import { access, lstat, realpath, stat } from 'node:fs/promises';
+import { access, lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { constants } from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
@@ -13,11 +14,12 @@ export function agentEnvironment(context: AgentContext): NodeJS.ProcessEnv {
   }
   return {
     ...environment,
-    HOME: context.slot.home_dir,
-    XDG_CONFIG_HOME: path.join(context.slot.home_dir, '.config'),
-    XDG_CACHE_HOME: path.join(context.slot.home_dir, '.cache'),
-    CODEX_HOME: path.join(context.slot.home_dir, '.codex'),
-    CLAUDE_CONFIG_DIR: path.join(context.slot.home_dir, '.claude'),
+    HOME: context.runtime_home,
+    XDG_CONFIG_HOME: path.join(context.runtime_home, '.config'),
+    XDG_CACHE_HOME: path.join(context.runtime_home, '.cache'),
+    CODEX_HOME: path.join(context.runtime_home, '.codex'),
+    CLAUDE_CONFIG_DIR: path.join(context.runtime_home, '.claude'),
+    ...(context.runtime_kind !== 'probe' && context.session.id ? { CLINAVAT_SESSION_ID: context.session.id } : {}),
     SHELL: '/bin/bash',
     TERM: 'xterm-256color',
   };
@@ -73,18 +75,97 @@ export async function workspacePath(root: string, requested = '.', allowMissing 
   }
 }
 
+const closedProcesses = new WeakSet<ChildProcess>();
+const terminationTimers = new WeakMap<ChildProcess, NodeJS.Timeout>();
+
+async function groupIsRunning(group: number): Promise<boolean> {
+  for (const pid of await readdir('/proc')) {
+    if (!/^\d+$/.test(pid)) continue;
+    const contents = await readFile(`/proc/${pid}/stat`, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (['ENOENT', 'ESRCH'].includes(error.code ?? '')) return '';
+      throw error;
+    });
+    const fields = contents.slice(contents.lastIndexOf(')') + 2).split(' ');
+    if (Number(fields[2]) === group && !['Z', 'X'].includes(fields[0])) return true;
+  }
+  return false;
+}
+
+async function drainProcessGroup(child: ChildProcess): Promise<void> {
+  if (process.platform !== 'linux' || !child.pid) return;
+  if (!await groupIsRunning(child.pid)) return;
+  try { process.kill(-child.pid, 'SIGTERM'); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+  const forceAt = Date.now() + 5000;
+  const deadline = forceAt + 2000;
+  while (await groupIsRunning(child.pid)) {
+    if (Date.now() >= deadline) throw new Error('CLI 子进程尚未退出，已阻止对话切换和槽位交接');
+    if (Date.now() >= forceAt) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      }
+    }
+    await delay(100);
+  }
+}
+
+export function observeProcessClose(child: ChildProcess): Promise<void> {
+  const completion = new Promise<void>((resolve, reject) => {
+    let exited = false;
+    let pipesClosed = false;
+    let drained = false;
+    let failure: unknown;
+    let pipeDeadline: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (!pipesClosed || !drained) return;
+      if (pipeDeadline) clearTimeout(pipeDeadline);
+      if (failure) reject(failure); else resolve();
+    };
+    // An escaped background child may keep stdio open after its original process group exits.
+    child.once('exit', () => {
+      exited = true;
+      void drainProcessGroup(child).catch(error => { failure = error; }).finally(() => {
+        drained = true;
+        if (!pipesClosed) pipeDeadline = setTimeout(() => {
+          failure ??= new Error('CLI 退出后仍有后台进程持有输出管道，已停止状态回收');
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          reject(failure);
+        }, 1000);
+        finish();
+      });
+    });
+    child.once('close', () => {
+      closedProcesses.add(child);
+      const timer = terminationTimers.get(child);
+      if (timer) clearTimeout(timer);
+      terminationTimers.delete(child);
+      pipesClosed = true;
+      if (!exited) drained = true;
+      finish();
+    });
+  });
+  void completion.catch(() => undefined);
+  return completion;
+}
+
 export function terminateProcess(child: ChildProcess): void {
+  if (closedProcesses.has(child)) return;
+  if (terminationTimers.has(child)) return;
   try {
     if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGTERM');
     else child.kill('SIGTERM');
   } catch { /* The CLI may have already exited. */ }
   const force = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (closedProcesses.has(child)) return;
     try {
       if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
       else child.kill('SIGKILL');
     } catch { /* The process group may have already exited. */ }
   }, 5000);
+  terminationTimers.set(child, force);
   force.unref();
-  child.once('close', () => clearTimeout(force));
+  child.once('close', () => { closedProcesses.add(child); clearTimeout(force); terminationTimers.delete(child); });
 }

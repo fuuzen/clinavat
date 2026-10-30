@@ -1,56 +1,97 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { type Context, assertProjectIdle, projectFor, sessionFor, withResourceLocks } from '../context.js';
-import { HttpError, type Slot } from '../models.js';
-import { serializeSlot, publicUser } from '../auth.js';
+import { type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
+import { HttpError } from '../models.js';
+import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
+import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
+import { ensureLocalHost } from '../local-host.js';
+import { availableSlots, serializeUserSlot, slotForUser } from '../accounts/access.js';
+import { sessionMessageRoutes, selectedSlotId, selectionFields } from './session-messages.js';
+import { sessionGoalRoutes } from './session-goals.js';
+import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 
 const identifier = z.object({ id: z.uuid() });
-const selectionFields = {
-  model: z.string().trim().min(1).max(200).nullable().optional(),
-  reasoningEffort: z.string().trim().min(1).max(32).nullable().optional(),
-};
 export function sessionRoutes(app: FastifyInstance, context: Context) {
-  const { store, events, agents, ssh, workspaces, turns } = context;
+  const { store, events, agents, ssh, turns } = context;
   app.get('/api/overview', async request => {
     const key = await ssh.ensureUserKey(request.user.id);
+    if (request.user.role === 'admin') ensureLocalHost(store, request.user.id);
     return {
-      user: publicUser(request.user, key.publicKey), slot: serializeSlot(store.assignSlot(request.user.id)),
-      hosts: store.all('SELECT * FROM dev_hosts WHERE user_id=? ORDER BY created_at', request.user.id),
-      projects: store.all('SELECT * FROM projects WHERE user_id=? ORDER BY created_at', request.user.id),
-      sessions: store.all('SELECT * FROM sessions WHERE user_id=? ORDER BY updated_at DESC', request.user.id),
+      user: publicUser(request.user, key.publicKey),
+      slots: availableSlots(store, request.user.id).map(slot => serializeUserSlot(context, slot, request.user.id)),
+      hosts: store.all("SELECT * FROM dev_hosts WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at", request.user.id, request.user.role),
+      projects: store.all(`SELECT projects.* FROM projects JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
+        WHERE projects.user_id=? AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY projects.created_at`, request.user.id, request.user.role),
+      sessions: store.all(`SELECT sessions.* FROM sessions JOIN projects ON projects.id=sessions.project_id
+        JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=?
+        AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
     };
   });
   app.post('/api/sessions', async (request, reply) => {
-    const input = z.object({ projectId: z.uuid(), engine: z.enum(['claude', 'codex']), title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
-    return withResourceLocks(context, [`project:${input.projectId}`], async () => {
+    const input = z.object({ projectId: z.uuid(), engine: z.enum(['claude', 'codex']), slotId: selectedSlotId,
+      title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
+    return withResourceLocks(context, [], async () => {
       const project = projectFor(context, input.projectId, request.user.id);
-      const slot = store.assignSlot(request.user.id);
-      if (!slot || slot.status !== 'ASSIGNED') throw new HttpError(409, '尚无可用的专属账号，请联系管理员分配槽位');
-      if (!(JSON.parse(slot.cli_types) as string[]).includes(input.engine)) throw new HttpError(409, '专属槽位未配置该 CLI');
+      const slot = slotForUser(store, input.slotId, request.user.id, input.engine);
+      const permissionMode = validatePermissionMode(input.engine, input.permissionMode ?? 'manual');
+      const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
       const id = randomUUID();
       await validateAgentSelection(context.config, {
-        user: request.user, project, slot: { ...slot, cli_types: JSON.parse(slot.cli_types) as string[] },
-        session: { id, engine: input.engine, model: input.model ?? null, reasoning_effort: input.reasoningEffort ?? null },
+        runtime_home: slot.home_dir, runtime_kind: 'probe',
+        user: request.user, project, slot,
+        session: { id: '', engine: input.engine, model: input.model ?? null, reasoning_effort: input.reasoningEffort ?? null, permission_mode: permissionMode },
       }, input);
-      store.run('INSERT INTO sessions(id,project_id,user_id,engine,title,model,reasoning_effort) VALUES(?,?,?,?,?,?,?)',
-        id, input.projectId, request.user.id, input.engine, input.title, input.model ?? null, input.reasoningEffort ?? null);
+      slotForUser(store, slot.id, request.user.id, input.engine);
+      store.run('INSERT INTO sessions(id,project_id,user_id,engine,slot_id,title,model,reasoning_effort,permission_mode,agent_mode,role_preset) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        id, input.projectId, request.user.id, input.engine, slot.id, input.title, input.model ?? null, input.reasoningEffort ?? null, permissionMode, agentMode, rolePreset);
       return reply.code(201).send(sessionFor(context, id, request.user.id));
-    });
+    }, [`project:${input.projectId}`]);
   });
   app.patch('/api/sessions/:id', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);
-    const { title } = z.object({ title: z.string().trim().min(1).max(200) }).parse(request.body);
-    store.run('UPDATE sessions SET title=? WHERE id=?', title, id);
-    return sessionFor(context, id, request.user.id);
+    const input = z.object({
+      title: z.string().trim().min(1).max(200).optional(),
+      permissionMode: z.enum(permissionModes).optional(),
+      agentMode: z.enum(agentModes).optional(),
+      rolePreset: z.enum(rolePresets).optional(),
+      slotId: selectedSlotId.nullable().optional(),
+    }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
+      message: '请提供要修改的对话设置',
+    }).parse(request.body);
+    return withResourceLocks(context, [`session:${id}`], () => {
+      const current = sessionFor(context, id, request.user.id);
+      const permissionMode = validatePermissionMode(current.engine, input.permissionMode ?? current.permission_mode);
+      const { agentMode, rolePreset } = validateSessionSettings(current.engine,
+        input.agentMode ?? current.agent_mode, input.rolePreset ?? current.role_preset);
+      const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
+      if (changedSlot || permissionMode !== current.permission_mode || agentMode !== current.agent_mode || rolePreset !== current.role_preset) {
+        if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)
+          || context.config.credentials.isSessionBusy(id)) {
+          throw new HttpError(409, '对话仍在运行或回收状态，请等待结束或先停止后修改');
+        }
+      }
+      if (changedSlot && input.slotId) slotForUser(store, input.slotId, request.user.id, current.engine);
+      store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,updated_at=datetime('now') WHERE id=?`,
+        input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId,
+        changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset, id);
+      const updated = sessionFor(context, id, request.user.id);
+      events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
+      return updated;
+    });
   });
   app.delete('/api/sessions/:id', async request => {
     const { id } = identifier.parse(request.params);
     const session = sessionFor(context, id, request.user.id);
-    return withResourceLocks(context, [`project:${session.project_id}`], () => {
-      if (agents.isBusy(id) || ['running', 'waiting'].includes(session.status)) throw new HttpError(409, '请先停止会话');
+    return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
+      const current = sessionFor(context, id, request.user.id);
+      if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)) {
+        throw new HttpError(409, '请等待会话结束并完成状态回收，或先停止会话');
+      }
+      await context.config.credentials.retrySessionRelease(id);
+      if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请先停止会话后重试');
       store.run('DELETE FROM sessions WHERE id=?', id);
       return { ok: true };
     });
@@ -65,63 +106,54 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     sessionFor(context, id, request.user.id);
     return turns.list(id);
   });
-  app.post('/api/sessions/:id/messages', async request => {
+  sessionMessageRoutes(app, context);
+  sessionGoalRoutes(app, context);
+  app.get('/api/sessions/:id/questions', async request => {
     const { id } = identifier.parse(request.params);
-    const input = z.object({ content: z.string().trim().min(1).max(100000), ...selectionFields }).parse(request.body);
-    const { content } = input;
-    const session = sessionFor(context, id, request.user.id);
-    return withResourceLocks(context, [`project:${session.project_id}`], async () => {
-      const project = projectFor(context, session.project_id, request.user.id);
-      assertProjectIdle(context, project.id);
-      const slot = store.get<Slot>('SELECT * FROM account_slots WHERE assigned_user_id=?', request.user.id);
-      if (!slot || slot.status !== 'ASSIGNED') throw new HttpError(409, '专属账号不可用');
-      if (!(JSON.parse(slot.cli_types) as string[]).includes(session.engine)) throw new HttpError(409, '该槽位未启用当前 CLI');
-      if (project.sync_status !== 'WATCHING') throw new HttpError(409, '请先恢复项目同步');
-      const model = input.model === undefined ? session.model : input.model;
-      const reasoningEffort = input.reasoningEffort === undefined ? session.reasoning_effort : input.reasoningEffort;
-      const runContext = {
-        user: request.user, project, slot: { ...slot, cli_types: JSON.parse(slot.cli_types) as string[] },
-        session: { ...session, model, reasoning_effort: reasoningEffort },
-      };
-      await validateAgentSelection(context.config, runContext, { model, reasoningEffort });
-      store.run("UPDATE sessions SET status='running',updated_at=datetime('now') WHERE id=?", id);
-      try {
-        try { await workspaces.flush(project); }
-        catch (error) {
-          store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", project.id);
-          events.emit(request.user.id, { type: 'project', payload: { id: project.id, sync_status: 'ERROR' } });
-          throw error;
-        }
-        const messageId = randomUUID();
-        store.transaction(() => {
-          store.run('UPDATE sessions SET model=?,reasoning_effort=? WHERE id=?', model, reasoningEffort, id);
-          store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'user',?)", messageId, id, content);
-        });
-        turns.start(id, messageId);
-        events.emit(request.user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
-        await agents.start({ ...runContext, session: { ...runContext.session, turn_id: messageId } }, content);
-        return { sessionId: id, status: 'running' };
-      } catch (error) {
-        turns.finish(id, 'error');
-        store.run("UPDATE sessions SET status='error',updated_at=datetime('now') WHERE id=?", id);
-        const message = error instanceof Error ? error.message : String(error);
-        events.emit(request.user.id, { type: 'error', sessionId: id, payload: { message } });
-        throw new HttpError(502, message);
-      }
-    });
+    sessionFor(context, id, request.user.id);
+    return agents.questions.list(id);
+  });
+  app.post('/api/sessions/:id/questions/:requestId', async request => {
+    const { id, requestId } = z.object({ id: z.uuid(), requestId: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    const input = z.object({
+      answers: z.record(z.string().max(200), z.array(z.string().max(10000)).max(20)).default({}),
+      skip: z.boolean().default(false),
+    }).parse(request.body);
+    agents.questions.answer(id, requestId, input.answers, input.skip);
+    return { ok: true };
   });
   app.post('/api/sessions/:id/stop', async request => {
     const { id } = identifier.parse(request.params);
-    const session = sessionFor(context, id, request.user.id);
-    return withResourceLocks(context, [`project:${session.project_id}`], async () => {
+    sessionFor(context, id, request.user.id);
+    return withResourceLocks(context, [`session:${id}`], async () => {
       events.cancelSession(request.user.id, id);
-      await agents.stop(id);
+      try { await agents.stop(id); }
+      catch (error) {
+        if (agents.isBusy(id)) throw error;
+        await context.config.credentials.retrySessionRelease(id);
+        if (context.config.credentials.isSessionBusy(id)) throw error;
+      }
+      if (agents.isBusy(id)) throw new HttpError(409, '会话尚未停止，请稍后重试');
+      await context.config.credentials.retrySessionRelease(id);
+      if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请稍后重试');
       if (!agents.isBusy(id)) turns.finish(id, 'interrupted');
-      store.run("UPDATE sessions SET status='interrupted',updated_at=datetime('now') WHERE id=?", id);
-      events.emit(request.user.id, { type: 'session', sessionId: id, payload: { id, status: 'interrupted' } });
+      const current = sessionFor(context, id, request.user.id);
+      const status = current.status === 'error' ? 'error' : 'interrupted';
+      store.run("UPDATE sessions SET status=?,updated_at=datetime('now') WHERE id=?", status, id);
+      events.emit(request.user.id, { type: 'session', sessionId: id, payload: { id, status } });
       return { ok: true };
     });
   });
+  for (const action of ['pause', 'resume'] as const) {
+    app.post(`/api/sessions/:id/${action}`, async request => {
+      const { id } = identifier.parse(request.params);
+      sessionFor(context, id, request.user.id);
+      z.object({}).strict().parse(request.body ?? {});
+      const { operation } = await withResourceLocks(context, [`session:${id}`], () => ({ operation: agents[action](id) }));
+      return { status: await operation };
+    });
+  }
   app.get('/api/approvals', async request => store.all<Record<string, unknown> & { input: string }>(
     "SELECT * FROM approvals WHERE user_id=? AND status='pending' ORDER BY created_at", request.user.id,
   ).map(approval => ({ ...approval, input: JSON.parse(approval.input) })));

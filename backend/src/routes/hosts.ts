@@ -4,6 +4,9 @@ import { z } from 'zod';
 import { type Context, assertProjectIdle, hostFor, withResourceLocks } from '../context.js';
 import { HttpError, type Host, type Project } from '../models.js';
 import { isValidSshHost } from '../runtime/types.js';
+import { ensureLocalHost } from '../local-host.js';
+import { localDirectories } from './local-projects.js';
+import { scanSyncCandidates } from '../runtime/sync-scan.js';
 
 const identifier = z.object({ id: z.uuid() });
 const portInput = z.coerce.number().int().min(1).max(65535);
@@ -39,14 +42,17 @@ async function validateKeys(context: Context, userId: string, keys: (string | un
 
 export function hostRoutes(app: FastifyInstance, context: Context) {
   const { store, ssh, events } = context;
-  app.get('/api/hosts', async request => store.all('SELECT * FROM dev_hosts WHERE user_id=? ORDER BY created_at', request.user.id));
+  app.get('/api/hosts', async request => {
+    if (request.user.role === 'admin') ensureLocalHost(store, request.user.id);
+    return store.all("SELECT * FROM dev_hosts WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at", request.user.id, request.user.role);
+  });
   app.post('/api/hosts', async (request, reply) => {
     const input = hostInput.parse(request.body);
     return withResourceLocks(context, [`user-hosts:${request.user.id}`], async () => {
       const host: Host = {
         id: randomUUID(), user_id: request.user.id, name: input.name, host: input.host,
         port: input.port, username: input.username, status: 'DISCONNECTED',
-        created_at: new Date().toISOString(), ...jumpFields(input.jumpHost),
+        kind: 'ssh', created_at: new Date().toISOString(), ...jumpFields(input.jumpHost),
       };
       await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
       try {
@@ -64,7 +70,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
   app.patch('/api/hosts/:id', async request => {
     const { id } = identifier.parse(request.params);
     const input = hostPatch.parse(request.body);
-    hostFor(context, id, request.user.id);
+    if (hostFor(context, id, request.user.id).kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能修改');
     const projects = store.all<Project>('SELECT * FROM projects WHERE dev_host_id=? AND user_id=?', id, request.user.id);
     return withResourceLocks(context, [`host:${id}`, `user-hosts:${request.user.id}`, ...projects.map(project => `project:${project.id}`)], async () => {
       const previous = hostFor(context, id, request.user.id);
@@ -108,6 +114,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
+      if (host.kind === 'local') return { status: 'CONNECTED', fingerprint: '' };
       try {
         const result = await ssh.connect(request.user.id, host);
         store.run("UPDATE dev_hosts SET status='CONNECTED' WHERE id=?", id);
@@ -121,12 +128,26 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
   app.get('/api/hosts/:id/directories', async request => {
     const { id } = identifier.parse(request.params);
     const { path } = z.object({ path: z.string().max(4096).default('/') }).parse(request.query);
-    return withResourceLocks(context, [`host:${id}`], () => ssh.listDirectories(request.user.id, hostFor(context, id, request.user.id), path));
+    return withResourceLocks(context, [`host:${id}`], () => {
+      const host = hostFor(context, id, request.user.id);
+      return host.kind === 'local' ? localDirectories(path) : ssh.listDirectories(request.user.id, host, path);
+    });
+  });
+  app.post('/api/hosts/:id/sync-scan', async request => {
+    const { id } = identifier.parse(request.params);
+    const { remotePath } = z.object({ remotePath: z.string().min(1).max(4096) }).parse(request.body);
+    return withResourceLocks(context, [`host:${id}`], async () => {
+      const host = hostFor(context, id, request.user.id);
+      if (host.kind === 'local') throw new HttpError(400, '本机项目直接使用实际目录，无需同步扫描');
+      try { return await scanSyncCandidates(context.config, ssh, request.user.id, host, remotePath); }
+      catch (error) { throw new HttpError(502, error instanceof Error ? error.message : String(error)); }
+    });
   });
   app.delete('/api/hosts/:id', async request => {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`host:${id}`, `user-hosts:${request.user.id}`], async () => {
       const host = hostFor(context, id, request.user.id);
+      if (host.kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能删除');
       if (store.get('SELECT id FROM projects WHERE dev_host_id=?', id)) throw new HttpError(409, '请先删除开发机下的项目');
       await ssh.deleteHost(request.user.id, host);
       store.run('DELETE FROM dev_hosts WHERE id=?', id);

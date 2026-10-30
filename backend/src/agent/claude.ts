@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { agentEnvironment, findExecutable, terminateProcess } from './environment.js';
+import { ClaudeControl } from './claude-control.js';
+import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
 import { createHookServer } from './hooks.js';
 import { readJsonLines } from './ndjson.js';
+import { claudePermissionMode } from './permissions.js';
+import { projectInstructions } from './project-instructions.js';
 import type { AgentRun, RunServices } from './types.js';
 
 async function transcriptPath(home: string, nativeId: string): Promise<string | undefined> {
@@ -17,31 +20,48 @@ async function transcriptPath(home: string, nativeId: string): Promise<string | 
   return undefined;
 }
 
-export async function startClaude(services: RunServices, prompt: string): Promise<AgentRun> {
+export async function startClaude(services: RunServices, prompt: string, signal?: AbortSignal): Promise<AgentRun> {
+  if (signal?.aborted) throw new Error('会话已停止');
   const binary = await findExecutable(services.config.claudeBinary);
+  const plansDirectory = path.join(services.context.runtime_home, '.claude', 'plans');
+  await mkdir(plansDirectory, { recursive: true, mode: 0o700 });
   const hook = await createHookServer(services);
+  if (signal?.aborted) { await hook.close(); throw new Error('会话已停止'); }
   const nativeId = services.context.session.native_session_id || randomUUID();
+  const permissionMode = services.context.session.agent_mode === 'plan' ? 'plan' : claudePermissionMode(services.context.session);
   const settings = {
+    plansDirectory,
     hooks: { PreToolUse: [{ matcher: '.*', hooks: [{
       type: 'command', command: hook.command, args: hook.args, onFailure: 'block',
-      timeout: Math.ceil(services.config.approvalTimeoutMs / 1000) + 10,
+      // Hub deadlines exclude paused time; the native watchdog uses wall time even after SIGSTOP.
+      timeout: Math.max(86400, Math.ceil(services.config.approvalTimeoutMs / 1000) + 10),
     }] }] },
-    permissions: { defaultMode: 'default', deny: ['.bin', '.git', '.claude', '.codex'].flatMap((directory) => {
+    permissions: { deny: ['.bin', '.git', '.claude', '.codex'].flatMap((directory) => {
       const root = `/${services.context.project.local_path}`;
       return [`${root}/${directory}/**`, `${root}/**/${directory}/**`]
         .flatMap((pattern) => [`Read(${pattern})`, `Edit(${pattern})`]);
     }) },
   };
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--restricted', '--setting-sources', '', '--settings', JSON.stringify(settings),
-    '--tools', 'Bash,Read,Edit,Write,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    ...(permissionMode === 'bypassPermissions' ? [] : ['--restricted']),
+    '--permission-mode', permissionMode, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
+    '--setting-sources', '', '--settings', JSON.stringify(settings),
+    '--append-system-prompt', projectInstructions(services.context.project, 'claude') + (permissionMode === 'plan'
+      ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
+    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,AskUserQuestion,ExitPlanMode', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
   const child = spawn(binary, args, {
-    cwd: services.context.project.local_path, env: agentEnvironment(services.context),
+    cwd: services.context.project.local_path, env: {
+      ...agentEnvironment(services.context),
+      ...(services.context.session.resume_interrupted ? { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
+        CLAUDE_CODE_RESUME_SHOWS_CUT_OFF_CALLS: '1' } : {}),
+    },
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
   });
+  services.control.track(child);
+  const closed = observeProcessClose(child);
   let diagnostics = '';
   let resultError = '';
   let messageId = '';
@@ -52,9 +72,13 @@ export async function startClaude(services: RunServices, prompt: string): Promis
   const thinkingBlocks = new Map<number, string>();
   let stopped = false;
   let nativeSessionReceived = false;
-  const inputError = (error: Error) => { resultError = error.message; terminateProcess(child); };
-  child.stdin.on('error', inputError);
+  const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
+  const control = new ClaudeControl(child, services, inputError);
+  const stop = () => { stopped = true; control.close(new Error('会话已停止')); terminateProcess(child); };
+  child.stdin.on('error', (error) => { if (!control.closed) inputError(error); });
   const lines = readJsonLines(child.stdout, (event) => {
+    if (control.handle(event)) return;
+    if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event', event.rate_limit_info);
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
       nativeSessionReceived = true;
       void services.update({ native_session_id: String(event.session_id) }).catch((error: unknown) => {
@@ -125,6 +149,9 @@ export async function startClaude(services: RunServices, prompt: string): Promis
       }
     }
     if (event.type === 'result') {
+      // The turn is terminal; a late pause must not freeze the CLI while it drains and exits.
+      services.control.close();
+      control.close();
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
         resultError = Array.isArray(event.errors) ? event.errors.join('\n') : String(event.result ?? event.subtype);
       } else if (!messages.size && event.result) {
@@ -140,9 +167,11 @@ export async function startClaude(services: RunServices, prompt: string): Promis
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { diagnostics = (diagnostics + chunk.toString()).slice(-16 * 1024); });
   const completion = new Promise<void>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
+    child.once('error', error => { resultError = error.message; });
+    child.once('close', (code, exitSignal) => {
+      control.close(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
       void (async () => {
+        let failure: unknown;
         try {
           const finalGroup = !stopped && code === 0 && !resultError ? messageGroups.get([...messages.keys()].at(-1) || '') : undefined;
           const finalIds = finalGroup ? [...messages.keys()].filter(id => messageGroups.get(id) === finalGroup) : [];
@@ -150,25 +179,41 @@ export async function startClaude(services: RunServices, prompt: string): Promis
           if (output.trim()) {
             for (const id of finalIds) services.event('activity', { id, kind: 'text', text: messages.get(id) || '', final: true });
             await services.output(output.trim());
+          } else if (services.context.session.command === 'compact' && !stopped && code === 0 && !resultError) {
+            await services.output('原生上下文已压缩。网页中的历史消息仍会保留。');
           }
           if (nativeSessionReceived) {
-            const transcript = await transcriptPath(services.context.slot.home_dir, nativeId);
+            const transcript = await transcriptPath(services.context.runtime_home, nativeId);
             if (transcript) await services.update({ jsonl_file_path: transcript });
           }
           if (!stopped && (code !== 0 || resultError)) {
-            throw new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? signal}）`);
+            throw new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`);
           }
-          resolve();
-        } catch (error) { reject(error); }
-        finally { lines.close(); await hook.close(); }
+        } catch (error) { failure = error; }
+        finally {
+          signal?.removeEventListener('abort', stop);
+          lines.close();
+          try { await hook.close(); } catch (error) { failure ??= error; }
+        }
+        if (failure) reject(failure); else resolve();
       })();
     });
-  });
+  }).finally(() => closed);
   // Attach the rejection handler before awaiting spawn: an unavailable binary can fail immediately.
   void completion.catch(() => undefined);
+  signal?.addEventListener('abort', stop, { once: true });
+  if (signal?.aborted) stop();
   try {
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-    child.stdin.end(prompt);
-  } catch (error) { await hook.close(); throw error; }
-  return { process: child, completion, stop() { stopped = true; terminateProcess(child); } };
+    await control.start(prompt);
+  } catch (error) {
+    signal?.removeEventListener('abort', stop);
+    control.close();
+    terminateProcess(child);
+    await closed;
+    await completion.catch(() => undefined);
+    await hook.close();
+    throw error;
+  }
+  return { process: child, completion, stop };
 }

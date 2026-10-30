@@ -1,8 +1,9 @@
 import { shellQuote, type RuntimeConfig, type WorkspaceProject } from './types.js';
+import { renderRemoteRunner } from './remote-paths.js';
 
 export function renderRemoteShell(config: RuntimeConfig, project: WorkspaceProject, sshConfig: string, sshTarget: string, environment: NodeJS.ProcessEnv): string {
   const variables = {
-    LOCAL_ROOT: project.local_path, REMOTE_ROOT: project.remote_path,
+    LOCAL_ROOT: project.local_path, REMOTE_RUNNER: renderRemoteRunner(project),
     SYNC_NAME: project.sync_name, SSH_CONFIG: sshConfig, SSH_TARGET: sshTarget,
     SSH_BINARY: config.sshBinary ?? 'ssh', MUTAGEN_BINARY: config.mutagenBinary ?? 'mutagen',
     MUTAGEN_DATA_DIRECTORY: environment.MUTAGEN_DATA_DIRECTORY ?? '',
@@ -32,8 +33,8 @@ fi
 
 local_cwd="$(pwd -P)" || exit 72
 case "$local_cwd" in
-  "$LOCAL_ROOT") remote_cwd="$REMOTE_ROOT" ;;
-  "$LOCAL_ROOT/"*) remote_cwd="$REMOTE_ROOT\${local_cwd#"$LOCAL_ROOT"}" ;;
+  "$LOCAL_ROOT") relative_cwd='' ;;
+  "$LOCAL_ROOT/"*) relative_cwd="\${local_cwd#"$LOCAL_ROOT/"}" ;;
   *) printf '%s\\n' 'remote-shell: working directory is outside the project' >&2; exit 72 ;;
 esac
 
@@ -50,25 +51,34 @@ flock -w 120 9 || {
 
 flush_sync() {
   timeout --signal=TERM --kill-after=5s 120s "$MUTAGEN_BINARY" sync flush "$SYNC_NAME" >/dev/null || {
+    timeout --signal=TERM --kill-after=2s 10s "$MUTAGEN_BINARY" sync list "$SYNC_NAME" >&2 || true
     printf '%s\\n' 'remote-shell: synchronization barrier failed; execution stopped' >&2
     return 74
   }
 }
 flush_sync || exit 74
-printf -v quoted_cwd '%q' "$remote_cwd"
+printf -v quoted_runner '%q' "$REMOTE_RUNNER"
+printf -v quoted_relative '%q' "$relative_cwd"
+remote_command="bash -c $quoted_runner -- $quoted_relative $command_mode"
 if [[ "$command_mode" == true ]]; then
   printf -v quoted_command '%q' "$command_text"
-  remote_command="cd -- $quoted_cwd && { unset SSH_CLIENT SSH_CONNECTION SSH_TTY; bash -l -c $quoted_command"
+  remote_command+=" $quoted_command"
   for argument in "$@"; do
     printf -v quoted_argument '%q' "$argument"
     remote_command+=" $quoted_argument"
   done
-  remote_command+='; }'
-  printf -v quoted_remote '%q' "$remote_command"
-  "$SSH_BINARY" -F "$SSH_CONFIG" -T "$SSH_TARGET" "bash -c $quoted_remote"
+fi
+encoded_remote="$(printf '%s' "$remote_command" | base64 | tr -d '\\n')"
+remote_entry="bash -c 'eval "
+remote_entry+='"$(printf %s '
+remote_entry+="$encoded_remote"
+remote_entry+=' | base64 -d)"'
+remote_entry+="'"
+if [[ "$command_mode" == true ]]; then
+  "$SSH_BINARY" -F "$SSH_CONFIG" -T "$SSH_TARGET" "$remote_entry"
   command_status=$?
 else
-  "$SSH_BINARY" -F "$SSH_CONFIG" -tt "$SSH_TARGET" "cd -- $quoted_cwd && exec bash -l"
+  "$SSH_BINARY" -F "$SSH_CONFIG" -tt "$SSH_TARGET" "$remote_entry"
   command_status=$?
 fi
 flush_sync || exit 74

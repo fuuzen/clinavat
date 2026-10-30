@@ -3,7 +3,9 @@ import { Client, type ClientChannel } from 'ssh2';
 import type { WebSocket } from 'ws';
 import { SshManager } from './ssh.js';
 import { WorkspaceManager } from './workspace.js';
-import { assertHostOwner, shellQuote, type DevHost, type WorkspaceProject } from './types.js';
+import { remoteCommand } from './remote-paths.js';
+import { attachLocalTerminal } from './local-terminal.js';
+import { assertHostOwner, type DevHost, type WorkspaceProject } from './types.js';
 
 export async function attachTerminal(
   socket: WebSocket, userId: string, host: DevHost, project: WorkspaceProject,
@@ -11,6 +13,11 @@ export async function attachTerminal(
 ): Promise<void> {
   assertHostOwner(userId, host);
   if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
+  if (host.kind === 'local' || project.execution_mode === 'local') {
+    if (host.kind !== 'local' || project.execution_mode !== 'local') throw new Error('本机项目与开发机类型不匹配');
+    await attachLocalTerminal(socket, project, workspaces);
+    return;
+  }
   const client = new Client();
   const jumpHost = ssh.jumpHost(host);
   const jumpClient = jumpHost ? new Client() : undefined;
@@ -77,7 +84,7 @@ export async function attachTerminal(
     });
     client.on('ready', () => {
       if (closed) { client.end(); return; }
-      client.exec(`cd -- ${shellQuote(project.remote_path)} && exec bash -l`, {
+      client.exec(remoteCommand(project), {
         pty: {term: 'xterm-256color', cols: 100, rows: 30},
       }, (error, stream) => {
         if (error) {

@@ -23,14 +23,14 @@ export class KeyStore {
     return join(this.config.dataDir, 'run', 'keys', userId);
   }
 
-  private encrypt(value: string): string {
+  encrypt(value: string): string {
     const nonce = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, nonce);
     const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     return JSON.stringify({version: 1, nonce: nonce.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: encrypted.toString('base64')});
   }
 
-  private decrypt(value: string): string {
+  decrypt(value: string): string {
     const payload = JSON.parse(value) as {nonce: string; tag: string; data: string};
     const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(payload.nonce, 'base64'));
     decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
@@ -61,7 +61,7 @@ export class KeyStore {
       await chmod(privateKeyPath, 0o600);
     } else {
       await rm(privateKeyPath, {force: true});
-      await checkedCommand(this.config.sshKeygenBinary ?? 'ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', `cc-pool-${userId}`, '-f', privateKeyPath]);
+      await checkedCommand(this.config.sshKeygenBinary ?? 'ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', `clinavat-${userId}`, '-f', privateKeyPath]);
       await atomicWrite(encryptedPath, this.encrypt(await readFile(privateKeyPath, 'utf8')));
     }
     const publicKey = (await checkedCommand(this.config.sshKeygenBinary ?? 'ssh-keygen', ['-y', '-P', '', '-f', privateKeyPath])).stdout.trim();

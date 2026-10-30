@@ -1,8 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { HttpError } from '../models.js';
-import { agentEnvironment, findExecutable, terminateProcess } from './environment.js';
+import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
 import { readJsonLines } from './ndjson.js';
 import { RpcClient } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
@@ -21,7 +19,11 @@ export interface AgentSelection {
   reasoningEffort?: string | null;
 }
 
-const cache = new Map<string, { expires: number; models: Promise<AgentModel[]> }>();
+const cache = new Map<string, { userId: string; expires: number; models: Promise<AgentModel[]> }>();
+
+export function invalidateUserModels(userId: string): void {
+  for (const [key, entry] of cache) if (entry.userId === userId) cache.delete(key);
+}
 
 const effortLabels: Record<string, string> = {
   none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高', ultra: '极高',
@@ -30,17 +32,18 @@ const effortOption = (value: string) => ({ value, label: effortLabels[value] || 
 
 async function codexModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
   const binary = await findExecutable(config.codexBinary);
-  const child = spawn(binary, ['-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
+  const child = spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
     cwd: context.project.local_path, env: agentEnvironment(context),
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
   });
+  const closed = observeProcessClose(child);
   child.stderr.resume();
   const rpc = new RpcClient(child, async message => {
     if (message.id !== undefined && message.method) rpc.send({ id: message.id, error: { code: -32601, message: 'Model discovery only' } });
   }, () => undefined);
   try {
     await rpc.request('initialize', {
-      clientInfo: { name: 'cc_pool_models', title: 'CC Pool Models', version: '0.1.0' },
+      clientInfo: { name: 'clinavat_models', title: 'Clinavat Models', version: '0.1.0' },
       capabilities: { experimentalApi: true },
     }, 15000);
     rpc.send({ method: 'initialized', params: {} });
@@ -81,6 +84,7 @@ async function codexModels(config: AgentConfig, context: AgentContext): Promise<
     rpc.close();
     child.stdin.end();
     terminateProcess(child);
+    await closed;
   }
 }
 
@@ -94,6 +98,7 @@ async function claudeModels(config: AgentConfig, context: AgentContext): Promise
     cwd: context.project.local_path, env: agentEnvironment(context),
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
   });
+  const closed = observeProcessClose(child);
   child.stderr.resume();
   let closeLines: (() => void) | undefined;
   try {
@@ -128,28 +133,40 @@ async function claudeModels(config: AgentConfig, context: AgentContext): Promise
     closeLines?.();
     child.stdin.end();
     terminateProcess(child);
+    await closed;
   }
 }
 
 export async function loadAgentModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
-  const key = JSON.stringify([context.slot.home_dir, context.project.local_path, context.session.engine]);
-  const existing = cache.get(key);
-  if (existing && existing.expires > Date.now()) return existing.models;
-  await mkdir(path.join(context.slot.home_dir, context.session.engine === 'codex' ? '.codex' : '.claude'), { recursive: true, mode: 0o700 });
-  const models = (context.session.engine === 'codex' ? codexModels(config, context) : claudeModels(config, context)).then(result => {
-    if (!result.length) throw new Error('当前 CLI 未提供可用模型');
-    return result;
-  });
-  cache.set(key, { expires: Date.now() + 300000, models });
-  try { return await models; }
-  catch (error) { cache.delete(key); throw error; }
+  const probeContext: AgentContext = { ...context, runtime_home: context.slot.home_dir, runtime_kind: 'probe',
+    session: { ...context.session, id: '', native_session_id: undefined, jsonl_file_path: undefined } };
+  const release = await config.credentials.acquire(probeContext);
+  try {
+    const credentialFingerprint = await config.credentials.fingerprint(probeContext);
+    const key = JSON.stringify([context.user.id, probeContext.runtime_home, context.slot.id, context.slot.credential_revision,
+      context.slot.updated_at, credentialFingerprint, context.project.local_path, context.session.engine]);
+    for (const [cachedKey, entry] of cache) if (entry.expires <= Date.now()) cache.delete(cachedKey);
+    const existing = cache.get(key);
+    if (existing) return await existing.models;
+    const models = (async () => {
+      const result = await (context.session.engine === 'codex' ? codexModels(config, probeContext) : claudeModels(config, probeContext));
+      if (!result.length) throw new Error('当前 CLI 未提供可用模型');
+      return result;
+    })();
+    cache.set(key, { userId: context.user.id, expires: Date.now() + 300000, models });
+    try { return await models; }
+    catch (error) { if (cache.get(key)?.models === models) cache.delete(key); throw error; }
+  } finally { await release(); }
 }
 
 export async function validateAgentSelection(config: AgentConfig, context: AgentContext, selection: AgentSelection): Promise<void> {
   if (!selection.model && !selection.reasoningEffort) return;
   let models: AgentModel[];
   try { models = await loadAgentModels(config, context); }
-  catch (error) { throw new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败'); }
+  catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败');
+  }
   const model = selection.model ? models.find(item => item.id === selection.model) : models.find(item => item.isDefault);
   if (!model) throw new HttpError(400, '当前 CLI 不支持所选模型，请重新选择');
   if (selection.reasoningEffort && !model.reasoningEfforts.some(item => item.value === selection.reasoningEffort)) {

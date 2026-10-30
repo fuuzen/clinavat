@@ -1,14 +1,16 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
-import { HttpError, type Slot, type User } from './models.js';
+import { HttpError, type User } from './models.js';
+import { ensureLocalHost } from './local-host.js';
+import { databasePath } from './storage-paths.js';
 
 export class Store {
   private db: DatabaseSync;
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(join(dataDir, 'cc-pool.sqlite'));
-    chmodSync(join(dataDir, 'cc-pool.sqlite'), 0o600);
+    const filename = databasePath(dataDir);
+    this.db = new DatabaseSync(filename);
+    chmodSync(filename, 0o600);
     this.db.exec(`
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
@@ -26,6 +28,13 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS auth_sessions (
         token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS site_access (
+        id INTEGER PRIMARY KEY CHECK(id=1), public_urls TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
+      );
+      CREATE TABLE IF NOT EXISTS site_settings (
+        id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS dev_hosts (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
@@ -65,22 +74,63 @@ export class Store {
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id),
         type TEXT NOT NULL, session_id TEXT, payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS gateway_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        action TEXT NOT NULL, revision INTEGER, status TEXT NOT NULL, detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id,created_at);
       CREATE INDEX IF NOT EXISTS turns_session ON session_turns(session_id,started_at);
     `);
+    const slotColumns = this.all<{ name: string }>('PRAGMA table_info(account_slots)');
+    if (!slotColumns.some(item => item.name === 'credential_revision')) {
+      this.db.exec('ALTER TABLE account_slots ADD COLUMN credential_revision INTEGER NOT NULL DEFAULT 0');
+    }
     const sessionColumns = this.all<{ name: string }>('PRAGMA table_info(sessions)');
     for (const column of ['model', 'reasoning_effort']) {
       if (!sessionColumns.some(item => item.name === column)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
     }
+    if (!sessionColumns.some(item => item.name === 'slot_id')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN slot_id TEXT');
+    }
+    const turnColumns = this.all<{ name: string }>('PRAGMA table_info(session_turns)');
+    for (const [column, type] of [['slot_id', 'TEXT'], ['credential_revision', 'INTEGER'],
+      ['paused_at', 'TEXT'], ['paused_ms', 'INTEGER NOT NULL DEFAULT 0']]) {
+      if (!turnColumns.some(item => item.name === column)) this.db.exec(`ALTER TABLE session_turns ADD COLUMN ${column} ${type}`);
+    }
+    if (!sessionColumns.some(item => item.name === 'permission_mode')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'manual'");
+    }
+    if (!sessionColumns.some(item => item.name === 'agent_mode')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'normal'");
+    }
+    if (!sessionColumns.some(item => item.name === 'role_preset')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN role_preset TEXT NOT NULL DEFAULT 'default'");
+    }
     const hostColumns = this.all<{ name: string }>('PRAGMA table_info(dev_hosts)');
+    if (!hostColumns.some(item => item.name === 'kind')) {
+      this.db.exec("ALTER TABLE dev_hosts ADD COLUMN kind TEXT NOT NULL DEFAULT 'ssh' CHECK(kind IN ('ssh','local'))");
+    }
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS local_host_user ON dev_hosts(user_id) WHERE kind='local'");
     for (const [column, type] of [['jump_host', 'TEXT'], ['jump_port', 'INTEGER'], ['jump_username', 'TEXT']]) {
       if (!hostColumns.some(item => item.name === column)) this.db.exec(`ALTER TABLE dev_hosts ADD COLUMN ${column} ${type}`);
     }
+    const projectColumns = this.all<{ name: string }>('PRAGMA table_info(projects)');
+    if (!projectColumns.some(item => item.name === 'path_mode')) {
+      this.db.exec("ALTER TABLE projects ADD COLUMN path_mode TEXT NOT NULL DEFAULT 'auto'");
+    }
+    if (!projectColumns.some(item => item.name === 'execution_mode')) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN execution_mode TEXT');
+    }
     const interruptedAt = new Date().toISOString();
-    this.run("UPDATE session_turns SET status='interrupted',completed_at=?,duration_ms=MAX(0,CAST((julianday(?)-julianday(started_at))*86400000 AS INTEGER)) WHERE status='running'", interruptedAt, interruptedAt);
-    this.run("UPDATE sessions SET status='interrupted' WHERE status IN ('running','waiting')");
-    this.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE status='CONNECTED'");
+    this.run(`UPDATE session_turns SET status='interrupted',completed_at=?,paused_at=NULL,
+      duration_ms=CASE WHEN status='paused' AND duration_ms IS NOT NULL THEN duration_ms
+        ELSE MAX(0,CAST((julianday(?)-julianday(started_at))*86400000 AS INTEGER)-paused_ms) END
+      WHERE status IN ('running','pausing','paused')`, interruptedAt, interruptedAt);
+    this.run("UPDATE sessions SET status='interrupted' WHERE status IN ('running','waiting','pausing','paused')");
+    this.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE status='CONNECTED' AND kind='ssh'");
+    for (const user of this.all<User>("SELECT * FROM users WHERE role='admin'")) ensureLocalHost(this, user.id);
     this.run("UPDATE approvals SET status='expired', reason='服务重新启动' WHERE status='pending'");
     this.run('DELETE FROM auth_sessions WHERE expires_at < ?', Date.now());
   }
@@ -96,25 +146,15 @@ export class Store {
     try { const result = operation(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  assignSlot(userId: string): Slot | null {
-    return this.transaction(() => this.assignAvailableSlot(userId));
-  }
   createUser(input: Omit<User, 'created_at'>, requireEmpty = false) {
     return this.transaction(() => {
       if (requireEmpty && this.get('SELECT id FROM users LIMIT 1')) throw new HttpError(409, '平台已初始化');
       if (this.get('SELECT id FROM users WHERE username=?', input.username)) throw new HttpError(409, '用户名已存在');
       this.run('INSERT INTO users(id,username,password_hash,role) VALUES(?,?,?,?)', input.id, input.username, input.password_hash, input.role);
       const user = this.get<User>('SELECT * FROM users WHERE id=?', input.id)!;
-      return { user, slot: this.assignAvailableSlot(user.id) };
+      if (user.role === 'admin') ensureLocalHost(this, user.id);
+      return { user, slots: [] };
     });
-  }
-  private assignAvailableSlot(userId: string): Slot | null {
-    const assigned = this.get<Slot>('SELECT * FROM account_slots WHERE assigned_user_id=?', userId);
-    if (assigned) return assigned;
-    const idle = this.get<Slot>("SELECT * FROM account_slots WHERE status='IDLE' AND assigned_user_id IS NULL ORDER BY id LIMIT 1");
-    if (!idle) return null;
-    this.run("UPDATE account_slots SET assigned_user_id=?,status='ASSIGNED',updated_at=datetime('now') WHERE id=?", userId, idle.id);
-    return this.get<Slot>('SELECT * FROM account_slots WHERE id=?', idle.id)!;
   }
   close() { this.db.close(); }
 }

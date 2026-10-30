@@ -8,6 +8,7 @@ interface CommandOptions {
   env?: NodeJS.ProcessEnv;
   timeout?: number;
   maxBytes?: number;
+  input?: string;
 }
 
 export async function atomicWrite(path: string, content: string, mode = 0o600): Promise<void> {
@@ -22,8 +23,12 @@ export function runCommand(binary: string, args: string[], options: CommandOptio
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
       cwd: options.cwd, env: options.env ?? process.env,
-      stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true,
     });
+    if (options.input !== undefined) {
+      child.stdin!.on('error', () => undefined);
+      child.stdin!.end(options.input);
+    }
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
     let bytes = 0;
@@ -44,8 +49,8 @@ export function runCommand(binary: string, args: string[], options: CommandOptio
         terminate();
       } else target.push(chunk);
     };
-    child.stdout.on('data', collect(output));
-    child.stderr.on('data', collect(errors));
+    child.stdout!.on('data', collect(output));
+    child.stderr!.on('data', collect(errors));
     child.on('error', error => { clearTimeout(timer); reject(error); });
     child.on('close', code => {
       clearTimeout(timer);

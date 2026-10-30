@@ -4,10 +4,12 @@ import { createServer, type Server, type Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { quoteShell, workspacePath } from './environment.js';
+import { getPermissionMode } from './permissions.js';
 import type { RunServices } from './types.js';
+import { answerClaudeQuestions } from './claude-questions.js';
 
 const hookClient = String.raw`const net = require('node:net');
-const [socketPath, token, timeout] = process.argv.slice(2);
+const [socketPath, token] = process.argv.slice(2);
 let input = '', response = '', finished = false;
 function finish(value) {
   if (finished) return;
@@ -27,7 +29,6 @@ process.stdin.on('end', () => {
   try { payload = JSON.parse(input); } catch { return deny('工具审批输入无效'); }
   const socket = net.connect(socketPath);
   socket.setEncoding('utf8');
-  socket.setTimeout(Number(timeout));
   socket.on('connect', () => socket.write(JSON.stringify({token, input: payload}) + '\n'));
   socket.on('data', chunk => {
     response += chunk.toString();
@@ -36,12 +37,10 @@ process.stdin.on('end', () => {
       try { finish(JSON.parse(response.split('\n')[0])); } catch { deny('工具审批响应无效'); }
     }
   });
-  socket.on('timeout', () => deny('工具审批超时，已拒绝'));
   socket.on('error', () => deny('工具审批服务不可用，已拒绝'));
   socket.on('end', () => { if (!finished) deny('工具审批连接已关闭'); });
 });
 process.stdin.on('error', () => deny('无法读取工具审批输入'));
-setTimeout(() => deny('工具审批超时，已拒绝'), Number(timeout) + 1000).unref();
 `;
 
 export interface HookServer {
@@ -59,32 +58,60 @@ function decision(allowed: boolean, reason: string, updatedInput?: Record<string
   } };
 }
 
+function nativeDecision(updatedInput?: Record<string, unknown>) {
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', ...(updatedInput ? { updatedInput } : {}) } };
+}
+
 async function handleTool(services: RunServices, input: Record<string, unknown>) {
   const tool = String(input.tool_name ?? '');
   const args = input.tool_input as Record<string, unknown> | undefined;
-  if (!args) return decision(false, '工具输入无效');
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return decision(false, '工具输入无效');
   const root = services.context.project.local_path;
+  const planning = services.context.session.agent_mode === 'plan';
+  const yolo = !planning && getPermissionMode(services.context.session) === 'yolo';
   try {
+    await services.control.waitUntilRunning();
+    if (tool === 'AskUserQuestion') {
+      // Questions must reach the user even when native tool approvals are bypassed.
+      const timeout = new AbortController();
+      const cancelTimeout = services.control.timer(() => timeout.abort(), services.config.approvalTimeoutMs);
+      const updatedInput = await answerClaudeQuestions(services, args, timeout.signal).finally(cancelTimeout);
+      return updatedInput ? decision(true, '用户已回答问题', updatedInput)
+        : decision(false, '用户跳过或未回答这些问题，请依据已有信息继续，不要假定任何选项已获用户同意。');
+    }
+    if (tool === 'ExitPlanMode') return decision(false, '请在最终回复中展示方案并结束本轮；用户可以通过网页模式菜单切换到 Normal 后请求执行。');
     const cwd = await workspacePath(root, String(input.cwd ?? '.'));
     if (tool === 'Bash') {
       if (typeof args.command !== 'string' || args.run_in_background) {
-        return decision(false, '仅支持同步远端命令，后台命令不受支持');
+        return decision(false, '仅支持前台命令，后台命令不受支持');
       }
       await services.verifyShell();
-      const approved = await services.approve('Bash', { ...args, cwd });
-      if (approved.decision !== 'allow') return decision(false, approved.reason ?? '用户拒绝执行');
-      await services.verifyShell();
+      if (yolo) {
+        const approved = await services.approve('Bash', { ...args, cwd });
+        if (approved.decision !== 'allow') return decision(false, approved.reason ?? '用户拒绝执行');
+        await services.verifyShell();
+      }
+      if (services.context.project.execution_mode === 'local') {
+        return yolo ? decision(true, 'YOLO：本系统自动批准') : nativeDecision();
+      }
       const shell = path.join(root, '.bin', 'remote-shell');
-      return decision(true, '用户已批准，命令在开发机执行', {
+      const updatedInput = {
         ...args,
         run_in_background: false,
         command: `cd ${quoteShell(cwd)} && ${quoteShell(shell)} -c ${quoteShell(args.command)}`,
-      });
+      };
+      return yolo ? decision(true, 'YOLO：本系统自动批准，命令在开发机执行', updatedInput) : nativeDecision(updatedInput);
     }
     if (['Read', 'Edit', 'Write'].includes(tool)) {
       if (typeof args.file_path !== 'string') return decision(false, '文件路径无效');
+      const planRoot = path.join(services.context.runtime_home, '.claude', 'plans');
+      const target = path.resolve(cwd, args.file_path);
+      if (planning && target.startsWith(`${planRoot}${path.sep}`) && target.endsWith('.md')) {
+        await workspacePath(planRoot, target, tool !== 'Read');
+        return nativeDecision();
+      }
       await workspacePath(root, path.resolve(cwd, args.file_path), tool !== 'Read');
-      if (tool === 'Read') return decision(true, '读取当前项目文件');
+      if (!yolo) return nativeDecision();
       const approved = await services.approve(tool, args);
       if (approved.decision === 'allow') await workspacePath(root, path.resolve(cwd, args.file_path), true);
       return decision(approved.decision === 'allow', approved.reason ?? '文件修改审批');
@@ -101,7 +128,9 @@ async function handleTool(services: RunServices, input: Record<string, unknown>)
           return decision(false, 'Glob 模式必须位于当前项目目录内');
         }
       }
-      return decision(true, '搜索当前项目文件');
+      if (!yolo) return nativeDecision();
+      const approved = await services.approve(tool, args);
+      return decision(approved.decision === 'allow', approved.reason ?? '搜索审批');
     }
     return decision(false, `当前工作台未启用工具 ${tool}`);
   } catch (error) {
@@ -115,14 +144,15 @@ export async function createHookServer(services: RunServices): Promise<HookServe
   const clientPath = path.join(runtimeDirectory, 'approval-hook.cjs');
   await writeFile(clientPath, hookClient, { mode: 0o700 });
   const token = randomBytes(32).toString('hex');
-  const socketPath = path.join(os.tmpdir(), `cc-pool-${randomBytes(12).toString('hex')}.sock`);
+  const socketPath = path.join(os.tmpdir(), `clinavat-${randomBytes(12).toString('hex')}.sock`);
   const connections = new Set<Socket>();
   const server: Server = createServer((socket) => {
     socket.setEncoding('utf8');
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
     socket.on('error', () => socket.destroy());
-    socket.setTimeout(services.config.approvalTimeoutMs + 5000, () => socket.destroy());
+    const cancelTimeout = services.control.timer(() => socket.destroy(), services.config.approvalTimeoutMs + 5000);
+    socket.once('close', cancelTimeout);
     let data = '';
     let handled = false;
     socket.on('data', (chunk) => {
@@ -149,7 +179,7 @@ export async function createHookServer(services: RunServices): Promise<HookServe
   await chmod(socketPath, 0o600);
   return {
     command: process.execPath,
-    args: [clientPath, socketPath, token, String(services.config.approvalTimeoutMs)],
+    args: [clientPath, socketPath, token],
     async close() {
       for (const connection of connections) connection.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

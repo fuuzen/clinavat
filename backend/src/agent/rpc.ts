@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { terminateProcess } from './environment.js';
 import { readJsonLines } from './ndjson.js';
+import type { RunControl } from './run-control.js';
 
 export interface RpcMessage {
   id?: number | string;
@@ -12,11 +13,12 @@ export interface RpcMessage {
 
 export class RpcClient {
   private sequence = 0;
-  private pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; cancelTimeout(): void }>();
   private lines: { close(): void };
   private closed = false;
 
-  constructor(private child: ChildProcessWithoutNullStreams, onMessage: (message: RpcMessage) => Promise<void>, onError: (error: Error) => void) {
+  constructor(private child: ChildProcessWithoutNullStreams, onMessage: (message: RpcMessage) => Promise<void>, onError: (error: Error) => void,
+    private control?: RunControl) {
     const fail = (error: Error) => {
       if (this.closed) return;
       this.close(error);
@@ -30,7 +32,7 @@ export class RpcClient {
       if (!message.method && typeof message.id === 'number' && this.pending.has(message.id)) {
         const pending = this.pending.get(message.id)!;
         this.pending.delete(message.id);
-        clearTimeout(pending.timer);
+        pending.cancelTimeout();
         if (message.error) pending.reject(new Error(message.error.message ?? 'Codex RPC 请求失败'));
         else pending.resolve(message.result);
         return;
@@ -51,12 +53,14 @@ export class RpcClient {
     if (!this.closed && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
   }
 
-  request(method: string, params: Record<string, unknown>, timeoutMs = 120_000): Promise<any> {
+  request(method: string, params: Record<string, unknown>, timeoutMs = 120_000, pauseAware = true): Promise<any> {
     if (this.closed) return Promise.reject(new Error('Codex app-server 连接已关闭'));
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Codex ${method} 请求超时`)); }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const expire = () => { this.pending.delete(id); reject(new Error(`Codex ${method} 请求超时`)); };
+      const cancelTimeout = this.control && pauseAware ? this.control.timer(expire, timeoutMs)
+        : (() => { const timer = setTimeout(expire, timeoutMs); return () => clearTimeout(timer); })();
+      this.pending.set(id, { resolve, reject, cancelTimeout });
       this.send({ id, method, params });
     });
   }
@@ -64,7 +68,7 @@ export class RpcClient {
   close(reason = new Error('Codex 连接已关闭')): void {
     this.closed = true;
     this.lines.close();
-    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(reason); }
+    for (const pending of this.pending.values()) { pending.cancelTimeout(); pending.reject(reason); }
     this.pending.clear();
   }
 }

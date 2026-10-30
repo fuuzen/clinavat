@@ -8,7 +8,7 @@ import type { ConnectionRegistry } from './connections.js';
 interface Decision { decision: 'allow' | 'deny'; reason?: string }
 export class EventBus {
   private clients = new Map<string, Set<ServerResponse>>();
-  private pending = new Map<string, { resolve: (value: Decision) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<string, { resolve: (value: Decision) => void; cancelTimeout: () => void; cleanup: () => void }>();
   constructor(private store: Store, private timeout: number) {}
   emit(userId: string, event: PoolEvent) {
     const result = this.store.run('INSERT INTO events(user_id,type,session_id,payload) VALUES(?,?,?,?)', userId, event.type, event.sessionId ?? null, JSON.stringify(event.payload));
@@ -57,13 +57,20 @@ export class EventBus {
       response.once('error', cleanup);
     });
   }
-  requestApproval(userId: string, input: { sessionId: string; tool: string; input: unknown }): Promise<Decision> {
+  requestApproval(userId: string, input: { sessionId: string; tool: string; input: unknown; signal?: AbortSignal;
+    scheduleTimeout?: (callback: () => void, milliseconds: number) => () => void }): Promise<Decision> {
+    if (input.signal?.aborted) return Promise.resolve({ decision: 'deny', reason: '审批已取消' });
     const id = randomUUID();
     this.store.run('INSERT INTO approvals(id,session_id,user_id,tool,input) VALUES(?,?,?,?,?)', id, input.sessionId, userId, input.tool, JSON.stringify(input.input));
     const approval = this.store.get<Record<string, unknown>>('SELECT * FROM approvals WHERE id=?', id)!;
     const promise = new Promise<Decision>(resolve => {
-      const timer = setTimeout(() => this.resolveApproval(userId, id, { decision: 'deny', reason: '审批超时，已拒绝执行' }, 'expired'), this.timeout);
-      this.pending.set(id, { resolve, timer });
+      const expire = () => this.resolveApproval(userId, id, { decision: 'deny', reason: '审批超时，已拒绝执行' }, 'expired');
+      const cancelTimeout = input.scheduleTimeout ? input.scheduleTimeout(expire, this.timeout)
+        : (() => { const timer = setTimeout(expire, this.timeout); return () => clearTimeout(timer); })();
+      const abort = () => this.resolveApproval(userId, id, { decision: 'deny', reason: '审批已取消' }, 'cancelled');
+      const cleanup = () => input.signal?.removeEventListener('abort', abort);
+      this.pending.set(id, { resolve, cancelTimeout, cleanup });
+      input.signal?.addEventListener('abort', abort, { once: true });
     });
     this.emit(userId, { type: 'approval', sessionId: input.sessionId, payload: { ...approval, input: input.input } });
     return promise;
@@ -73,7 +80,7 @@ export class EventBus {
     if (!approval) throw new HttpError(404, '审批不存在');
     const pending = this.pending.get(id);
     if (!pending || approval.status !== 'pending') throw new HttpError(409, '该审批已结束');
-    clearTimeout(pending.timer); this.pending.delete(id);
+    pending.cancelTimeout(); pending.cleanup(); this.pending.delete(id);
     this.store.run('UPDATE approvals SET status=?,reason=? WHERE id=?', status ?? decision.decision, decision.reason ?? null, id);
     this.emit(userId, { type: 'approval', sessionId: approval.session_id, payload: { id, status: status ?? decision.decision, reason: decision.reason } });
     pending.resolve(decision);
@@ -84,7 +91,7 @@ export class EventBus {
     }
   }
   close() {
-    for (const item of this.pending.values()) { clearTimeout(item.timer); item.resolve({ decision: 'deny', reason: '服务关闭' }); }
+    for (const item of this.pending.values()) { item.cancelTimeout(); item.cleanup(); item.resolve({ decision: 'deny', reason: '服务关闭' }); }
     this.pending.clear();
     const clients = [...this.clients.values()];
     this.clients.clear();

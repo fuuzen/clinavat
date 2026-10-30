@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { agentEnvironment, terminateProcess, workspacePath } from './environment.js';
+import { agentEnvironment, observeProcessClose, terminateProcess, workspacePath } from './environment.js';
 import type { RunServices } from './types.js';
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[]) {
@@ -42,6 +42,7 @@ function requireString(input: Record<string, unknown>, key: string): string {
 }
 
 export async function executeDynamicTool(services: RunServices, name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+  await services.control.waitUntilRunning(signal);
   if (signal.aborted) throw new Error('会话已停止');
   const root = services.context.project.local_path;
   if (name === 'remote_command') {
@@ -53,17 +54,22 @@ export async function executeDynamicTool(services: RunServices, name: string, in
     if (signal.aborted) throw new Error('会话已停止');
     await services.verifyShell();
     if (signal.aborted) throw new Error('会话已停止');
-    return new Promise((resolve, reject) => {
-      const child = spawn(path.join(root, '.bin', 'remote-shell'), ['-c', command], {
+    const release = services.control.hold();
+    let closed: Promise<void> | undefined;
+    return new Promise<string>((resolve, reject) => {
+      const shell = services.context.project.execution_mode === 'local' ? '/bin/bash' : path.join(root, '.bin', 'remote-shell');
+      const child = spawn(shell, ['-c', command], {
         cwd, env: agentEnvironment(services.context), detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      closed = observeProcessClose(child);
+      services.control.track(child);
       let contents = '';
       const abort = () => terminateProcess(child);
       signal.addEventListener('abort', abort, { once: true });
       const append = (text: string) => {
         if (contents.length < maximumFileSize) contents += text.slice(0, maximumFileSize - contents.length);
-        services.event('tool', { tool: name, output: text.slice(0, 128 * 1024), status: 'running', append: true });
+        if (!signal.aborted) services.event('tool', { tool: name, output: text.slice(0, 128 * 1024), status: 'running', append: true });
       };
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
@@ -74,7 +80,7 @@ export async function executeDynamicTool(services: RunServices, name: string, in
         signal.removeEventListener('abort', abort);
         resolve(`Exit code: ${code ?? exitSignal}\n${contents}`);
       });
-    });
+    }).finally(async () => { try { await closed; } finally { release(); } });
   }
   const requested = name === 'workspace_list' || name === 'workspace_search'
     ? String(input.path ?? '.') : requireString(input, 'path');
@@ -129,13 +135,17 @@ export async function executeDynamicTool(services: RunServices, name: string, in
     if (Buffer.byteLength(contents) > maximumFileSize || contents.includes('\0')) throw new Error('仅支持不超过 2 MiB 的文本文件');
     const approval = await services.approve(name, { ...input, previousContent: original });
     if (approval.decision !== 'allow') throw new Error(approval.reason ?? '用户拒绝修改文件');
+    await services.control.waitUntilRunning(signal);
     if (signal.aborted) throw new Error('会话已停止');
-    await workspacePath(root, requested, name === 'workspace_write');
-    const current = await readSource(target).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
-    if (current !== original) throw new Error('审批期间文件发生变化，请重新读取后修改');
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, contents, 'utf8');
-    return `已更新 ${path.relative(root, target)}`;
+    const release = services.control.hold();
+    try {
+      await workspacePath(root, requested, name === 'workspace_write');
+      const current = await readSource(target).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+      if (current !== original) throw new Error('审批期间文件发生变化，请重新读取后修改');
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, contents, 'utf8');
+      return `已更新 ${path.relative(root, target)}`;
+    } finally { release(); }
   }
   throw new Error(`不支持的工具：${name}`);
 }

@@ -5,9 +5,13 @@ import type { Store } from './database.js';
 import type { Config } from './config.js';
 import type { SshManager } from './runtime/ssh.js';
 import type { ConnectionRegistry } from './connections.js';
+import type { SiteAccess } from './site-access.js';
 import { createUser, credentials, verifyPassword } from './users.js';
+import { availableSlots, serializeSlot } from './accounts/access.js';
+export { serializeSlot } from './accounts/access.js';
 
-const cookieName = 'cc_pool_session';
+const cookieName = 'clinavat_session';
+const legacyCookieName = 'cc_pool_session';
 const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -19,7 +23,7 @@ export function publicUser(user: User, sshPublicKey = '') {
   return { id: user.id, username: user.username, role: user.role, created_at: user.created_at, ssh_public_key: sshPublicKey };
 }
 
-export function registerAuth(app: FastifyInstance, store: Store, config: Config, ssh: SshManager, connections: ConnectionRegistry) {
+export function registerAuth(app: FastifyInstance, store: Store, config: Config, ssh: SshManager, connections: ConnectionRegistry, siteAccess: SiteAccess) {
   async function describe(user: User) {
     const key = await ssh.ensureUserKey(user.id);
     return publicUser(user, key.publicKey);
@@ -35,27 +39,32 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     reply.setCookie(cookieName, token, {
       path: '/', httpOnly: true, sameSite: 'strict', secure: config.secureCookie, maxAge: sessionLifetime / 1000,
     });
+    reply.clearCookie(legacyCookieName, { path: '/' });
   }
   app.decorateRequest('user', null as unknown as User);
   app.decorateRequest('authSessionHash', '');
-  app.addHook('onRequest', async (request: FastifyRequest) => {
+  app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.url.startsWith('/api/')) return;
     const origin = request.headers.origin;
-    if (origin) {
-      const expected = config.origin ?? `${request.protocol}://${request.host}`;
-      if (origin !== expected) throw new HttpError(403, '请求来源不受信任');
-    }
+    if (origin && !siteAccess.allows(origin)) throw new HttpError(403, '请求来源不受信任');
     if (request.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, '禁止跨站请求');
     const path = request.url.split('?')[0];
-    if (['/api/health', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register'].includes(path)) return;
-    const token = request.cookies[cookieName];
-    const user = token && store.get<User>(
-      'SELECT users.* FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id WHERE token_hash=? AND expires_at>?',
+    if (['/api/health', '/api/site/settings', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register'].includes(path)) return;
+    const token = request.cookies[cookieName] ?? request.cookies[legacyCookieName];
+    const user = token && store.get<User & { auth_session_expires_at: number }>(
+      'SELECT users.*,auth_sessions.expires_at AS auth_session_expires_at FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id WHERE token_hash=? AND expires_at>?',
       tokenHash(token), Date.now(),
     );
     if (!user) throw new HttpError(401, '请先登录');
     request.user = user;
     request.authSessionHash = tokenHash(token!);
+    if (!request.cookies[cookieName]) {
+      reply.setCookie(cookieName, token!, {
+        path: '/', httpOnly: true, sameSite: 'strict', secure: config.secureCookie,
+        maxAge: Math.max(0, Math.floor((user.auth_session_expires_at - Date.now()) / 1000)),
+      });
+    }
+    if (request.cookies[legacyCookieName]) reply.clearCookie(legacyCookieName, { path: '/' });
   });
   app.get('/api/auth/status', async () => ({
     needsSetup: !store.get('SELECT id FROM users LIMIT 1'), registrationEnabled: config.registrationEnabled,
@@ -77,29 +86,22 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     const user = store.get<User>('SELECT * FROM users WHERE username=?', input.username);
     const validPassword = await verifyPassword(input.password, user?.password_hash);
     if (!user || !validPassword) throw new HttpError(401, '用户名或密码错误');
-    store.assignSlot(user.id);
     createSession(user, reply);
     return { user: await describe(user) };
   });
   app.post('/api/auth/logout', async (request, reply) => {
-    const token = request.cookies[cookieName];
-    if (token) {
+    for (const token of new Set([request.cookies[cookieName], request.cookies[legacyCookieName]].filter((value): value is string => !!value))) {
       store.run('DELETE FROM auth_sessions WHERE token_hash=?', tokenHash(token));
       connections.revoke(tokenHash(token));
     }
     reply.clearCookie(cookieName, { path: '/' });
+    reply.clearCookie(legacyCookieName, { path: '/' });
     return { ok: true };
   });
   app.get('/api/auth/me', async request => ({
-    user: await describe(request.user), slot: serializeSlot(store.assignSlot(request.user.id)),
+    user: await describe(request.user), slots: availableSlots(store, request.user.id).map(serializeSlot),
   }));
   return { describe };
-}
-
-export function serializeSlot(slot: import('./models.js').Slot | null) {
-  if (!slot) return null;
-  const { home_dir: _home, ...publicSlot } = slot;
-  return { ...publicSlot, cli_types: JSON.parse(slot.cli_types) as string[] };
 }
 
 export function requireAdmin(request: FastifyRequest) {

@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 
 export interface RuntimeConfig {
   dataDir: string;
+  workspaceDir: string;
   encryptionKey: string;
   sshBinary?: string;
   scpBinary?: string;
@@ -16,6 +17,7 @@ export interface DevHost {
   host: string;
   port: number;
   username: string;
+  kind?: 'ssh' | 'local';
   jump_host?: string | null;
   jump_port?: number | null;
   jump_username?: string | null;
@@ -28,6 +30,8 @@ export interface WorkspaceProject {
   remote_path: string;
   local_path: string;
   sync_name: string;
+  path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
+  execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
 }
 
 export interface CommandResult {
@@ -45,6 +49,12 @@ export function shellQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
+export function remoteBash(command: string): string {
+  const encoded = Buffer.from(command).toString('base64');
+  // The SSH login shell may be fish; only Bash decodes and interprets the command payload.
+  return `bash -c 'eval "$(printf %s ${encoded} | base64 -d)"'`;
+}
+
 export function isValidSshHost(value: string): boolean {
   return value.length <= 253 && ((isIP(value) !== 0 && !value.includes('%'))
     || /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$/.test(value));
@@ -54,6 +64,7 @@ export function assertHostOwner(userId: string, host: DevHost): void {
   assertIdentifier(userId);
   assertIdentifier(host.id);
   if (host.user_id !== userId) throw new Error('无权访问此开发机');
+  if (host.kind === 'local') return;
   if (!isValidSshHost(host.host)) throw new Error('开发机地址格式无效');
   if (!/^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(host.username)) throw new Error('SSH 用户名格式无效');
   if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535) throw new Error('SSH 端口无效');
