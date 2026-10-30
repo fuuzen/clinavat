@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-demo/
 .env
 .env.*
 !.env.example
@@ -14,3 +15,5 @@ data/
 .aws/
 playwright-report/
 test-results/
+.releases/
+__pycache__/

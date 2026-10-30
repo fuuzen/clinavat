@@ -1,4 +1,4 @@
-name: cc-pool
+name: clinavat
 services:
   hub:
     build:
@@ -11,15 +11,18 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      CC_POOL_MASTER_KEY: ${CC_POOL_MASTER_KEY:?请先配置 CC_POOL_MASTER_KEY}
-      CC_POOL_ORIGIN: ${CC_POOL_PUBLIC_ORIGIN:-http://localhost:8080}
-      CC_POOL_COOKIE_SECURE: ${CC_POOL_COOKIE_SECURE:-false}
-      CC_POOL_REGISTRATION: ${CC_POOL_REGISTRATION:-false}
-      CC_POOL_APPROVAL_TIMEOUT_MS: ${CC_POOL_APPROVAL_TIMEOUT_MS:-300000}
+      CLINAVAT_MASTER_KEY: ${CLINAVAT_MASTER_KEY:?请配置 CLINAVAT_MASTER_KEY；已有部署请使用 deploy/compose.legacy.yaml}
+      CLINAVAT_ORIGIN: ${CLINAVAT_PUBLIC_ORIGIN:-}
+      CLINAVAT_WEB_PORT: ${CLINAVAT_WEB_PORT:-8080}
+      CLINAVAT_COOKIE_SECURE: ${CLINAVAT_COOKIE_SECURE:-false}
+      CLINAVAT_REGISTRATION: ${CLINAVAT_REGISTRATION:-false}
+      CLINAVAT_APPROVAL_TIMEOUT_MS: ${CLINAVAT_APPROVAL_TIMEOUT_MS:-300000}
+      CLINAVAT_WORKSPACE_DIR: /var/tmp/clinavat-workspace
     volumes:
-      - pool-data:/srv/pool
+      - data:/srv/clinavat
+      - workspaces:/var/tmp/clinavat-workspace
     tmpfs:
-      - /srv/pool/run:mode=1777,size=64m
+      - /srv/clinavat/run:mode=1777,size=64m
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 20s
@@ -33,9 +36,12 @@ services:
       target: web
     restart: unless-stopped
     ports:
-      - "${CC_POOL_WEB_BIND:-127.0.0.1}:${CC_POOL_WEB_PORT:-8080}:80"
+      - "${CLINAVAT_WEB_BIND:-127.0.0.1}:${CLINAVAT_WEB_PORT:-8080}:80"
     depends_on:
       hub:
         condition: service_healthy
 volumes:
-  pool-data:
+  data:
+    name: ${CLINAVAT_DATA_VOLUME:?新部署请配置 CLINAVAT_DATA_VOLUME；旧部署请使用 deploy/compose.legacy.yaml}
+  workspaces:
+    name: ${CLINAVAT_WORKSPACE_VOLUME:?新部署请配置 CLINAVAT_WORKSPACE_VOLUME；旧部署请使用 deploy/compose.legacy.yaml}

@@ -1,0 +1,32 @@
+{
+	admin off
+	auto_https off
+}
+
+http://:{$CLINAVAT_WEB_PORT:8080} {
+	bind {$CLINAVAT_WEB_BIND:127.0.0.1}
+	root * "{$CLINAVAT_FRONTEND_DIR}"
+	@siteSettings path /api/admin/site/settings
+	request_body @siteSettings {
+		max_size 6MiB
+	}
+	@otherRequests not path /api/admin/site/settings
+	request_body @otherRequests {
+		max_size 1MiB
+	}
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	}
+	handle /api/* {
+		reverse_proxy {$CLINAVAT_HOST:127.0.0.1}:{$CLINAVAT_PORT:3001} {
+			flush_interval -1
+		}
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

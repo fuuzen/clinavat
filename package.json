@@ -1,5 +1,5 @@
 {
-  "name": "cc-pool",
+  "name": "clinavat",
   "private": true,
   "version": "0.1.0",
   "workspaces": ["backend", "frontend"],

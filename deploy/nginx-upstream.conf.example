@@ -1,8 +1,27 @@
 # This is the proxy location inside the existing public HTTPS server block.
-# Replace pool.example.com in server_name and GATEWAY_PRIVATE_ADDRESS below.
+# Replace clinavat.example.com in server_name and GATEWAY_PRIVATE_ADDRESS below.
 # Configure listen 443 ssl and certificates in that existing server block.
+# For multiple domains, list every hostname in server_name and cover each with TLS.
+# Add each full HTTPS origin in Admin Panel > Site Personalization > Public URL.
+# CLINAVAT_ORIGIN (CLINAVAT_PUBLIC_ORIGIN for Compose) only seeds the first startup.
+# Example: server_name clinavat.example.com clinavat.example.net;
 # GATEWAY_PRIVATE_ADDRESS is a placeholder, not an Nginx environment variable.
-server_name pool.example.com;
+server_name clinavat.example.com;
+
+location = /api/admin/site/settings {
+    client_max_body_size 6m;
+    proxy_pass http://GATEWAY_PRIVATE_ADDRESS:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $clinavat_connection_upgrade;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
 
 location / {
     proxy_pass http://GATEWAY_PRIVATE_ADDRESS:8080;
@@ -11,7 +30,7 @@ location / {
     proxy_set_header Origin $http_origin;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $pool_connection_upgrade;
+    proxy_set_header Connection $clinavat_connection_upgrade;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 3600s;
@@ -20,7 +39,7 @@ location / {
 }
 
 # Put this map in the Nginx http block, outside all server blocks.
-# map $http_upgrade $pool_connection_upgrade {
+# map $http_upgrade $clinavat_connection_upgrade {
 #     default upgrade;
 #     '' close;
 # }

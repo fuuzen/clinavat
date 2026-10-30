@@ -1,14 +1,17 @@
 import { constants } from 'node:fs';
-import { access, chmod, lstat, mkdir, readdir, readlink, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, readdir, readFile, readlink, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { loadEnvironment as readEnvironment } from './environment.mjs';
+import { activateServices, ensureInstallIdle } from './service-install.mjs';
+import { discoverServices, services as installedServices } from './release-state.mjs';
 
 const deploymentDirectory = dirname(fileURLToPath(import.meta.url));
 const projectDirectory = dirname(deploymentDirectory);
 const environmentFile = join(projectDirectory, '.env');
-const services = ['cc-pool-hub.service', 'cc-pool-web.service'];
+const services = ['clinavat-hub.service', 'clinavat-web.service'];
 const command = process.argv[2] ?? 'status';
 
 function run(program, args, options = {}) {
@@ -42,14 +45,14 @@ async function executable(name) {
 }
 
 function loadEnvironment() {
-  process.loadEnvFile(environmentFile);
+  readEnvironment(environmentFile);
 }
 
 async function prepareRuntime() {
   loadEnvironment();
   if (!process.env.XDG_RUNTIME_DIR) throw new Error('需要 systemd 用户会话的 XDG_RUNTIME_DIR');
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CC_POOL_DATA_DIR ?? '../data');
-  const runtimeDirectory = join(process.env.XDG_RUNTIME_DIR, 'cc-pool');
+  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  const runtimeDirectory = process.env.RUNTIME_DIRECTORY ?? join(process.env.XDG_RUNTIME_DIR, 'clinavat');
   const runtimeLink = join(dataDirectory, 'run');
   await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
   await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
@@ -70,7 +73,7 @@ async function prepareRuntime() {
 
 async function resumeSync() {
   loadEnvironment();
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CC_POOL_DATA_DIR ?? '../data');
+  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
   const usersDirectory = join(dataDirectory, 'users');
   const users = await readdir(usersDirectory, { withFileTypes: true }).catch(error => {
     if (error.code !== 'ENOENT') throw error;
@@ -89,7 +92,7 @@ async function resumeSync() {
       return [];
     });
     if (!sessions.some(session => session.isFile())) continue;
-    run(process.env.CC_POOL_MUTAGEN_BIN ?? 'mutagen', ['daemon', 'start'], {
+    run(process.env.CLINAVAT_MUTAGEN_BIN ?? 'mutagen', ['daemon', 'start'], {
       env: { ...process.env, MUTAGEN_DATA_DIRECTORY: mutagenDirectory, MUTAGEN_SSH_PATH: join(userDirectory, 'mutagen-ssh') },
       timeout: 20_000,
     });
@@ -100,32 +103,33 @@ async function install() {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < 22 || (major === 22 && minor < 13)) throw new Error('需要 Node.js 22.13 或更新版本');
   loadEnvironment();
-  if (!/^[a-f\d]{64}$/i.test(process.env.CC_POOL_MASTER_KEY ?? '')) throw new Error('请先配置有效的 CC_POOL_MASTER_KEY');
-  if (!process.env.CC_POOL_ORIGIN) throw new Error('请将 CC_POOL_ORIGIN 配置为浏览器实际访问地址');
-  new URL(process.env.CC_POOL_ORIGIN);
+  if (!/^[a-f\d]{64}$/i.test(process.env.CLINAVAT_MASTER_KEY ?? '')) throw new Error('请先配置有效的 CLINAVAT_MASTER_KEY；已有部署必须保留原密钥');
   if (!process.env.XDG_RUNTIME_DIR) throw new Error('需要 systemd 用户会话');
   for (const file of ['backend/dist/server.js', 'frontend/dist/index.html']) await access(join(projectDirectory, file));
+  await import('../backend/dist/config.js');
   const caddy = await executable('caddy');
-  for (const name of [process.env.CC_POOL_MUTAGEN_BIN ?? 'mutagen', process.env.CC_POOL_CLAUDE_BIN ?? 'claude',
-    process.env.CC_POOL_CODEX_BIN ?? 'codex', process.env.CC_POOL_SSH_BIN ?? 'ssh',
-    process.env.CC_POOL_SSH_KEYGEN_BIN ?? 'ssh-keygen', 'bash', 'git', 'flock', 'scp', 'rg']) await executable(name);
+  for (const name of [process.env.CLINAVAT_MUTAGEN_BIN ?? 'mutagen', process.env.CLINAVAT_CLAUDE_BIN ?? 'claude',
+    process.env.CLINAVAT_CODEX_BIN ?? 'codex', process.env.CLINAVAT_SSH_BIN ?? 'ssh',
+    process.env.CLINAVAT_SSH_KEYGEN_BIN ?? 'ssh-keygen', 'bash', 'git', 'flock', 'scp', 'rg']) await executable(name);
   const environmentPath = [...new Set([dirname(process.execPath), join(homedir(), '.local/bin'),
     ...(process.env.PATH ?? '').split(':')])].filter(Boolean).join(':');
+  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  await ensureInstallIdle(dataDirectory);
   const serviceDirectory = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'systemd/user');
   await mkdir(serviceDirectory, { recursive: true });
   const node = executableArgument(process.execPath);
   const script = executableArgument(fileURLToPath(import.meta.url));
-  const environment = executableArgument(environmentFile);
   const hub = `[Unit]
-Description=CC-Pool host backend
-After=network.target
+Description=Clinavat host backend
+Conflicts=cc-pool-hub.service
+After=network.target cc-pool-hub.service
 
 [Service]
 Type=simple
 WorkingDirectory=${unitPath(join(projectDirectory, 'backend'))}
 Environment=${unitValue(`PATH=${environmentPath}`)}
 Environment=NODE_ENV=production
-RuntimeDirectory=cc-pool
+RuntimeDirectory=clinavat
 RuntimeDirectoryMode=0700
 ExecStartPre=${node} ${script} prepare-runtime
 ExecStart=${node} ${executableArgument(`--env-file=${environmentFile}`)} ${executableArgument(join(projectDirectory, 'backend/dist/server.js'))}
@@ -140,15 +144,17 @@ UMask=0077
 WantedBy=default.target
 `;
   const web = `[Unit]
-Description=CC-Pool host web frontend
-Wants=cc-pool-hub.service
-After=cc-pool-hub.service
+Description=Clinavat host web frontend
+Conflicts=cc-pool-web.service
+Wants=clinavat-hub.service
+After=clinavat-hub.service cc-pool-web.service
 
 [Service]
 Type=simple
 WorkingDirectory=${unitPath(projectDirectory)}
-Environment=${unitValue(`CC_POOL_FRONTEND_DIR=${join(projectDirectory, 'frontend/dist')}`)}
-ExecStart=${executableArgument(caddy)} run --envfile ${environment} --config ${executableArgument(join(deploymentDirectory, 'Caddyfile'))} --adapter caddyfile
+Environment=${unitValue(`PATH=${environmentPath}`)}
+Environment=${unitValue(`CLINAVAT_FRONTEND_DIR=${join(projectDirectory, 'frontend/dist')}`)}
+ExecStart=${node} ${script} run-web ${executableArgument(caddy)}
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
@@ -157,22 +163,54 @@ UMask=0077
 [Install]
 WantedBy=default.target
 `;
-  await writeFile(join(serviceDirectory, services[0]), hub, { mode: 0o600 });
-  await writeFile(join(serviceDirectory, services[1]), web, { mode: 0o600 });
-  run('systemd-analyze', ['--user', 'verify', ...services.map(service => join(serviceDirectory, service))]);
-  run('systemctl', ['--user', 'daemon-reload']);
-  run('systemctl', ['--user', 'enable', ...services]);
-  run('systemctl', ['--user', 'restart', ...services]);
-  console.log('宿主服务已安装。查看状态：npm run host:status；查看日志：npm run host:logs');
+  const previous = await Promise.all(services.map(service => readFile(join(serviceDirectory, service)).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  })));
+  async function restoreUnits() {
+    for (const [index, service] of services.entries()) {
+      const path = join(serviceDirectory, service);
+      if (previous[index]) await writeFile(path, previous[index], { mode: 0o600 });
+      else await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
+    run('systemctl', ['--user', 'daemon-reload']);
+  }
+  try {
+    await writeFile(join(serviceDirectory, services[0]), hub, { mode: 0o600 });
+    await writeFile(join(serviceDirectory, services[1]), web, { mode: 0o600 });
+    run('systemd-analyze', ['--user', 'verify', ...services.map(service => join(serviceDirectory, service))]);
+    run('systemctl', ['--user', 'daemon-reload']);
+    await activateServices(dataDirectory, restoreUnits);
+  } catch (error) {
+    await restoreUnits();
+    throw error;
+  }
+  console.log('Clinavat 宿主服务已安装，旧服务已停用。查看状态：npm run host:status；查看日志：npm run host:logs');
+}
+
+function installWithLock() {
+  loadEnvironment();
+  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  return mkdir(dataDirectory, { recursive: true, mode: 0o700 }).then(() => run('flock', [
+    '--nonblock', '--no-fork', '--conflict-exit-code', '75', join(dataDirectory, 'release.lock'),
+    process.execPath, fileURLToPath(import.meta.url), 'install', '--locked',
+  ]));
 }
 
 try {
-  if (command === 'install') await install();
-  else if (command === 'prepare-runtime') await prepareRuntime();
+  if (command === 'install') {
+    if (process.argv.includes('--locked')) await install();
+    else await installWithLock();
+  } else if (command === 'prepare-runtime') await prepareRuntime();
   else if (command === 'resume-sync') await resumeSync();
-  else if (command === 'logs') run('journalctl', ['--user', '-u', services[0], '-u', services[1], '-f']);
-  else if (['start', 'stop', 'status'].includes(command)) run('systemctl', ['--user', command, ...services, ...(command === 'status' ? ['--no-pager'] : [])]);
-  else throw new Error('用法：node deploy/host.mjs install|start|stop|status|logs');
+  else if (command === 'run-web') {
+    loadEnvironment();
+    run(process.argv[3] ?? 'caddy', ['run', '--config', join(deploymentDirectory, 'clinavat.Caddyfile'), '--adapter', 'caddyfile']);
+  } else if (['start', 'stop', 'status', 'logs'].includes(command)) {
+    await discoverServices();
+    if (command === 'logs') run('journalctl', ['--user', '-u', installedServices[0], '-u', installedServices[1], '-f']);
+    else run('systemctl', ['--user', command, ...installedServices, ...(command === 'status' ? ['--no-pager'] : [])]);
+  } else throw new Error('用法：node deploy/host.mjs install|start|stop|status|logs');
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

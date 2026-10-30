@@ -14,7 +14,7 @@ ARG CLAUDE_CODE_VERSION=2.1.308
 ARG CODEX_VERSION=0.164.0
 ARG MUTAGEN_VERSION=0.18.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl git openssh-client ripgrep bubblewrap xz-utils util-linux \
+    bash ca-certificates curl git openssh-client ripgrep bubblewrap xz-utils util-linux python3 \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
     && npm cache clean --force
@@ -30,9 +30,10 @@ COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
 RUN npm ci --omit=dev --workspace backend && npm cache clean --force
 COPY --from=build /app/backend/dist backend/dist
-RUN mkdir -p /srv/pool && chown node:node /srv/pool
+RUN mkdir -p /srv/clinavat /var/tmp/clinavat-workspace /srv/pool /var/tmp/cc-pool-workspace \
+    && chown node:node /srv/clinavat /var/tmp/clinavat-workspace /srv/pool /var/tmp/cc-pool-workspace
 USER node
-ENV NODE_ENV=production CC_POOL_DATA_DIR=/srv/pool CC_POOL_HOST=0.0.0.0 CC_POOL_PORT=3001
+ENV NODE_ENV=production CLINAVAT_DATA_DIR=/srv/clinavat CLINAVAT_WORKSPACE_DIR=/var/tmp/clinavat-workspace CLINAVAT_HOST=0.0.0.0 CLINAVAT_PORT=3001
 EXPOSE 3001
 CMD ["node", "backend/dist/server.js"]
 

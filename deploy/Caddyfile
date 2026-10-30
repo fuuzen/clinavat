@@ -6,7 +6,12 @@
 http://:{$CC_POOL_WEB_PORT:8080} {
 	bind {$CC_POOL_WEB_BIND:127.0.0.1}
 	root * "{$CC_POOL_FRONTEND_DIR}"
-	request_body {
+	@siteSettings path /api/admin/site/settings
+	request_body @siteSettings {
+		max_size 6MiB
+	}
+	@otherRequests not path /api/admin/site/settings
+	request_body @otherRequests {
 		max_size 1MiB
 	}
 	header {
