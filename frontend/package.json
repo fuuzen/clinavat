@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b",
     "typecheck": "tsc -b",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "dev:demo": "vite --host 0.0.0.0 --mode demo",
+    "build:demo": "tsc -b && vite build --mode demo --outDir dist-demo"
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.101.0",
@@ -26,6 +28,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "msw": "^3.0.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   }

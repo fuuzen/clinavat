@@ -4,10 +4,14 @@ import App from "./App";
 import { initializeTheme } from "./theme";
 import "./styles.css";
 
-initializeTheme();
+async function start() {
+  if (import.meta.env.MODE === "demo") await (await import("../demo/browser")).startDemo();
+  initializeTheme();
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+void start();
