@@ -1,0 +1,15 @@
+[Unit]
+Description=CC-Pool gateway guard, DNAT and direct lists
+Wants=network-online.target
+After=network-online.target
+# Load the kill switch before any pool traffic can be forwarded.
+Before=sing-box.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/gateway-rules.sh start
+ExecStop=/usr/local/bin/gateway-rules.sh stop
+
+[Install]
+WantedBy=multi-user.target
