@@ -23,11 +23,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - id: pages
+        uses: actions/configure-pages@v5
       - run: npm ci
       - run: npm run build:demo -w frontend
         env:
-          # Project sites are served from /<repo>/; override with the DEMO_BASE variable for custom domains.
-          VITE_BASE: ${{ vars.DEMO_BASE || format('/{0}/', github.event.repository.name) }}
+          # base_path is "/<repo>" for github.io project sites and empty for custom domains.
+          VITE_BASE: ${{ vars.DEMO_BASE || format('{0}/', steps.pages.outputs.base_path) }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist-demo

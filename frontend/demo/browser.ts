@@ -12,11 +12,24 @@ function showBadge() {
   document.body.append(badge);
 }
 
-export async function startDemo() {
+function showInsecureNotice() {
+  const notice = document.createElement("p");
+  notice.textContent = "在线预览需要通过 HTTPS 访问：浏览器只在安全连接下启用模拟后端所需的 Service Worker。";
+  Object.assign(notice.style, { maxWidth: "36em", margin: "20vh auto", padding: "0 24px", font: "15px/1.7 system-ui, sans-serif" });
+  document.getElementById("root")?.replaceChildren(notice);
+}
+
+/** Returns false when the page cannot host the mock backend, so the app must not start. */
+export async function startDemo(): Promise<boolean> {
+  if (!("serviceWorker" in navigator)) {
+    showInsecureNotice();
+    return false;
+  }
   await setupWorker(...handlers).start({
     serviceWorker: { url: `${import.meta.env.BASE_URL}mockServiceWorker.js` },
     onUnhandledFrame: "bypass",
     quiet: true,
   });
   showBadge();
+  return true;
 }

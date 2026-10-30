@@ -34,7 +34,7 @@ VITE_BASE=/<repo>/ npm run build:demo -w frontend     # 构建到 frontend/dist-
 
 - 数据保存在页面内存中，刷新即重置。
 - 正式构建会剔除全部模拟代码。
-- 推送到 `main` 后，`.github/workflows/demo-pages.yml` 自动构建并发布。需要在仓库设置中把 Pages 的来源设为 GitHub Actions。默认部署在 `/<仓库名>/` 子路径；使用自定义域名时设置仓库变量 `DEMO_BASE=/`。
+- 推送到 `main` 后，`.github/workflows/demo-pages.yml` 自动构建并发布。需要在仓库设置中把 Pages 的来源设为 GitHub Actions。访问路径由 Pages 配置自动确定：`<用户名>.github.io/<仓库名>/` 使用子路径，自定义域名使用根路径；需要强制指定时设置仓库变量 `DEMO_BASE`。站点必须通过 **HTTPS** 访问，浏览器只在安全连接下允许 Service Worker，HTTP 下模拟后端无法启动。
 - **前端新增接口时**，需要在 `frontend/demo/handlers/` 中补充对应的模拟，否则该接口在预览中会提示“在线预览中无法执行该操作”。
 
 ## 目录结构

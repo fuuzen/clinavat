@@ -5,7 +5,7 @@ import { initializeTheme } from "./theme";
 import "./styles.css";
 
 async function start() {
-  if (import.meta.env.MODE === "demo") await (await import("../demo/browser")).startDemo();
+  if (import.meta.env.MODE === "demo" && !(await (await import("../demo/browser")).startDemo())) return;
   initializeTheme();
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
