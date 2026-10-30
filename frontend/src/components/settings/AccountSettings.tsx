@@ -1,5 +1,4 @@
 import {
-  ChevronDown,
   CircleUserRound,
   KeyRound,
   ShieldCheck,
@@ -10,10 +9,8 @@ import { CopyButton } from "../Dialogs";
 
 export default function AccountSettings({
   overview,
-  onSlots,
 }: {
   overview: Overview;
-  onSlots: () => void;
 }) {
   return (
     <>
@@ -33,38 +30,25 @@ export default function AccountSettings({
       </div>
       <div className="settings-section-heading">
         <ShieldCheck size={17} />
-        <h3>专属账号槽位</h3>
+        <h3>获授权的账号槽位</h3>
       </div>
-      <div className="settings-detail-card">
-        {overview.slot ? (
-          <>
-            <div>
-              <strong>{overview.slot.label}</strong>
-              <span className="badge badge-green">
-                {statusLabel(overview.slot.status)}
-              </span>
-            </div>
-            <p>
-              {overview.slot.id} · {overview.slot.cli_types.join(" / ")}
-            </p>
-            <small>所有对话共享你的专属登录环境，保持项目上下文独立。</small>
-          </>
-        ) : (
-          <>
-            <strong>尚未分配账号</strong>
-            <p>
-              {overview.user.role === "admin"
-                ? "在「账号槽位」中创建并绑定账号，即可开始对话。"
-                : "联系管理员为你分配账号槽位，即可开始对话。"}
-            </p>
-            {overview.user.role === "admin" && (
-              <button className="text-button" onClick={onSlots}>
-                管理账号槽位 <ChevronDown size={13} />
-              </button>
-            )}
-          </>
-        )}
-      </div>
+      {overview.slots.length ? overview.slots.map((slot) => (
+        <div className="settings-detail-card" key={slot.id}>
+          <div>
+            <strong>{slot.label}</strong>
+            <span className={`badge ${slot.status === "IDLE" ? "badge-green" : ""}`}>
+              {slot.status === "IDLE" ? slot.in_use ? slot.in_use_by_you ? "你正在使用" : "其他用户使用中" : "可用" : statusLabel(slot.status)}
+            </span>
+          </div>
+          <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}</p>
+          <small>不同对话可同时使用不同槽位，切换仅影响当前对话；此槽位同时限 1 位用户。</small>
+        </div>
+      )) : (
+        <div className="settings-detail-card">
+          <strong>尚无账号授权</strong>
+          <p>联系管理员开放槽位访问权限后，即可在对话中选择账号。</p>
+        </div>
+      )}
       <div className="settings-section-heading">
         <KeyRound size={17} />
         <h3>SSH 专属公钥</h3>

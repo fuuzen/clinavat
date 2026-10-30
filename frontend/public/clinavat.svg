@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">Clinavat</title>
+  <desc id="description">A terminal prompt held inside a cylindrical vat.</desc>
+  <path d="M14 27h100v63c0 18-20 28-50 28S14 108 14 90V27Z" fill="#247768"/>
+  <path d="M35 38c9 2 19 3 29 3s20-1 29-3v43c0 13-10 20-29 20s-29-7-29-20V38Z" fill="#F4F6EE"/>
+  <ellipse cx="64" cy="27" rx="50" ry="14" fill="#247768"/>
+  <ellipse cx="64" cy="29" rx="44" ry="9" fill="#B6E8B0"/>
+  <path d="m47 62 12 11-12 11m20 0h14" stroke="#17251F" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

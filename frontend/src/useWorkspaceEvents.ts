@@ -6,7 +6,9 @@ import {
   type SetStateAction,
 } from "react";
 import { errorText } from "./api";
-import type { PoolEvent, ToolEvent, Turn } from "./types";
+import { loadSiteSettings } from "./site/store";
+import type { PoolEvent, SlotUsage, ToolEvent, Turn } from "./types";
+import { receiveSlotUsage } from "./useSlotUsage";
 interface EventOptions {
   userId?: string;
   selectedSessionRef: RefObject<string>;
@@ -18,7 +20,6 @@ interface EventOptions {
   setStreamConnected: Dispatch<SetStateAction<boolean>>;
   setStreaming: Dispatch<SetStateAction<string>>;
   setTools: Dispatch<SetStateAction<ToolEvent[]>>;
-  setSending: Dispatch<SetStateAction<boolean>>;
   setInspectorRefresh: Dispatch<SetStateAction<number>>;
 }
 export function useWorkspaceEvents({
@@ -32,7 +33,6 @@ export function useWorkspaceEvents({
   setStreamConnected,
   setStreaming,
   setTools,
-  setSending,
   setInspectorRefresh,
 }: EventOptions) {
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -68,8 +68,13 @@ export function useWorkspaceEvents({
         return;
       }
       const payload = data.payload;
+      if (data.type === "site-settings") void loadSiteSettings().catch(() => undefined);
       const object = payload && typeof payload === "object" ? payload : {};
       const current = data.sessionId === selectedSessionRef.current;
+      if (data.type === "goal" || /^nativeGoal(?:\/|Updated$|Sampling$|$)/.test(data.type))
+        window.dispatchEvent(new CustomEvent("clinavat:goal", { detail: { sessionId: data.sessionId, ...object } }));
+      if (data.type === "user-input" || (data.type === "done" && current))
+        window.dispatchEvent(new Event("clinavat:user-input"));
       if (
         data.type === "turn" &&
         current &&
@@ -126,8 +131,11 @@ export function useWorkspaceEvents({
           notify(errorText(cause)),
         );
       }
+      if (data.type === "slot-usage" && object.usage)
+        receiveSlotUsage(object.usage as SlotUsage);
       if (data.type === "approval") void refreshApprovals();
       if (
+        data.type === "slot" ||
         data.type === "session" ||
         data.type === "project" ||
         data.type === "done" ||
@@ -137,7 +145,6 @@ export function useWorkspaceEvents({
       if (data.type === "project" || data.type === "done")
         setInspectorRefresh((value) => value + 1);
       if (data.type === "done" && current) {
-        setSending(false);
         setStreaming("");
         void reloadMessages(selectedSessionRef.current).catch((cause) =>
           notify(errorText(cause)),
@@ -145,7 +152,6 @@ export function useWorkspaceEvents({
         void refreshApprovals();
       }
       if (data.type === "error" && (!data.sessionId || current)) {
-        setSending(false);
         setStreaming("");
         notify(
           typeof payload === "string"

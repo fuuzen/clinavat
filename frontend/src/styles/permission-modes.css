@@ -1,0 +1,44 @@
+.permission-manual {
+  --permission-color: var(--info);
+}
+.permission-accept-edits {
+  --permission-color: var(--terminal-cyan, light-dark(#247574, #8bcfc9));
+}
+.permission-auto {
+  --permission-color: var(--terminal-magenta, light-dark(#8d3da8, #c3a3e0));
+}
+.permission-full-access {
+  --permission-color: var(--warning);
+}
+.permission-yolo {
+  --permission-color: var(--danger);
+}
+.settings-trigger.permission-trigger {
+  color: var(--permission-color);
+  background: color-mix(in srgb, var(--permission-color) 9%, transparent);
+}
+.settings-trigger.permission-trigger:hover:not(:disabled),
+.settings-trigger.permission-trigger[aria-expanded="true"] {
+  color: var(--permission-color);
+  background: color-mix(in srgb, var(--permission-color) 16%, transparent);
+}
+.permission-mode-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--permission-color);
+}
+.permission-mode-symbol > svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+.permission-option > .permission-mode-symbol {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--permission-color) 9%, transparent);
+}

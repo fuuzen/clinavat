@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type RefObject } from "react";
-import { api } from "./api";
+import { api, isActive } from "./api";
 import type { Message, Turn } from "./types";
 
 export function useConversationHistory(selectedSessionRef: RefObject<string>) {
@@ -25,8 +25,8 @@ export function useConversationHistory(selectedSessionRef: RefObject<string>) {
         if ((turnVersionsRef.current.get(turn.id) || 0) <= (turnVersions.get(turn.id) || 0))
           continue;
         const saved = latest.get(turn.id);
-        // A replayed running event must not reopen a turn already saved as finished.
-        if (saved && saved.status !== "running" && turn.status === "running") continue;
+        // Replayed live events must not reopen a turn already saved as finished.
+        if (saved && !isActive(saved.status) && isActive(turn.status)) continue;
         latest.set(turn.id, turn);
       }
       return [...latest.values()];
@@ -38,7 +38,7 @@ export function useConversationHistory(selectedSessionRef: RefObject<string>) {
     turnVersionsRef.current.set(turn.id, (turnVersionsRef.current.get(turn.id) || 0) + 1);
     setTurns((previous) => previous.some((item) => item.id === turn.id)
       ? previous.map((item) => (item.id === turn.id
-        ? item.status !== "running" && turn.status === "running" ? item : turn
+        ? !isActive(item.status) && isActive(turn.status) ? item : turn
         : item))
       : [...previous, turn]);
   }, [selectedSessionRef]);

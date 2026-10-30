@@ -6,8 +6,12 @@
 @import "./styles/activity.css";
 @import "./styles/composer.css";
 @import "./styles/agent-settings.css";
+@import "./styles/model-settings.css";
 @import "./styles/inspector.css";
 @import "./styles/dialogs.css";
 @import "./styles/settings.css";
 @import "./styles/user-management.css";
+@import "./styles/appearance.css";
 @import "./styles/responsive.css";
+@import "./styles/composer-controls.css";
+@import "./styles/admin.css";

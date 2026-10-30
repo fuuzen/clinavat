@@ -1,0 +1,59 @@
+.slot-admin-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.slot-admin-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; }
+.slot-admin-heading > .slot-icon { height: 29px; width: 29px; flex-shrink: 0; }
+.slot-admin-heading > div { flex: 1; min-width: 0; }
+.slot-admin-heading strong { display: block; font-size: 13px; font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
+.slot-admin-heading small { display: block; font-size: 11px; color: var(--muted); margin-top: 5px; overflow-wrap: anywhere; }
+.slot-enabled-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 70px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.slot-enabled-label { position: absolute; inset-block: 0; left: 27px; right: 5px; display: grid; place-items: center; font-size: 11px; font-weight: 500; }
+.slot-enabled-thumb { position: absolute; left: 4px; top: 5px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.slot-enabled-switch[aria-checked="true"] { color: var(--accent); background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.slot-enabled-switch[aria-checked="true"] .slot-enabled-label { left: 5px; right: 27px; }
+.slot-enabled-switch[aria-checked="true"] .slot-enabled-thumb { transform: translateX(42px); background: var(--accent); }
+.slot-enabled-switch:hover:not(:disabled) { border-color: var(--accent); }
+.slot-enabled-switch:disabled { opacity: .6; }
+.slot-admin-card > .admin-mobile-details { display: flex; flex-direction: column; flex: 1; }
+.slot-admin-card .admin-mobile-details-content:not([hidden]) { display: flex; flex-direction: column; flex: 1; gap: 14px; }
+.slot-admin-card .usage-meter { flex: 1; margin: 0; }
+.slot-admin-card .usage-meter-status { margin-top: auto; }
+.slot-assignee-warning { color: var(--warning); }
+.slot-login-note { font-size: 11px; color: var(--muted); margin: 10px 0 0; line-height: 1.6; }
+.slot-admin-card details { border-top: 1px solid var(--line-strong); margin-top: auto; padding-top: 12px; }
+.slot-admin-card summary { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); cursor: pointer; }
+.slot-admin-card details > pre {
+  font-size: 11px;
+  line-height: 1.9;
+  background: var(--surface);
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+}
+.slot-admin-card details > .button { font-size: 11px; padding: 3px 7px; margin-top: 6px; }
+@media (max-width: 700px) {
+  .slot-admin-heading { margin-bottom: 9px; }
+  .slot-enabled-switch::before { content: ""; position: absolute; inset: -7px -2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slot-enabled-switch, .slot-enabled-thumb { transition: none; }
+}

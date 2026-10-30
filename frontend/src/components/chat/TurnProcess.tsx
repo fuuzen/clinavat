@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
-import { ChevronDown, Clock3, LoaderCircle } from "lucide-react";
+import { ChevronDown, Clock3, LoaderCircle, Pause } from "lucide-react";
+import { isActive } from "../../api";
 import type { ActivityItem, ToolEvent, Turn } from "../../types";
 import ExecutionGroup from "./ExecutionGroup";
 import { Markdown } from "./MessageView";
@@ -28,24 +29,29 @@ function activityGroups(items: ActivityItem[]) {
 }
 
 export default function TurnProcess({ turn }: { turn: Turn }) {
-  const running = turn.status === "running";
-  const [open, setOpen] = useState(running);
+  const live = isActive(turn.status);
+  const paused = turn.status === "paused";
+  const running = turn.status === "running" || turn.status === "pausing";
+  const [open, setOpen] = useState(live);
   const [now, setNow] = useState(Date.now());
   const detailsId = useId();
   useEffect(() => {
-    setOpen(running);
+    setOpen(live);
+  }, [live]);
+  useEffect(() => {
     if (!running) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [running]);
   const elapsed = turn.duration_ms ?? (
-    (turn.completed_at ? Date.parse(turn.completed_at) : now) - Date.parse(turn.started_at)
+    (turn.completed_at ? Date.parse(turn.completed_at) : paused && turn.paused_at ? Date.parse(turn.paused_at) : now)
+      - Date.parse(turn.started_at) - (turn.paused_ms ?? 0)
   );
-  const items = turn.items.filter((item) => running || !item.final);
-  const status = turn.status === "interrupted" ? " · 已停止" : turn.status === "error" ? " · 出错" : "";
+  const items = turn.items.filter((item) => live || !item.final);
+  const status = paused ? " · 已暂停" : turn.status === "pausing" ? " · 正在暂停" : turn.status === "interrupted" ? " · 已停止" : turn.status === "error" ? " · 出错" : "";
   return (
-    <section className={`turn-process ${running ? "turn-running" : "turn-finished"}`}>
+    <section className={`turn-process ${paused ? "turn-paused" : running ? "turn-running" : "turn-finished"}`}>
       <button
         type="button"
         className="activity-toggle turn-toggle"
@@ -53,21 +59,21 @@ export default function TurnProcess({ turn }: { turn: Turn }) {
         aria-controls={detailsId}
         onClick={() => setOpen((value) => !value)}
       >
-        {running ? <LoaderCircle size={13} className="spin" /> : <Clock3 size={13} />}
-        <span>{running ? "Working for" : "Worked for"} {durationLabel(Number.isFinite(elapsed) ? elapsed : 0)}{status}</span>
+        {paused ? <Pause size={13} /> : running ? <LoaderCircle size={13} className="spin" /> : <Clock3 size={13} />}
+        <span>{live ? "Working for" : "Worked for"} {durationLabel(Number.isFinite(elapsed) ? elapsed : 0)}{status}</span>
         <ChevronDown size={13} className={open ? "rotate" : ""} />
       </button>
       {open && (
         <div className="turn-details" id={detailsId}>
           {activityGroups(items).map((group) => Array.isArray(group) ? (
-            <ExecutionGroup key={group[0].id} tools={group} />
+            <ExecutionGroup key={group[0].id} tools={group} paused={paused} />
           ) : (
             <div key={group.id} className={`activity-text activity-${group.kind}`}>
               {group.kind === "reasoning" && <span className="reasoning-label">思考摘要</span>}
               {group.text && <Markdown text={group.text} />}
             </div>
           ))}
-          {items.length === 0 && <p className="activity-placeholder">{running ? "智能体正在处理任务…" : "本轮没有额外的执行记录。"}</p>}
+          {items.length === 0 && <p className="activity-placeholder">{paused ? "任务已暂停，点击继续即可恢复。" : running ? "智能体正在处理任务…" : "本轮没有额外的执行记录。"}</p>}
         </div>
       )}
     </section>

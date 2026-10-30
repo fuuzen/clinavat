@@ -7,50 +7,82 @@
   position: relative;
 }
 .composer {
-  background: #1b211c;
-  border: 1px solid #3b473c;
-  box-shadow: 0 5px 22px #0000001a;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 5px 22px var(--shadow);
   border-radius: 15px;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.composer-body {
+  position: relative;
+}
+.composer-pane:not([hidden]) {
+  transform-origin: bottom right;
+  animation: composer-expand 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 .composer:focus-within {
-  border-color: #627c54;
+  border-color: var(--accent);
   box-shadow:
-    0 0 0 3px #6b8d560a,
-    0 5px 22px #0000001a;
+    0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent),
+    0 5px 22px var(--shadow);
 }
-.composer > textarea {
+.composer-body > textarea {
+  display: block;
   border: 0;
   border-radius: 15px;
   background: none;
   resize: none;
-  padding: 16px 17px 5px;
+  padding: 16px 48px 5px 17px;
   outline: none;
   width: 100%;
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.9;
   min-height: 80px;
-  max-height: 200px;
+  max-height: min(200px, 30dvh);
   box-shadow: none;
-  color: #cadac0;
+  color: var(--text);
 }
-.composer > textarea::placeholder {
-  color: #6c8460;
+.composer-body > textarea::placeholder {
+  color: var(--muted);
+}
+.composer-minimize {
+  position: absolute;
+  z-index: 1;
+  top: 9px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  transition: background 0.15s, color 0.15s;
+}
+.composer-minimize:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.composer-minimize:focus-visible,
+.composer-restore:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .composer-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
   padding: 3px 10px 9px;
 }
-.permission-note {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  color: #849181;
-  font-size: 10px;
-  white-space: nowrap;
-  margin-left: auto;
+.composer-toolbar > .agent-settings {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+.composer-toolbar > .send-button {
+  margin-left: 0;
 }
 .send-button {
   display: flex;
@@ -59,57 +91,177 @@
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: #b0d897;
-  color: #2c431f;
+  color: var(--on-accent);
   margin-left: auto;
-  border: 1px solid #bedda7;
+  padding: 0;
   flex-shrink: 0;
 }
-.send-button:hover:not(:disabled) {
-  background: #c8e9b1;
+.send-button-symbol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+}
+.send-button:hover:not(:disabled) .send-button-symbol {
+  background: var(--accent-hover);
 }
 .send-button:disabled {
   opacity: 1;
-  color: #536947;
-  background: #2b3a23;
-  border-color: #3c5130;
+  color: var(--muted);
 }
-.stop-button {
-  background: #adc897;
+.send-button:disabled .send-button-symbol {
+  background: var(--surface);
+  border-color: var(--line);
 }
-.composer-footer {
-  display: flex;
-  justify-content: space-between;
+.composer-area-minimized {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  max-width: none;
+  padding: 8px 16px max(12px, env(safe-area-inset-bottom));
+  background: transparent;
+  pointer-events: none;
+}
+.chat-panel:has(.composer-area-minimized) > .chat-scroll {
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+.composer-area-minimized > .composer-pane:not([hidden]) {
+  position: absolute;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  width: calc(100% - 70px);
+  max-width: 770px;
+  pointer-events: none;
+  animation: composer-collapse 0.2s cubic-bezier(0.4, 0, 1, 1) both;
+  opacity: 0;
+}
+.composer-floating-controls {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   gap: 8px;
-  align-items: center;
-  padding: 10px 2px 0;
-  color: #566e4b;
-  font-size: 7px;
+  min-height: 38px;
+  width: 100%;
 }
-.composer-footer > span {
+.composer-floating-controls > * {
+  pointer-events: auto;
+}
+.composer-floating-controls > .scroll-bottom {
+  position: static;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  min-height: 34px;
+  transform: none;
+  border-radius: 22px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+}
+.composer-dock {
   display: flex;
   align-items: center;
-  gap: 6px;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  gap: 5px;
+  max-width: min(360px, 100%);
+  min-height: 38px;
+  padding: 3px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  box-shadow: 0 4px 18px var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  animation: composer-dock-appear 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.composer-footer .status-dot {
-  height: 4px;
-  width: 4px;
+.composer-dock > .send-button {
+  width: 28px;
+  height: 28px;
+  margin-left: 0;
 }
-.keyboard-hint {
-  margin-left: 7px;
-  color: #485f3d;
+.composer-restore {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.composer-restore:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.composer-restore > svg,
+.composer-restore > span:not(.composer-draft-preview) {
+  flex-shrink: 0;
+}
+.composer-dock-grip {
+  position: absolute;
+  top: -4px;
+  left: calc(50% - 10px);
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text-secondary);
+  opacity: 0.25;
+}
+.composer-draft-preview {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.composer-dock-warning {
+  color: var(--warning);
+}
+@keyframes composer-expand {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  75% { opacity: 1; transform: translateY(-1px) scale(1.003); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes composer-collapse {
+  from { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  to { opacity: 0; transform: translateX(-50%) translateY(14px) scale(0.95); }
+}
+@keyframes composer-dock-appear {
+  from { opacity: 0; transform: translateY(10px) scale(0.88); }
+  75% { opacity: 1; transform: translateY(-1px) scale(1.025); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-pane:not([hidden]),
+  .composer-area-minimized > .composer-pane:not([hidden]),
+  .composer-dock {
+    animation: none;
+  }
 }
 .composer-warning {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
-  color: #c2b57c;
+  font-size: 12px;
+  color: var(--warning);
   margin: 0 0 10px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #4a402522;
-  border: 1px solid #5c512d;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-line);
 }
 .scroll-bottom {
   position: absolute;
@@ -119,12 +271,18 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid #435a36;
-  background: #283821;
-  color: #abc49d;
-  font-size: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
   border-radius: 15px;
   padding: 6px 10px;
-  box-shadow: 0 5px 20px #0005;
+  box-shadow: 0 5px 20px var(--shadow);
   z-index: 2;
+}
+@media (max-width: 480px) {
+  .composer-restore > svg:last-child,
+  .composer-dock:has(.stop-button) .composer-dock-warning {
+    display: none;
+  }
 }

@@ -16,8 +16,8 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #b7c2b4;
-  font-size: 11px;
+  color: var(--text);
+  font-size: 13px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -25,11 +25,11 @@
 }
 .settings-trigger:hover:not(:disabled),
 .settings-trigger[aria-expanded="true"] {
-  color: #e0e8dc;
-  background: #ffffff09;
+  color: var(--text);
+  background: var(--hover);
 }
 .settings-trigger:focus-visible {
-  outline: 1px solid #9bc58b;
+  outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
 .settings-trigger:disabled {
@@ -37,7 +37,8 @@
   cursor: default;
 }
 .settings-trigger > svg {
-  color: #83917d;
+  color: var(--muted);
+  flex-shrink: 0;
 }
 .settings-trigger > svg:last-child {
   transition: transform 0.15s;
@@ -49,36 +50,75 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.slot-trigger {
+  min-width: 56px;
+  max-width: 160px;
+  flex: 0 1 auto;
+}
+.slot-menu-engine {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.slot-menu-usage {
+  padding: 0 10px 8px 52px;
+}
+.slot-menu-usage .usage-meter-status > small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.slot-menu-usage .usage-meter-status > button {
+  flex-shrink: 0;
+}
 .model-trigger {
   max-width: 230px;
   flex: 0 1 auto;
 }
-.effort-trigger {
-  flex: 0 0 auto;
-  color: #98a793;
-  max-width: 115px;
-}
 .settings-trigger-error > svg:last-child {
-  color: #d3b67b;
+  color: var(--warning);
+}
+.permission-trigger {
+  flex: 0 0 auto;
+  max-width: 140px;
+  color: var(--text-secondary);
+}
+.permission-system-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
 }
 .engine-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  font-size: 16px;
-  line-height: 1;
+  width: 16px;
+  height: 16px;
 }
 .engine-claude {
-  color: #dcad8e;
+  color: var(--warning);
 }
 .engine-codex {
-  color: #a8d3a5;
+  color: var(--accent);
+}
+.engine-logo {
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--engine-logo) center / contain no-repeat;
+}
+.engine-logo-claude {
+  --engine-logo: url("@lobehub/icons-static-svg/icons/claudecode.svg");
+}
+.engine-logo-codex {
+  --engine-logo: url("@lobehub/icons-static-svg/icons/codex.svg");
 }
 .settings-menu {
   padding: 6px;
-  border: 1px solid #3a443a;
+  border: 1px solid var(--line);
   border-radius: 12px;
-  background: #202621;
-  color: #dbe3d8;
-  box-shadow: 0 12px 40px #0006, 0 2px 8px #0003;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 40px var(--shadow), 0 2px 8px var(--shadow);
   overscroll-behavior: contain;
   scrollbar-width: thin;
   outline: none;
@@ -89,38 +129,13 @@
   justify-content: space-between;
   gap: 12px;
   padding: 8px 9px;
-  color: #a1ae9d;
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 13px;
   font-weight: 500;
 }
 .settings-menu-heading > span:last-child:not(:first-child) {
-  color: #788775;
-  font-size: 10px;
-}
-.settings-engine-choices {
-  display: flex;
-  gap: 3px;
-  margin: 0 3px 7px;
-  padding: 3px;
-  border-radius: 8px;
-  background: #161c17;
-}
-.settings-engine-choices > button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  gap: 7px;
-  min-height: 32px;
-  padding: 5px 8px;
-  border-radius: 6px;
-  color: #8e9b8a;
-  font-size: 11px;
-}
-.settings-engine-choices > button[aria-checked="true"] {
-  background: #303a2f;
-  color: #e0e8dc;
-  box-shadow: 0 1px 3px #0003;
+  color: var(--muted);
+  font-size: 12px;
 }
 .settings-menu-item {
   display: flex;
@@ -131,21 +146,20 @@
   padding: 8px 10px;
   border-radius: 7px;
   text-align: left;
-  color: #cbd5c7;
-  font-size: 12px;
+  color: var(--text);
+  font-size: 14px;
   line-height: 1.5;
 }
 .settings-menu-item:hover:not(:disabled),
 .settings-menu-item:focus-visible {
-  background: #ffffff08;
+  background: var(--hover);
 }
-.settings-menu-item:focus-visible,
-.settings-engine-choices > button:focus-visible {
-  outline: 1px solid #92b77f;
+.settings-menu-item:focus-visible {
+  outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
 .settings-menu-item[aria-checked="true"] {
-  color: #d9eacc;
+  color: var(--accent);
 }
 .settings-item-copy {
   display: flex;
@@ -156,13 +170,13 @@
   overflow-wrap: anywhere;
 }
 .settings-item-copy > small {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 1.6;
-  color: #8d9b88;
+  color: var(--text-secondary);
 }
 .settings-item-check {
-  color: #b6d7a3;
+  color: var(--accent);
   opacity: 0;
 }
 [aria-checked="true"] > .settings-item-check {
@@ -171,21 +185,21 @@
 .settings-menu-status,
 .settings-menu-footnote {
   padding: 8px 10px;
-  color: #8d9b88;
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .settings-menu-error {
-  color: #d3b67b;
+  color: var(--warning);
 }
 .settings-menu-footnote {
   margin-top: 5px;
-  border-top: 1px solid #323b30;
+  border-top: 1px solid var(--line);
 }
 @media (max-width: 700px) {
   .composer-toolbar {
-    gap: 5px;
+    gap: 4px;
   }
   .agent-settings {
     gap: 1px;
@@ -196,10 +210,7 @@
     padding: 0 6px;
   }
   .model-trigger {
-    max-width: 200px;
-  }
-  .effort-trigger {
-    max-width: 90px;
+    max-width: 100%;
   }
   .settings-menu-item {
     min-height: 42px;

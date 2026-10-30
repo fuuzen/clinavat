@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title">
+  <title id="title">Clinavat</title>
+  <rect width="128" height="128" rx="28" fill="#17251F"/>
+  <g transform="translate(8 5) scale(.875)" fill="#B6E8B0">
+    <ellipse cx="64" cy="27" rx="50" ry="14"/>
+    <path d="M14 38c5 5 12 8 21 11v32c0 13 10 20 29 20s29-7 29-20V49c9-3 16-6 21-11v52c0 18-20 28-50 28S14 108 14 90V38Z"/>
+    <path d="m47 62 12 11-12 11m20 0h14" fill="none" stroke="#B6E8B0" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

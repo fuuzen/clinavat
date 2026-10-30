@@ -2,15 +2,51 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Plug, RotateCcw, TerminalSquare } from "lucide-react";
+import { getThemePalette, useTheme, type ThemePreferences } from "../theme";
 import "@xterm/xterm/css/xterm.css";
+
+function terminalTheme(preferences: ThemePreferences) {
+  const palette = getThemePalette(preferences);
+  return {
+    background: palette["--bg"],
+    foreground: palette["--text"],
+    cursor: palette["--accent"],
+    cursorAccent: palette["--on-accent"],
+    selectionBackground: palette["--accent-dim"],
+    black: palette["--muted"],
+    red: palette["--danger"],
+    green: palette["--success"],
+    yellow: palette["--warning"],
+    blue: palette["--info"],
+    magenta: palette["--terminal-magenta"],
+    cyan: palette["--terminal-cyan"],
+    white: palette["--text-secondary"],
+    brightBlack: palette["--muted"],
+    brightRed: palette["--danger"],
+    brightGreen: palette["--success"],
+    brightYellow: palette["--warning"],
+    brightBlue: palette["--info"],
+    brightMagenta: palette["--terminal-magenta"],
+    brightCyan: palette["--terminal-cyan"],
+    brightWhite: palette["--text"],
+  };
+}
 
 export default function TerminalView({ projectId }: { projectId: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const { preferences } = useTheme();
+  const preferencesRef = useRef(preferences);
+  preferencesRef.current = preferences;
   const [connected, setConnected] = useState(false);
   const [requested, setRequested] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState("");
+  useEffect(() => {
+    if (terminalRef.current)
+      terminalRef.current.options.theme = terminalTheme(preferences);
+  }, [preferences]);
   useEffect(() => {
     if (!requested || !containerRef.current) return;
     let disposed = false;
@@ -18,24 +54,12 @@ export default function TerminalView({ projectId }: { projectId: string }) {
     setConnecting(true);
     const terminal = new Terminal({
       cursorBlink: true,
-      fontSize: 12,
+      fontSize: 13,
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      theme: {
-        background: "#111512",
-        foreground: "#c8d0c9",
-        cursor: "#b6e8b0",
-        selectionBackground: "#3b5140",
-        black: "#111512",
-        red: "#ee928a",
-        green: "#b6e8b0",
-        yellow: "#e7cc8d",
-        blue: "#94bced",
-        magenta: "#c3a3e0",
-        cyan: "#8bcfc9",
-        white: "#e1e5e0",
-      },
+      theme: terminalTheme(preferencesRef.current),
       scrollback: 5000,
     });
+    terminalRef.current = terminal;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(containerRef.current);
@@ -111,6 +135,7 @@ export default function TerminalView({ projectId }: { projectId: string }) {
       resize.disconnect();
       input.dispose();
       socket.close();
+      terminalRef.current = null;
       terminal.dispose();
       setConnected(false);
     };

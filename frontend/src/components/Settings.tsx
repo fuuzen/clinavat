@@ -1,32 +1,29 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
   CircleUserRound,
-  ShieldCheck,
+  Palette,
   SlidersHorizontal,
-  Users,
 } from "lucide-react";
 import type { Overview } from "../types";
 import { Modal } from "./Dialogs";
 import AccountSettings from "./settings/AccountSettings";
-import SlotManagement from "./settings/SlotManagement";
-import UserManagement from "./settings/UserManagement";
 import ServiceStatus from "./settings/ServiceStatus";
+
+const AppearanceSettings = lazy(() => import("./settings/AppearanceSettings"));
 
 interface Props {
   overview: Overview;
   onClose: () => void;
-  onRefresh: () => Promise<void>;
 }
 
-export default function Settings({ overview, onClose, onRefresh }: Props) {
-  const [tab, setTab] = useState<"account" | "users" | "slots" | "system">(
+export default function Settings({ overview, onClose }: Props) {
+  const [tab, setTab] = useState<"account" | "appearance" | "system">(
     "account",
   );
-  const admin = overview.user.role === "admin";
   return (
     <Modal
       title="工作台设置"
-      subtitle="管理你的连接、团队账号和服务状态。"
+      subtitle="管理个人账号、调整工作台外观，查看连接与服务状态。"
       onClose={onClose}
       wide
     >
@@ -39,24 +36,13 @@ export default function Settings({ overview, onClose, onRefresh }: Props) {
             <CircleUserRound size={16} />
             我的账号
           </button>
-          {admin && (
-            <>
-              <button
-                className={tab === "users" ? "active" : ""}
-                onClick={() => setTab("users")}
-              >
-                <Users size={16} />
-                用户管理
-              </button>
-              <button
-                className={tab === "slots" ? "active" : ""}
-                onClick={() => setTab("slots")}
-              >
-                <ShieldCheck size={16} />
-                账号槽位
-              </button>
-            </>
-          )}
+          <button
+            className={tab === "appearance" ? "active" : ""}
+            onClick={() => setTab("appearance")}
+          >
+            <Palette size={16} />
+            外观与配色
+          </button>
           <button
             className={tab === "system" ? "active" : ""}
             onClick={() => setTab("system")}
@@ -66,19 +52,14 @@ export default function Settings({ overview, onClose, onRefresh }: Props) {
           </button>
         </nav>
         <div className="settings-body">
+          {tab === "appearance" && (
+            <Suspense fallback={<div className="loading-state">正在加载外观设置…</div>}>
+              <AppearanceSettings />
+            </Suspense>
+          )}
           {tab === "account" && (
-            <AccountSettings
-              overview={overview}
-              onSlots={() => setTab("slots")}
-            />
+            <AccountSettings overview={overview} />
           )}
-          {tab === "users" && admin && (
-            <UserManagement
-              onRefresh={onRefresh}
-              onSlots={() => setTab("slots")}
-            />
-          )}
-          {tab === "slots" && admin && <SlotManagement onRefresh={onRefresh} />}
           {tab === "system" && <ServiceStatus />}
         </div>
       </div>

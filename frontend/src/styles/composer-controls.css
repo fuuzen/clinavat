@@ -1,0 +1,154 @@
+.composer-toolbar > .slot-trigger,
+.composer-toolbar > .permission-trigger,
+.composer-toolbar > .behavior-trigger {
+  min-height: 36px;
+}
+.behavior-mode-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+.behavior-mode-symbol > svg {
+  width: 18px;
+  height: 18px;
+}
+.pause-button {
+  color: var(--text-secondary);
+}
+.pause-button .send-button-symbol {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+.pause-button:hover:not(:disabled) .send-button-symbol {
+  background: var(--hover);
+}
+@media (max-width: 700px) {
+  .composer-area {
+    padding-inline: 6px;
+  }
+  .composer-toolbar {
+    gap: 3px;
+    padding-inline: 4px;
+  }
+  .composer-toolbar > .slot-trigger,
+  .composer-toolbar > .permission-trigger,
+  .composer-toolbar > .behavior-trigger,
+  .composer-toolbar > .send-button {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    padding: 0;
+    gap: 0;
+  }
+  .composer-toolbar > .settings-trigger .settings-trigger-label,
+  .composer-toolbar > .settings-trigger .settings-trigger-chevron {
+    display: none;
+  }
+  .composer-toolbar > .agent-settings {
+    min-width: 0;
+  }
+  .composer-toolbar .model-trigger {
+    min-height: 44px;
+  }
+  .composer-toolbar .permission-mode-symbol,
+  .composer-toolbar .behavior-mode-symbol {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+  }
+  .composer-toolbar .permission-mode-symbol > svg,
+  .composer-toolbar .behavior-mode-symbol > svg {
+    width: 20px;
+    height: 20px;
+  }
+  .composer-toolbar .permission-trigger {
+    background: transparent;
+  }
+  .composer-toolbar .permission-mode-symbol {
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--permission-color) 11%, transparent);
+  }
+  .composer-toolbar > .send-button .send-button-symbol,
+  .composer-dock > .send-button .send-button-symbol {
+    width: 32px;
+    height: 32px;
+  }
+  .composer-body > textarea {
+    min-height: 60px;
+    padding-right: 52px;
+  }
+  .composer-minimize {
+    top: 1px;
+    right: 1px;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+  }
+  .composer-floating-controls {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .composer-floating-controls > .scroll-bottom {
+    grid-column: 1;
+    justify-self: start;
+  }
+  .composer-dock {
+    grid-column: 2;
+    max-width: none;
+    padding: 2px;
+    gap: 0;
+  }
+  .composer-dock > .send-button,
+  .composer-dock > .composer-restore {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+  .composer-restore .composer-dock-label,
+  .composer-restore .composer-draft-preview,
+  .composer-restore > svg:last-child {
+    display: none;
+  }
+  .composer-restore > svg:first-of-type {
+    width: 20px;
+    height: 20px;
+  }
+  .composer-restore[data-has-draft]::after {
+    content: "";
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .composer-dock .composer-restore .composer-dock-warning {
+    display: block;
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+  }
+  .composer-area .scroll-bottom {
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+  .composer-area:not(.composer-area-minimized) > .scroll-bottom {
+    top: -43px;
+  }
+  .scroll-bottom-label {
+    display: none;
+  }
+}

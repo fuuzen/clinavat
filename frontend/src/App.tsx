@@ -1,34 +1,41 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, LoaderCircle, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, LoaderCircle } from "lucide-react";
 import { api, ApiError, errorText, post } from "./api";
+import { loadSiteSettings, useSiteSettings } from "./site/store";
 import type {
   AgentSelection,
+  AgentBehavior,
   Approval,
   DevHost,
   Overview,
+  PermissionMode,
   Project,
   Session,
   ToolEvent,
 } from "./types";
 import { useWorkspaceEvents } from "./useWorkspaceEvents";
+import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useConversationHistory } from "./useConversationHistory";
+import { useSessionBehavior, useSessionPermissions, useSessionSlot } from "./useSessionPermissions";
+import { useSessionRunControl } from "./useSessionRunControl";
+import { usePendingSends } from "./components/chat/usePendingSends";
+import { clearComposerDraft, getComposerDraftKey, moveComposerDraft, readComposerDraft } from "./components/chat/composer/draftStorage";
 import { HostDialog, ProjectDialog } from "./components/ResourceDialogs";
 import { hostConnectionMessage, type HostConnection } from "./components/hosts/host-connection";
-import Auth, { Brand } from "./components/Auth";
+import Auth from "./components/Auth";
+import Brand from "./components/Brand";
 import Sidebar from "./components/Sidebar";
 import Chat from "./components/Chat";
 import Inspector from "./components/Inspector";
 import Settings from "./components/Settings";
-import {
-  ConfirmDialog,
-  RenameDialog,
-  SessionDialog,
-} from "./components/Dialogs";
+import AppNotices, { type Notice } from "./components/AppNotices";
+import { ConfirmDialog, RenameDialog } from "./components/Dialogs";
+
+const AdminPanel = lazy(() => import("./components/admin/AdminPanel"));
 
 type Dialog =
   | { type: "host"; host?: DevHost }
   | { type: "project"; host?: DevHost }
-  | { type: "session"; project: Project }
   | {
       type: "delete";
       kind: "host" | "project" | "session";
@@ -38,13 +45,9 @@ type Dialog =
   | { type: "rename"; session: Session }
   | { type: "settings" }
   | null;
-interface Notice {
-  id: number;
-  content: string;
-  kind: "error" | "success";
-}
 
 export default function App() {
+  const siteSettings = useSiteSettings();
   const [auth, setAuth] = useState<{
     needsSetup: boolean;
     registrationEnabled: boolean;
@@ -52,23 +55,21 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [initialError, setInitialError] = useState("");
-  const [projectId, setProjectId] = useState(
-    () => localStorage.getItem("cc-pool-project") || "",
-  );
-  const [sessionId, setSessionId] = useState(
-    () => localStorage.getItem("cc-pool-session") || "",
-  );
+  const { projectId, setProjectId, sessionId, setSessionId } = useWorkspaceSelection();
   const [streaming, setStreaming] = useState("");
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [sending, setSending] = useState(false);
+  const { sending, beginSend, clearPendingSends } = usePendingSends(projectId, sessionId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminVisited, setAdminVisited] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(
     () => window.innerWidth >= 1280,
   );
   const [streamConnected, setStreamConnected] = useState(false);
   const [inspectorRefresh, setInspectorRefresh] = useState(0);
+  const [inspectorRequest, setInspectorRequest] = useState<{ tab: "changes"; id: number }>();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
   const selectedSessionRef = useRef(sessionId);
@@ -96,6 +97,10 @@ export default function App() {
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
+  const changePermission = useSessionPermissions(setOverview, notify);
+  const changeSlot = useSessionSlot(setOverview, notify);
+  const changeBehavior = useSessionBehavior(setOverview, notify);
+  const runControl = useSessionRunControl(session, selectedSessionRef, setOverview, refresh, reloadMessages, notify);
   const refreshApprovals = useCallback(async () => {
     try {
       setApprovals(await api<Approval[]>("/approvals"));
@@ -108,6 +113,8 @@ export default function App() {
     setInitializing(true);
     setInitialError("");
     try {
+      // Branding availability must not prevent authentication or workspace access.
+      void loadSiteSettings().catch(() => undefined);
       const status = await api<{
         needsSetup: boolean;
         registrationEnabled: boolean;
@@ -130,9 +137,14 @@ export default function App() {
     void initialize();
   }, []);
   useEffect(() => {
-    localStorage.setItem("cc-pool-project", projectId);
-    localStorage.setItem("cc-pool-session", sessionId);
-  }, [projectId, sessionId]);
+    const reload = () => { if (document.visibilityState === "visible") void loadSiteSettings().catch(() => undefined); };
+    window.addEventListener("focus", reload);
+    document.addEventListener("visibilitychange", reload);
+    return () => {
+      window.removeEventListener("focus", reload);
+      document.removeEventListener("visibilitychange", reload);
+    };
+  }, []);
   useEffect(() => {
     resetHistory();
     setStreaming("");
@@ -163,30 +175,35 @@ export default function App() {
     setStreamConnected,
     setStreaming,
     setTools,
-    setSending,
     setInspectorRefresh,
   });
   function changeSelection(nextProjectId: string, nextSessionId = "") {
     sendRequestRef.current += 1;
-    setSending(false);
     selectedProjectRef.current = nextProjectId;
     selectedSessionRef.current = nextSessionId;
     setProjectId(nextProjectId);
     setSessionId(nextSessionId);
   }
   function select(nextProject: Project, nextSession?: Session) {
+    setAdminOpen(false);
     changeSelection(nextProject.id, nextSession?.id);
   }
   async function send(
     content: string,
     engine: "claude" | "codex",
     selection: AgentSelection,
+    permissionMode: PermissionMode,
+    slotId: string,
+    behavior: AgentBehavior,
   ) {
-    if (!project) return false;
+    if (!project || !overview) return false;
+    const pending = beginSend(project.id, selectedSessionRef.current);
+    if (!pending) return false;
     const request = ++sendRequestRef.current;
     const originProjectId = project.id;
     const originSessionId = selectedSessionRef.current;
-    setSending(true);
+    const originDraftKey = getComposerDraftKey(overview.user.id, originProjectId, originSessionId);
+    const submittedDraft = readComposerDraft(originDraftKey);
     setStreaming("");
     setTools([]);
     try {
@@ -194,10 +211,18 @@ export default function App() {
       if (!target) {
         target = await post<Session>("/sessions", {
           projectId: project.id,
-          engine,
+          engine, slotId,
           ...selection,
+          permissionMode,
+          ...behavior,
           title: content.slice(0, 40),
         });
+        moveComposerDraft(
+          originDraftKey,
+          getComposerDraftKey(overview.user.id, originProjectId, target.id),
+          request === sendRequestRef.current ? undefined : submittedDraft,
+        );
+        pending.useSession(target.id);
         setOverview((previous) =>
           previous
             ? { ...previous, sessions: [target!, ...previous.sessions] }
@@ -212,7 +237,9 @@ export default function App() {
           setSessionId(target.id);
         }
       }
-      await post(`/sessions/${target.id}/messages`, { content, ...selection });
+      await post(`/sessions/${target.id}/messages`, { content, ...selection, permissionMode, slotId, ...behavior });
+      clearComposerDraft(originDraftKey, submittedDraft);
+      clearComposerDraft(getComposerDraftKey(overview.user.id, originProjectId, target.id), submittedDraft);
       await Promise.all([refresh(), reloadMessages(target.id)]);
       return request === sendRequestRef.current;
     } catch (cause) {
@@ -220,20 +247,7 @@ export default function App() {
       if (request !== sendRequestRef.current) return false;
       throw cause;
     } finally {
-      if (request === sendRequestRef.current) setSending(false);
-    }
-  }
-  async function stop() {
-    if (!session) return;
-    const request = sendRequestRef.current;
-    try {
-      await post(`/sessions/${session.id}/stop`);
-      if (request === sendRequestRef.current && selectedSessionRef.current === session.id)
-        setSending(false);
-      await Promise.all([refresh(), reloadMessages(session.id)]);
-      notify("已发送停止请求", "success");
-    } catch (cause) {
-      notify(errorText(cause));
+      pending.finish();
     }
   }
   async function decide(
@@ -281,6 +295,9 @@ export default function App() {
     try {
       await post("/auth/logout");
       setOverview(null);
+      setAdminOpen(false);
+      setAdminVisited(false);
+      clearPendingSends();
       resetHistory();
       setStreaming("");
       setTools([]);
@@ -294,16 +311,18 @@ export default function App() {
   useEffect(() => {
     const signedOut = () => {
       setOverview(null);
+      setAdminOpen(false);
+      setAdminVisited(false);
       setDialog(null);
       resetHistory();
       setStreaming("");
       setTools([]);
       sendRequestRef.current += 1;
-      setSending(false);
+      clearPendingSends();
     };
-    window.addEventListener("cc-pool:unauthorized", signedOut);
-    return () => window.removeEventListener("cc-pool:unauthorized", signedOut);
-  }, [resetHistory]);
+    window.addEventListener("clinavat:unauthorized", signedOut);
+    return () => window.removeEventListener("clinavat:unauthorized", signedOut);
+  }, [resetHistory, clearPendingSends]);
   const createProject = (host?: DevHost) => {
     if (!overview?.hosts.length) setDialog({ type: "host" });
     else setDialog({ type: "project", host });
@@ -333,6 +352,7 @@ export default function App() {
   if (!overview)
     return (
       <Auth
+        settings={siteSettings}
         needsSetup={auth?.needsSetup || false}
         registrationEnabled={auth?.registrationEnabled || false}
         onAuthenticated={async () => {
@@ -343,8 +363,9 @@ export default function App() {
         }}
       />
     );
+  const showAdmin = adminOpen && overview.user.role === "admin";
   return (
-    <div className={`app-shell ${inspectorOpen ? "with-inspector" : ""}`}>
+    <div className={`app-shell ${inspectorOpen && !showAdmin ? "with-inspector" : ""}`}>
       <Sidebar
         overview={overview}
         selectedProject={project}
@@ -355,9 +376,6 @@ export default function App() {
         onNewHost={() => setDialog({ type: "host" })}
         onEditHost={(host) => setDialog({ type: "host", host })}
         onNewProject={createProject}
-        onNewSession={(selected) =>
-          setDialog({ type: "session", project: selected })
-        }
         onConnect={(host) => void connect(host)}
         onDelete={(kind, id, name) =>
           setDialog({ type: "delete", kind, id, name })
@@ -366,39 +384,75 @@ export default function App() {
           setDialog({ type: "rename", session: selected })
         }
         onSettings={() => setDialog({ type: "settings" })}
+        adminOpen={showAdmin}
+        onAdmin={() => {
+          if (overview.user.role !== "admin") return;
+          setAdminVisited(true);
+          setAdminOpen((current) => !current);
+          setSidebarOpen(false);
+        }}
         onLogout={() => void logout()}
       />
-      <Chat
-        overview={overview}
-        project={project}
-        session={session}
-        messages={messages}
-        turns={turns}
-        streaming={streaming}
-        tools={tools}
-        approvals={approvals}
-        loading={loadingMessages}
-        sending={sending}
-        inspectorOpen={inspectorOpen}
-        streamConnected={streamConnected}
-        onSidebar={() => setSidebarOpen(true)}
-        onInspector={() => setInspectorOpen(!inspectorOpen)}
-        onNewHost={() => setDialog({ type: "host" })}
-        onNewProject={() => createProject()}
-        onSelectProject={(selected) => select(selected)}
-        onSend={send}
-        onStop={() => void stop()}
-        onApproval={decide}
-      />
-      {inspectorOpen && (
-        <Inspector
+      <div className="workbench-view" hidden={showAdmin}>
+        <Chat
+          overview={overview}
           project={project}
-          refresh={inspectorRefresh}
-          onClose={() => setInspectorOpen(false)}
-          onRefresh={() =>
-            void refresh().catch((cause) => notify(errorText(cause)))
-          }
+          session={session}
+          messages={messages}
+          turns={turns}
+          streaming={streaming}
+          tools={tools}
+          approvals={approvals}
+          loading={loadingMessages}
+          sending={sending}
+          inspectorOpen={inspectorOpen}
+          streamConnected={streamConnected}
+          onSidebar={() => setSidebarOpen(true)}
+          onInspector={() => setInspectorOpen(!inspectorOpen)}
+          onNewHost={() => setDialog({ type: "host" })}
+          onNewProject={() => createProject()}
+          onSelectProject={(selected) => select(selected)}
+          onProjectRefresh={refresh}
+          onSend={send}
+          onPermissionChange={changePermission}
+          onBehaviorChange={changeBehavior}
+          onNotice={notify}
+          onDiff={() => { setInspectorRequest({ tab: "changes", id: Date.now() }); setInspectorOpen(true); }}
+          onSlotChange={changeSlot}
+          onPause={runControl.pause}
+          onResume={runControl.resume}
+          controlPending={runControl.controlPending}
+          stopPending={runControl.stopPending}
+          onStop={() => void runControl.stop()}
+          onApproval={decide}
         />
+        {inspectorOpen && (
+          <Inspector
+            project={project}
+            refresh={inspectorRefresh}
+            tabRequest={inspectorRequest}
+            onClose={() => setInspectorOpen(false)}
+            onRefresh={() =>
+              void refresh().catch((cause) => notify(errorText(cause)))
+            }
+          />
+        )}
+      </div>
+      {adminVisited && overview.user.role === "admin" && (
+        <div className="admin-view" hidden={!showAdmin}>
+          <Suspense fallback={<div className="loading-state">正在打开管理面板…</div>}>
+          <AdminPanel
+            overview={overview}
+            onRefresh={refresh}
+            onSidebar={() => setSidebarOpen(true)}
+            onOpenProject={select}
+            onNewProject={() => createProject()}
+            onNewHost={() => setDialog({ type: "host" })}
+            onEditHost={(host) => setDialog({ type: "host", host })}
+            onConnect={connect}
+          />
+          </Suspense>
+        </div>
       )}
       {dialog?.type === "host" && (
         <HostDialog
@@ -418,17 +472,6 @@ export default function App() {
           initialHost={dialog.host}
           onClose={closeDialog}
           onCreated={refresh}
-        />
-      )}
-      {dialog?.type === "session" && (
-        <SessionDialog
-          overview={overview}
-          project={dialog.project}
-          onClose={closeDialog}
-          onCreated={(created) => {
-            changeSelection(created.project_id, created.id);
-            void refresh().catch((cause) => notify(errorText(cause)));
-          }}
         />
       )}
       {dialog?.type === "delete" && (
@@ -452,36 +495,8 @@ export default function App() {
           onSaved={refresh}
         />
       )}
-      {dialog?.type === "settings" && (
-        <Settings
-          overview={overview}
-          onClose={closeDialog}
-          onRefresh={refresh}
-        />
-      )}
-      <div className="notices" aria-live="polite">
-        {notices.map((notice) => (
-          <div key={notice.id} className={`notice notice-${notice.kind}`}>
-            {notice.kind === "error" ? (
-              <AlertCircle size={17} />
-            ) : (
-              <Check size={17} />
-            )}
-            <span>{notice.content}</span>
-            <button
-              className="icon-button"
-              onClick={() =>
-                setNotices((current) =>
-                  current.filter((item) => item.id !== notice.id),
-                )
-              }
-              aria-label="关闭通知"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
+      {dialog?.type === "settings" && <Settings overview={overview} onClose={closeDialog} />}
+      <AppNotices notices={notices} onDismiss={(id) => setNotices((current) => current.filter((notice) => notice.id !== id))} />
     </div>
   );
 }

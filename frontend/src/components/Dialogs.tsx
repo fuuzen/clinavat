@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Check, Copy, LoaderCircle, Sparkles, X } from "lucide-react";
-import { api, errorText, post } from "../api";
-import type { Overview, Project, Session } from "../types";
+import { createPortal } from "react-dom";
+import { Check, Copy, LoaderCircle, X } from "lucide-react";
+import { api, errorText } from "../api";
+import type { Session } from "../types";
 
 export function Modal({
   title,
@@ -23,7 +24,7 @@ export function Modal({
     document.addEventListener("keydown", keydown);
     return () => document.removeEventListener("keydown", keydown);
   }, [onClose]);
-  return (
+  return createPortal(
     <div
       className="modal-backdrop"
       onClick={(event) => {
@@ -51,7 +52,8 @@ export function Modal({
         </header>
         {children}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -86,123 +88,6 @@ export function CopyButton({
   );
 }
 
-interface CreateProps {
-  overview: Overview;
-  onClose: () => void;
-  onCreated: () => Promise<void>;
-}
-
-export function SessionDialog({
-  overview,
-  project,
-  onClose,
-  onCreated,
-}: Omit<CreateProps, "onCreated"> & {
-  project: Project;
-  onCreated: (session: Session) => void;
-}) {
-  const engines = overview.slot?.cli_types || [];
-  const [engine, setEngine] = useState(
-    engines.includes("claude") ? "claude" : "codex",
-  );
-  const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const session = await post<Session>("/sessions", {
-        projectId: project.id,
-        engine,
-        title: title.trim() || "新对话",
-      });
-      onCreated(session);
-      onClose();
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Modal
-      title="开启新对话"
-      subtitle={`在 ${project.name} 中开始一个独立的任务。`}
-      onClose={onClose}
-    >
-      <form className="modal-form" onSubmit={submit}>
-        <label>
-          对话名称
-          <input
-            autoFocus
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="你准备完成什么？"
-            maxLength={200}
-          />
-        </label>
-        <label>编程智能体</label>
-        <div className="engine-choice">
-          {(["claude", "codex"] as const).map((value) => (
-            <button
-              type="button"
-              disabled={!engines.includes(value)}
-              key={value}
-              className={engine === value ? "selected" : ""}
-              onClick={() => setEngine(value)}
-            >
-              <span className={`engine-symbol engine-${value}`}>
-                {value === "claude" ? "✳" : "◈"}
-              </span>
-              <strong>{value === "claude" ? "Claude Code" : "Codex"}</strong>
-              <small>
-                {engines.includes(value)
-                  ? "原生 CLI · 独立上下文"
-                  : "当前槽位不可用"}
-              </small>
-              {engine === value && <Check size={14} />}
-            </button>
-          ))}
-        </div>
-        {!overview.slot && (
-          <div className="inline-error">请先由管理员分配账号槽位。</div>
-        )}
-        {error && (
-          <div className="inline-error" role="alert">
-            {error}
-          </div>
-        )}
-        <div className="modal-actions">
-          <button
-            type="button"
-            className="button button-ghost"
-            onClick={onClose}
-          >
-            取消
-          </button>
-          <button
-            className="button button-primary"
-            disabled={
-              busy ||
-              overview.slot?.status !== "ASSIGNED" ||
-              !engines.includes(engine)
-            }
-          >
-            {busy ? (
-              <LoaderCircle size={15} className="spin" />
-            ) : (
-              <Sparkles size={15} />
-            )}
-            创建对话
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
 export function ConfirmDialog({
   name,
   kind,
@@ -224,8 +109,8 @@ export function ConfirmDialog({
           {kind === "开发机"
             ? "请先删除其下属项目。"
             : kind === "项目"
-              ? "项目的同步任务和工作台对话记录将一并移除，远程源代码及原生 CLI 日志保留。"
-              : "该对话将从工作台中移除，原生 CLI 日志仍保留在账号槽位中。"}
+              ? "项目的工作台对话记录与同步任务将一并移除，开发机上的项目文件及原生 CLI 日志保留。"
+              : "该对话将从工作台中移除，原生会话历史仍保留在该用户的数据目录中。"}
         </p>
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions">

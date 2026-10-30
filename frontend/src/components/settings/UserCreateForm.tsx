@@ -40,12 +40,7 @@ export default function UserCreateForm({ onCreate, onCancel }: Props) {
     }
   }
   return (
-    <form className="user-create-form" onSubmit={submit}>
-      <div className="settings-section-heading">
-        <UserPlus size={16} />
-        <h3>创建普通成员</h3>
-        <span className="badge">成员权限</span>
-      </div>
+    <form className="user-create-form" aria-label="创建普通成员" onSubmit={submit}>
       <label>
         用户名
         <input

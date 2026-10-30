@@ -1,0 +1,168 @@
+.chat-timeline {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+}
+.chat-timeline > .chat-scroll {
+  min-width: 0;
+}
+.conversation-outline {
+  position: absolute;
+  z-index: 12;
+  inset: 12px 8px 12px auto;
+  width: 32px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.outline-rail {
+  width: 100%;
+  max-height: min(60%, 320px);
+  display: flex;
+  pointer-events: auto;
+}
+.outline-marks {
+  width: 100%;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+.outline-marks::-webkit-scrollbar {
+  display: none;
+}
+.outline-mark {
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  border-radius: 4px;
+  text-decoration: none;
+  outline-offset: -2px;
+}
+.outline-mark > span {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--muted);
+  opacity: 0.5;
+  transition: width 140ms ease, opacity 140ms ease, background 140ms ease;
+}
+.outline-mark[aria-current="location"] > span {
+  width: 16px;
+  background: var(--text);
+  opacity: 0.9;
+}
+.outline-engaged .outline-mark > span {
+  width: 12px;
+}
+.outline-engaged .outline-mark[data-distance="1"] > span {
+  width: 19px;
+  opacity: 0.75;
+}
+.outline-engaged .outline-mark[data-distance="0"] > span {
+  width: 26px;
+  background: var(--text);
+  opacity: 1;
+}
+.outline-preview {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  right: calc(100% - 4px);
+  width: min(380px, calc(100cqw - 56px));
+  max-height: 100%;
+  padding-right: 10px;
+  pointer-events: auto;
+}
+.outline-preview-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+  gap: 7px;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px var(--shadow);
+  text-align: left;
+}
+.outline-preview-card:hover {
+  border-color: var(--muted);
+}
+.outline-preview-title,
+.outline-preview-answer {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  width: 100%;
+  line-height: 1.6;
+}
+.outline-preview-title {
+  -webkit-line-clamp: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.outline-preview-answer {
+  -webkit-line-clamp: 3;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.outline-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.outline-preview-meta > svg {
+  margin-left: auto;
+}
+.message[id],
+.conversation-turn-anchor {
+  scroll-margin-top: 20px;
+  outline: none;
+}
+.message[id]:focus-visible,
+.conversation-turn-anchor:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 8px;
+  border-radius: 4px;
+}
+@media (max-width: 1200px) {
+  .chat-timeline:has(.conversation-outline) .conversation {
+    padding-right: 44px;
+  }
+}
+@media (max-width: 700px), (pointer: coarse) {
+  .conversation-outline {
+    right: 4px;
+  }
+  .outline-rail {
+    max-height: min(60%, 308px);
+  }
+  .outline-mark {
+    height: 28px;
+  }
+  .outline-preview-title {
+    -webkit-line-clamp: 2;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .outline-mark > span {
+    transition: none;
+  }
+}

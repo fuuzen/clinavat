@@ -1,0 +1,94 @@
+.admin-host-page { display: flex; flex-direction: column; gap: 28px; }
+.admin-host-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
+.admin-host-actions { display: flex; justify-content: flex-end; margin-bottom: -14px; }
+.admin-host-service { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 24px; }
+.admin-host-service-identity { display: flex; align-items: center; gap: 17px; }
+.admin-host-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 38px; height: 38px; border-radius: 10px; background: var(--surface); color: var(--text-secondary); }
+.admin-host-icon-large { flex-basis: 58px; height: 58px; color: var(--accent); background: var(--accent-dim); border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 14px; }
+.admin-host-service-identity h3 { margin: 6px 0; font-size: 18px; letter-spacing: -.3px; }
+.admin-host-service-identity p { margin: 0; color: var(--muted); font-size: 12px; }
+.admin-host-service-meta { display: flex; gap: 26px; flex-shrink: 0; }
+.admin-host-service-meta > div { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.admin-host-service-meta > div > span:first-child { color: var(--muted); font-size: 11px; }
+.admin-host-service-meta strong { font-size: 13px; font-weight: 500; min-height: 22px; display: flex; align-items: center; }
+.admin-host-status-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.admin-host-pending { color: var(--muted); font-size: 12px; }
+.admin-host-section-heading { margin-bottom: 14px; }
+.admin-host-section-heading h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.admin-host-section-heading p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.admin-host-section-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.admin-host-engines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.admin-host-engine { padding: 22px 22px 0; overflow: hidden; }
+.admin-host-engine-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; row-gap: 22px; }
+.admin-host-engine-heading > .admin-status { grid-column: 3; grid-row: 1; justify-self: end; }
+.admin-host-engine-identity { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+.admin-host-engine-mark { display: flex; align-items: center; justify-content: center; width: 43px; height: 43px; border-radius: 11px; font-size: 29px; font-weight: 600; background: var(--surface); color: var(--text); border: 1px solid var(--line); }
+.admin-host-engine-mark.claude { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-line); }
+.admin-host-engine-mark.codex { font-family: var(--mono); font-size: 19px; letter-spacing: -3px; padding-right: 3px; }
+.admin-host-engine h4 { font-size: 21px; font-weight: 600; margin: 7px 0 6px; letter-spacing: -.4px; }
+.admin-host-engine-description { color: var(--muted); font-size: 12px; margin: 0; }
+.admin-host-engine-summary { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+.admin-host-engine-summary strong { font-size: 11px; font-weight: 450; color: var(--text-secondary); }
+.admin-host-engine-version { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 24px 0 22px; }
+.admin-host-engine-version > div { display: flex; flex-direction: column; gap: 7px; }
+.admin-host-engine-version > div > span { color: var(--muted); font-size: 11px; }
+.admin-host-engine-version strong { font-size: 14px; font-weight: 500; color: var(--text-secondary); }
+.admin-host-pending-label { font-size: 10px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; white-space: nowrap; }
+.admin-host-engine-footer { display: flex; justify-content: space-between; align-items: center; padding: 13px 22px; margin: 0 -22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: color-mix(in srgb, var(--surface) 45%, transparent); }
+.admin-host-engine-footer > span { display: flex; align-items: center; gap: 7px; }
+.admin-host-dependencies { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; padding: 0; }
+.admin-host-dependencies > div { display: flex; align-items: center; gap: 12px; padding: 17px 20px; }
+.admin-host-dependencies > div + div { border-left: 1px solid var(--line); }
+.admin-host-dependencies > div > div { display: flex; flex-direction: column; gap: 5px; }
+.admin-host-dependencies strong { font-size: 12px; font-weight: 500; }
+.admin-host-dependencies small { font-size: 11px; color: var(--muted); }
+.admin-host-dependencies .admin-status { margin-left: auto; }
+.admin-host-resources { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; }
+.admin-host-storage { padding: 23px; }
+.admin-host-storage .admin-card-heading { display: flex; align-items: center; gap: 9px; color: var(--text-secondary); }
+.admin-host-storage .admin-card-heading h4 { font-size: 13px; margin: 0; font-weight: 500; }
+.admin-host-storage .admin-card-heading > span:last-child { margin-left: auto; }
+.admin-host-storage-value { display: flex; flex-direction: column; gap: 7px; margin: 25px 0 22px; }
+.admin-host-storage-value strong { font-size: 31px; color: var(--muted); font-weight: 400; line-height: 1; }
+.admin-host-storage-value > span { color: var(--muted); font-size: 11px; }
+.admin-host-capacity-placeholder { height: 11px; width: 100%; border-radius: 4px; border: 1px dashed var(--line-strong); background: repeating-linear-gradient(120deg, transparent, transparent 5px, var(--surface) 5px, var(--surface) 8px); }
+.admin-host-storage-legend { display: flex; flex-wrap: wrap; gap: 15px; color: var(--muted); font-size: 10px; margin-top: 13px; }
+.admin-host-storage-legend span::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border: 1px solid var(--muted); border-radius: 2px; }
+.admin-host-resource-note { margin: 22px 0 0; font-size: 11px; color: var(--muted); line-height: 1.7; }
+.admin-host-resource-stack { display: grid; gap: 12px; }
+.admin-host-resource { display: flex; align-items: center; gap: 13px; padding: 16px 18px; }
+.admin-host-resource h4 { font-size: 12px; font-weight: 500; margin: 0; }
+.admin-host-resource p { font-size: 10px; margin: 5px 0 0; color: var(--muted); }
+.admin-host-resource > .admin-host-pending { margin-left: auto; flex-shrink: 0; font-size: 11px; }
+.admin-host-monitor-note { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); margin-top: 14px; }
+.admin-host-monitor-note > svg { flex-shrink: 0; margin-top: 2px; }
+.admin-host-monitor-note p { margin: 0; font-size: 11px; line-height: 1.7; }
+.admin-host-maintenance { display: flex; align-items: center; gap: 14px; padding: 20px; }
+.admin-host-maintenance h3 { font-size: 13px; font-weight: 500; margin: 0; }
+.admin-host-maintenance p { font-size: 11px; color: var(--muted); margin: 7px 0 0; line-height: 1.6; }
+.admin-host-maintenance > button { margin-left: auto; flex-shrink: 0; }
+@media (max-width: 1100px) {
+  .admin-host-service { flex-direction: column; align-items: stretch; gap: 23px; }
+  .admin-host-service-meta { padding-top: 18px; border-top: 1px solid var(--line); justify-content: space-between; gap: 20px; }
+  .admin-host-dependencies > div { gap: 9px; padding: 15px; }
+}
+@media (max-width: 760px) {
+  .admin-host-engines, .admin-host-resources { grid-template-columns: minmax(0, 1fr); }
+  .admin-host-section-label { display: none; }
+  .admin-host-dependencies { grid-template-columns: minmax(0, 1fr); }
+  .admin-host-dependencies > div + div { border-left: 0; border-top: 1px solid var(--line); }
+  .admin-host-maintenance { flex-wrap: wrap; }
+  .admin-host-maintenance > div { flex: 1; min-width: 180px; }
+  .admin-host-maintenance > button { margin-left: 52px; }
+}
+@media (max-width: 700px) {
+  .admin-card.admin-host-engine { padding: 16px 16px 0; }
+  .admin-host-engine-heading { column-gap: 11px; row-gap: 0; }
+  .admin-host-engine-identity { grid-column: 2; grid-row: 1; }
+  .admin-host-engine-identity h4 { font-size: 15px; margin: 0; }
+  .admin-host-engine-mark { width: 36px; height: 36px; font-size: 24px; border-radius: 9px; }
+  .admin-host-engine-mark.codex { font-size: 17px; }
+  .admin-host-engine-description { margin-top: 13px; font-size: 11px; }
+  .admin-host-engine-version { margin-top: 18px; }
+  .admin-host-engine-footer { padding-inline: 16px; margin-inline: -16px; }
+}

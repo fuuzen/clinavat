@@ -19,7 +19,7 @@ export default function MessageView({
 }) {
   const user = message.role === "user";
   return (
-    <article className={`message message-${message.role}`}>
+    <article id={`conversation-message-${message.id}`} className={`message message-${message.role}`} tabIndex={-1}>
       <div className="message-author">
         {user ? (
           <span className="mini-avatar">{username.slice(0, 1).toUpperCase()}</span>

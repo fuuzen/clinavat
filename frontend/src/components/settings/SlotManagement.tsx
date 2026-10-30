@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Check,
   LoaderCircle,
   Plus,
-  ShieldCheck,
-  Terminal,
+  RefreshCw,
   Users,
 } from "lucide-react";
-import { api, errorText, post, statusLabel } from "../../api";
+import { api, errorText, post } from "../../api";
 import type { Slot, User } from "../../types";
-import { CopyButton } from "../Dialogs";
+import SlotCard from "./SlotCard";
+import { useSlotUsage } from "../../useSlotUsage";
 
 export default function SlotManagement({
   onRefresh,
@@ -17,45 +17,81 @@ export default function SlotManagement({
   onRefresh: () => Promise<void>;
 }) {
   const [slots, setSlots] = useState<Slot[]>([]);
+  const usage = useSlotUsage(true);
   const [users, setUsers] = useState<User[]>([]);
   const [busy, setBusy] = useState(false);
+  const [requiresReload, setRequiresReload] = useState(false);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
-  const [engines, setEngines] = useState(["claude", "codex"]);
+  const [engine, setEngine] = useState<"claude" | "codex">("claude");
   const [success, setSuccess] = useState("");
+  const [assignmentVersions, setAssignmentVersions] = useState<Record<string, number>>({});
+  const [assignmentErrors, setAssignmentErrors] = useState<Record<string, string>>({});
+  const updating = useRef(false);
   const load = useCallback(async () => {
+    const [newSlots, newUsers] = await Promise.all([
+      api<Slot[]>("/admin/slots"),
+      api<User[]>("/admin/users"),
+    ]);
+    setSlots(newSlots);
+    setUsers(newUsers);
+    setRequiresReload(false);
+    return newSlots;
+  }, []);
+  const refresh = useCallback(async () => {
     setBusy(true);
     setError("");
     try {
-      const [newSlots, newUsers] = await Promise.all([
-        api<Slot[]>("/admin/slots"),
-        api<User[]>("/admin/users"),
-      ]);
-      setSlots(newSlots);
-      setUsers(newUsers);
+      const refreshed = await load();
+      setAssignmentVersions((current) => Object.fromEntries(refreshed.map((slot) => [slot.id, (current[slot.id] || 0) + 1])));
+      setAssignmentErrors({});
     } catch (cause) {
       setError(errorText(cause));
+      setRequiresReload(true);
     } finally {
       setBusy(false);
     }
-  }, []);
-  useEffect(() => {
-    void load();
   }, [load]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
   async function update(slot: Slot, values: Record<string, unknown>) {
+    if (updating.current || requiresReload) throw new Error("请等待当前操作完成，或刷新后重试。");
+    updating.current = true;
     setBusy(true);
     setError("");
     setSuccess("");
+    setAssignmentErrors((current) => ({ ...current, [slot.id]: "" }));
     try {
-      await api(`/admin/slots/${slot.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(values),
-      });
-      await Promise.all([load(), onRefresh()]);
-      setSuccess("槽位配置已更新");
-    } catch (cause) {
-      setError(errorText(cause));
+      let updated: Slot;
+      try {
+        updated = await api<Slot>(`/admin/slots/${slot.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...values, expectedRevision: slot.credential_revision }),
+        });
+      } catch (cause) {
+        const [reloadResult] = await Promise.allSettled([load(), onRefresh()]);
+        if (reloadResult.status === "rejected") setRequiresReload(true);
+        setAssignmentVersions((current) => ({ ...current, [slot.id]: (current[slot.id] || 0) + 1 }));
+        const message = reloadResult.status === "rejected"
+          ? `${errorText(cause)}；最新槽位加载失败：${errorText(reloadResult.reason)}。请刷新列表后重试。`
+          : `${errorText(cause)}。已刷新最新状态，请确认后重试。`;
+        setError(message);
+        setAssignmentErrors((current) => ({ ...current, [slot.id]: message }));
+        throw cause;
+      }
+      setSlots((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setAssignmentVersions((current) => ({ ...current, [slot.id]: (current[slot.id] || 0) + 1 }));
+      setSuccess(values.allowedUserIds !== undefined ? `「${slot.label}」的用户分配已保存` : "槽位配置已更新");
+      const [reloadResult, overviewResult] = await Promise.allSettled([load(), onRefresh()]);
+      if (reloadResult.status === "rejected") {
+        setRequiresReload(true);
+        setError(`配置已保存，但列表刷新失败：${errorText(reloadResult.reason)}。请刷新后再操作。`);
+      } else if (overviewResult.status === "rejected") {
+        setError(`配置已保存，但工作台刷新失败：${errorText(overviewResult.reason)}。`);
+      }
     } finally {
+      updating.current = false;
       setBusy(false);
     }
   }
@@ -69,11 +105,11 @@ export default function SlotManagement({
       await post("/admin/slots", {
         id: data.get("id"),
         label: data.get("label"),
-        cliTypes: engines,
+        engine,
       });
       setAdding(false);
       await Promise.all([load(), onRefresh()]);
-      setSuccess("账号槽位已创建，请在服务器完成官方 CLI 登录。");
+      setSuccess("槽位已创建，请完成官方 CLI 登录，并在卡片中选择使用者。");
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -94,21 +130,29 @@ export default function SlotManagement({
         </div>
       )}
       <>
-        <div className="settings-section-heading">
-          <Users size={18} />
-          <h3>账号槽位</h3>
-          <button
-            className="button button-secondary button-small"
-            onClick={() => setAdding(!adding)}
-          >
-            <Plus size={13} />
-            创建槽位
-          </button>
+        <div className="management-toolbar">
+          <p className="settings-description">在卡片中管理 CLI 账号、额度和使用者，点击用户选择框搜索成员，选中即保存。</p>
+          <div className="management-toolbar-actions">
+            <button
+              type="button"
+              className="icon-button"
+              disabled={busy}
+              onClick={() => void refresh()}
+              aria-label="刷新槽位列表"
+              title="刷新槽位列表"
+            >
+              <RefreshCw size={14} className={busy ? "spin" : ""} />
+            </button>
+            <button
+              className="button button-secondary button-small"
+              disabled={busy}
+              onClick={() => setAdding(!adding)}
+            >
+              <Plus size={13} />
+              创建槽位
+            </button>
+          </div>
         </div>
-        <p className="settings-description">
-          一位用户绑定一个独立槽位。创建后，在服务器中使用该槽位的 HOME 完成官方
-          CLI 登录。
-        </p>
         {adding && (
           <form className="slot-create" onSubmit={create}>
             <div className="form-row">
@@ -127,27 +171,16 @@ export default function SlotManagement({
                 <input name="label" placeholder="个人开发账号" required />
               </label>
             </div>
-            <div className="checkbox-row">
-              {["claude", "codex"].map((engine) => (
-                <label key={engine}>
-                  <input
-                    type="checkbox"
-                    checked={engines.includes(engine)}
-                    onChange={(event) =>
-                      setEngines((current) =>
-                        event.target.checked
-                          ? [...current, engine]
-                          : current.filter((item) => item !== engine),
-                      )
-                    }
-                  />
-                  {engine === "claude" ? "Claude Code" : "Codex"}
-                </label>
-              ))}
-            </div>
+            <label>
+              CLI 引擎
+              <select value={engine} onChange={(event) => setEngine(event.target.value as "claude" | "codex")}>
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
             <button
               className="button button-primary button-small"
-              disabled={busy || !engines.length}
+              disabled={busy}
             >
               {busy && <LoaderCircle size={13} className="spin" />}创建
             </button>
@@ -160,107 +193,22 @@ export default function SlotManagement({
         ) : slots.length === 0 ? (
           <div className="settings-empty">
             <Users size={29} />
-            <strong>给每个人一个专属空间</strong>
+            <strong>管理 CLI 账号授权</strong>
             <p>创建你的第一个账号槽位，开始管理 CLI 账号。</p>
           </div>
         ) : (
           <div className="slots-list">
             {slots.map((slot) => (
-              <div className="slot-admin-card" key={slot.id}>
-                <div className="slot-admin-heading">
-                  <span className="slot-icon">
-                    <ShieldCheck size={17} />
-                  </span>
-                  <div>
-                    <strong>{slot.label}</strong>
-                    <small>
-                      {slot.id} · {slot.cli_types.join(" / ")}
-                    </small>
-                  </div>
-                  <span
-                    className={`badge ${slot.status === "ASSIGNED" ? "badge-green" : ""}`}
-                  >
-                    {statusLabel(slot.status)}
-                  </span>
-                </div>
-                <div className="form-row">
-                  <label>
-                    绑定用户
-                    <select
-                      aria-label={`${slot.label}绑定用户`}
-                      disabled={busy || !!slot.assigned_user_id}
-                      value={slot.assigned_user_id || ""}
-                      onChange={(event) => {
-                        if (event.target.value)
-                          void update(slot, {
-                            assignedUserId: event.target.value,
-                          });
-                      }}
-                    >
-                      <option value="" disabled>
-                        选择用户（永久绑定）
-                      </option>
-                      {users
-                        .filter(
-                          (user) =>
-                            user.id === slot.assigned_user_id ||
-                            !slots.some(
-                              (item) => item.assigned_user_id === user.id,
-                            ),
-                        )
-                        .map((user) => (
-                          <option key={user.id} value={user.id}>
-                            {user.username}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <label>
-                    状态
-                    <select
-                      aria-label={`${slot.label}状态`}
-                      disabled={busy}
-                      value={slot.status}
-                      onChange={(event) =>
-                        void update(slot, { status: event.target.value })
-                      }
-                    >
-                      {(slot.assigned_user_id
-                        ? ["ASSIGNED", "RATE_LIMITED", "DISABLED"]
-                        : ["IDLE", "DISABLED"]
-                      ).map((status) => (
-                        <option key={status} value={status}>
-                          {statusLabel(status)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {slot.home_dir && (
-                  <details>
-                    <summary>
-                      <Terminal size={12} />
-                      服务器登录命令
-                    </summary>
-                    <pre>
-                      {slot.cli_types
-                        .map(
-                          (engine) =>
-                            `HOME='${slot.home_dir!.replace(/'/g, "'\\''")}' ${engine === "claude" ? "claude auth login" : "codex login --device-auth"}`,
-                        )
-                        .join("\n")}
-                    </pre>
-                    <CopyButton
-                      value={slot.cli_types
-                        .map(
-                          (engine) =>
-                            `HOME='${slot.home_dir!.replace(/'/g, "'\\''")}' ${engine === "claude" ? "claude auth login" : "codex login --device-auth"}`,
-                        )
-                        .join("\n")}
-                    />
-                  </details>
-                )}
-              </div>
+              <SlotCard
+                key={slot.id}
+                slot={slot}
+                usage={usage[slot.id]}
+                users={users}
+                busy={busy || requiresReload}
+                onUpdate={update}
+                assignmentVersion={assignmentVersions[slot.id] || 0}
+                assignmentError={assignmentErrors[slot.id]}
+              />
             ))}
           </div>
         )}

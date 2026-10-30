@@ -6,6 +6,8 @@ import {
   FileCode2,
   Files,
   Folder,
+  FolderCheck,
+  FolderSync,
   GitBranch,
   GitCompareArrows,
   LoaderCircle,
@@ -13,11 +15,12 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { api, errorText, post, statusLabel } from "../api";
-import type { FileEntry, GitState, Project } from "../types";
+import { api, errorText, formatBytes, post } from "../api";
+import type { FileEntry, GitState, Project, ProjectUsage } from "../types";
 const TerminalView = lazy(() => import("./TerminalView"));
 
 interface Props {
+  tabRequest?: { tab: "changes"; id: number };
   project?: Project;
   refresh: number;
   onClose: () => void;
@@ -29,8 +32,10 @@ export default function Inspector({
   refresh,
   onClose,
   onRefresh,
+  tabRequest,
 }: Props) {
   const [tab, setTab] = useState<"files" | "changes" | "terminal">("files");
+  useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selected, setSelected] = useState<{
@@ -41,6 +46,23 @@ export default function Inspector({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [usage, setUsage] = useState<ProjectUsage | null>(null);
+  const projectId = project?.id;
+  const showSyncAction = !!project &&
+    (project.execution_mode !== "local" || project.sync_status === "ERROR");
+  const loadUsage = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const result = await api<ProjectUsage>(`/projects/${projectId}/usage`);
+      if (result.mirrorBytes !== null) setUsage(result);
+    } catch {
+      // Disk usage is informational; failures leave the footer without it.
+    }
+  }, [projectId]);
+  useEffect(() => setUsage(null), [projectId]);
+  useEffect(() => {
+    void loadUsage();
+  }, [loadUsage, refresh, project?.sync_status]);
   useEffect(() => {
     setPath("");
     setSelected(null);
@@ -94,6 +116,7 @@ export default function Inspector({
       await post(`/projects/${project.id}/sync`);
       onRefresh();
       void load();
+      void loadUsage();
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -113,12 +136,13 @@ export default function Inspector({
         <span>工作区</span>
         <div>
           <button
-            className="icon-button"
+            className="inspector-refresh"
             onClick={() => void load()}
             disabled={busy || !project}
             aria-label="刷新工作区"
           >
             <RefreshCw size={14} className={busy ? "spin" : ""} />
+            刷新
           </button>
           <button
             className="icon-button"
@@ -167,10 +191,6 @@ export default function Inspector({
           <div className="inspector-project">
             <Folder size={14} />
             <strong>{project.name}</strong>
-            <span
-              title={statusLabel(project.sync_status)}
-              className={`status-dot ${["WATCHING", "READY"].includes(project.sync_status) ? "online" : ""}`}
-            />
           </div>
           {error && (
             <div className="inspector-error">
@@ -238,7 +258,7 @@ export default function Inspector({
                       <p>
                         这个目录暂时没有文件。
                         <br />
-                        首次同步可能需要一些时间。
+                        {project.execution_mode !== "local" && "首次同步可能需要一些时间。"}
                       </p>
                     </div>
                   ) : (
@@ -335,22 +355,37 @@ export default function Inspector({
               )}
             </div>
           )}
-          <footer className="inspector-footer">
-            <span>
-              <span
-                className={`status-dot ${["WATCHING", "READY"].includes(project.sync_status) ? "online" : ""}`}
-              />
-              {statusLabel(project.sync_status)}
-            </span>
-            <button
-              disabled={syncing}
-              onClick={() => void sync()}
-              title="强制同步"
-            >
-              <RefreshCw size={12} className={syncing ? "spin" : ""} />
-              {syncing ? "同步中" : "立即同步"}
-            </button>
-          </footer>
+          {(usage || showSyncAction) && (
+            <footer className="inspector-footer">
+              {usage && (
+                <span
+                  className="inspector-usage"
+                  title="号池机上本项目同步镜像占用的磁盘空间；备份为排除规则变化后保留的旧镜像，位于数据目录 backups/workspaces/"
+                >
+                  镜像 {formatBytes(usage.mirrorBytes ?? 0)}
+                  {usage.backupBytes > 0 && ` · 备份 ${formatBytes(usage.backupBytes)}`}
+                </span>
+              )}
+              {showSyncAction && (
+                <button
+                  disabled={syncing}
+                  onClick={() => void sync()}
+                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : "强制同步"}
+                >
+                  {syncing ? (
+                    <LoaderCircle size={12} className="spin" />
+                  ) : project.execution_mode === "local" ? (
+                    <FolderCheck size={12} />
+                  ) : (
+                    <FolderSync size={12} />
+                  )}
+                  {project.execution_mode === "local"
+                    ? syncing ? "检查中" : "检查目录"
+                    : syncing ? "同步中" : "立即同步"}
+                </button>
+              )}
+            </footer>
+          )}
         </>
       )}
     </aside>

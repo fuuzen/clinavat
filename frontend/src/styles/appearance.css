@@ -1,0 +1,283 @@
+.appearance-settings {
+  color: var(--text);
+}
+.appearance-settings .settings-section-heading h3 {
+  font-size: 16px;
+}
+.appearance-description {
+  margin: -3px 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.appearance-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.appearance-current > span:last-child {
+  margin-left: auto;
+  color: var(--muted);
+}
+.appearance-color-dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.theme-group {
+  padding: 0;
+  margin: 0 0 22px;
+  border: 0;
+  min-width: 0;
+}
+.theme-group legend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.theme-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.theme-preset {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.theme-preset:hover {
+  border-color: var(--line-strong);
+  background: var(--hover);
+}
+.theme-preset.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.theme-preview {
+  display: flex;
+  height: 72px;
+  width: 100%;
+  border-radius: 4px;
+  background: var(--preview-bg);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--preview-ink) 12%, var(--preview-bg));
+}
+.theme-preview-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 28%;
+  padding: 11px 5px;
+  background: color-mix(in srgb, var(--preview-ink) 6%, var(--preview-bg));
+  border-right: 1px solid color-mix(in srgb, var(--preview-ink) 10%, var(--preview-bg));
+}
+.theme-preview-sidebar > i,
+.theme-preview-content > i {
+  display: block;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--preview-ink) 24%, var(--preview-bg));
+}
+.theme-preview-sidebar > i:first-child {
+  background: var(--preview-accent);
+}
+.theme-preview-sidebar > i:last-child {
+  width: 65%;
+}
+.theme-preview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 72%;
+  padding: 13px 9px 9px;
+}
+.theme-preview-content > i:first-child {
+  width: 60%;
+  background: color-mix(in srgb, var(--preview-ink) 65%, var(--preview-bg));
+}
+.theme-preview-content > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--preview-ink) 16%, var(--preview-bg));
+  border-radius: 3px;
+}
+.theme-preview-content > span > i:first-child {
+  width: 48%;
+  height: 3px;
+  background: color-mix(in srgb, var(--preview-ink) 25%, var(--preview-bg));
+}
+.theme-preview-content > span > i:last-child {
+  width: 10px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--preview-accent);
+}
+.theme-preset-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  width: 100%;
+  padding: 9px 4px 5px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.theme-preset.selected .theme-preset-label {
+  color: var(--accent);
+}
+.appearance-custom {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.appearance-custom.selected {
+  border-color: var(--accent);
+}
+.appearance-custom-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.appearance-custom-heading h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.appearance-mode {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 14px;
+  width: fit-content;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.appearance-mode button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 80px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.appearance-mode button.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.appearance-color-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.appearance-color-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.appearance-color-field > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.appearance-color-field code {
+  font-size: 11px;
+  color: var(--muted);
+}
+.appearance-custom input[type="color"] {
+  width: 38px;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  cursor: pointer;
+  background: var(--surface);
+}
+.appearance-custom input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.appearance-custom input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+.appearance-custom input[type="color"]::-moz-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+.appearance-hint {
+  margin: 13px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.appearance-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.appearance-footer .text-button {
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .theme-presets {
+    gap: 8px;
+  }
+  .theme-preview {
+    height: 60px;
+  }
+  .theme-preset-label {
+    font-size: 12px;
+    padding-inline: 1px;
+  }
+  .appearance-custom {
+    padding: 11px;
+  }
+  .appearance-color-fields {
+    gap: 8px;
+  }
+  .appearance-color-field {
+    gap: 7px;
+  }
+  .appearance-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

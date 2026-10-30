@@ -1,6 +1,5 @@
 import {
   ArrowUpRight,
-  Braces,
   FolderOpen,
   GitBranch,
   Plus,
@@ -8,6 +7,7 @@ import {
   Terminal,
 } from "lucide-react";
 import type { Overview, Project } from "../types";
+import { BrandMark } from "./Brand";
 interface WelcomeProps {
   overview: Overview;
   onNewHost: () => void;
@@ -24,7 +24,7 @@ export default function Welcome({
   return (
     <div className="welcome">
       <div className="welcome-symbol">
-        <Braces size={36} strokeWidth={1.3} />
+        <BrandMark size={48} />
         <span />
       </div>
       <div className="eyebrow">YOUR SPACE TO BUILD</div>
@@ -34,7 +34,7 @@ export default function Welcome({
         变成可以运行的代码。
       </h1>
       <p>
-        连接自己的开发机，选择项目，
+        {overview.user.role === "admin" ? "选择本机或远程项目，" : "连接自己的开发机，选择项目，"}
         <br />与 Claude Code 或 Codex 开始协作。
       </p>
       <div className="welcome-actions">
@@ -52,8 +52,8 @@ export default function Welcome({
           <span>
             <ShieldCheck size={18} />
           </span>
-          <strong>专属账号</strong>
-          <small>独立槽位，保持上下文隔离</small>
+          <strong>可切换账号</strong>
+          <small>每个对话独立选择授权账号</small>
         </div>
         <div>
           <span>

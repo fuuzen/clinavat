@@ -1,0 +1,51 @@
+.slot-usage-ring {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+}
+.slot-usage-ring-chart {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  fill: none;
+  stroke-width: 2px;
+}
+.slot-usage-ring-track {
+  stroke: var(--line-strong);
+  opacity: 0.65;
+}
+.slot-usage-ring-unknown {
+  stroke: var(--muted);
+  stroke-dasharray: 2 3;
+  opacity: 0.8;
+}
+.slot-usage-ring-value {
+  stroke: var(--info);
+}
+.slot-usage-ring-inner .slot-usage-ring-value {
+  stroke: var(--success);
+}
+.slot-usage-ring-warning .slot-usage-ring-value {
+  stroke: var(--warning);
+}
+.slot-usage-ring-critical .slot-usage-ring-value {
+  stroke: var(--danger);
+}
+.slot-usage-ring-brand {
+  position: relative;
+}
+.slot-usage-ring > .slot-usage-ring-limited {
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  color: var(--warning);
+  fill: var(--panel);
+}
+.settings-menu-item .slot-usage-ring {
+  align-self: flex-start;
+  margin-top: 2px;
+}

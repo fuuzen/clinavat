@@ -8,16 +8,16 @@
   gap: 7px;
   width: 100%;
   padding: 8px 0;
-  color: #8fa780;
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
   text-align: left;
   border-radius: 5px;
 }
 .activity-toggle:hover {
-  color: #c2d6b4;
+  color: var(--accent);
 }
 .activity-toggle:focus-visible {
-  outline: 1px solid #91b77d;
+  outline: 1px solid var(--accent);
   outline-offset: 3px;
 }
 .activity-toggle > svg {
@@ -27,14 +27,14 @@
   overflow-wrap: anywhere;
 }
 .activity-toggle > svg:last-child {
-  color: #6c895d;
+  color: var(--muted);
   transition: transform 0.2s;
 }
 .turn-toggle {
-  color: #78936a;
+  color: var(--muted);
 }
 .turn-details {
-  border-left: 1px solid #35472c;
+  border-left: 1px solid var(--line);
   padding: 8px 0 2px 14px;
   margin: 4px 0 0 6px;
 }
@@ -43,21 +43,21 @@
 }
 .activity-text .markdown {
   padding-left: 0;
-  color: #a2b59a;
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 .activity-reasoning .markdown {
-  color: #8da180;
+  color: var(--text-secondary);
 }
 .reasoning-label {
   display: block;
-  color: #718c63;
-  font-size: 8px;
+  color: var(--muted);
+  font-size: 11px;
   margin-bottom: 6px;
 }
 .activity-placeholder {
-  color: #78936a;
-  font-size: 10px;
+  color: var(--muted);
+  font-size: 12px;
   padding: 2px 0 10px;
 }
 .execution-group {
@@ -66,7 +66,7 @@
 }
 .execution-toggle {
   padding: 8px 0;
-  color: #8fa780;
+  color: var(--text-secondary);
 }
 .execution-details {
   padding: 0 0 2px 2px;
@@ -75,7 +75,7 @@
   margin: 6px 0;
 }
 .tool-card > button:focus-visible {
-  outline: 1px solid #91b77d;
+  outline: 1px solid var(--accent);
   outline-offset: -2px;
 }
 .tool-details pre {

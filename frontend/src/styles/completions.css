@@ -1,0 +1,49 @@
+.composer-completion {
+  position: absolute;
+  z-index: 12;
+  bottom: calc(100% + 8px);
+  inset-inline: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 30px var(--shadow);
+}
+.completion-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.completion-heading > span:last-child { color: var(--muted); font-size: 10px; }
+.completion-options { overflow-y: auto; max-height: min(280px, 35dvh); padding: 4px; }
+.completion-options:empty { padding: 0; }
+.completion-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+.completion-option:hover, .completion-option[aria-selected="true"] {
+  color: var(--text);
+  background: var(--hover);
+}
+.completion-option[aria-selected="true"] { box-shadow: inset 2px 0 var(--accent); }
+.completion-option > svg { flex-shrink: 0; }
+.completion-option > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.completion-option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.completion-option small { color: var(--muted); font-size: 11px; }
+.completion-message { display: flex; align-items: center; gap: 7px; padding: 10px 12px; color: var(--muted); font-size: 11px; }
+.completion-error { color: var(--warning); }
+@media (max-width: 480px) {
+  .completion-heading > span:last-child { font-size: 9px; }
+  .completion-options { max-height: min(220px, 30dvh); }
+}

@@ -24,8 +24,8 @@ export async function api<T>(
     unknown
   > | null;
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/auth/")) {
-      window.dispatchEvent(new Event("cc-pool:unauthorized"));
+    if (response.status === 401 && !path.startsWith("/auth/") && path.split("?")[0] !== "/site/settings") {
+      window.dispatchEvent(new Event("clinavat:unauthorized"));
     }
     throw new ApiError(
       String(body?.message || body?.error || `请求失败 (${response.status})`),
@@ -52,8 +52,8 @@ export function statusLabel(status: string): string {
     SYNCING: "正在同步",
     PAUSED: "已暂停",
     READY: "已同步",
+    LOCAL: "本机直连",
     IDLE: "空闲",
-    ASSIGNED: "已分配",
     DISABLED: "已停用",
     RATE_LIMITED: "已限流",
     RUNNING: "运行中",
@@ -61,6 +61,8 @@ export function statusLabel(status: string): string {
     STOPPED: "已停止",
     pending: "等待审批",
     running: "运行中",
+    pausing: "正在暂停",
+    paused: "已暂停",
     idle: "就绪",
     error: "运行异常",
     waiting: "等待审批",
@@ -75,6 +77,8 @@ export function isActive(status?: string): boolean {
   return [
     "RUNNING",
     "running",
+    "pausing",
+    "paused",
     "waiting",
     "streaming",
     "WAITING_APPROVAL",
@@ -89,4 +93,15 @@ export function formatTime(timestamp: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+export function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${unit && value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }

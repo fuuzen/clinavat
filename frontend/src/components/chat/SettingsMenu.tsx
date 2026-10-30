@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -11,13 +13,19 @@ import {
 import { createPortal } from "react-dom";
 
 interface Props {
+  openRequest?: number;
   label: string;
   title?: string;
   disabled?: boolean;
   className?: string;
+  contentClassName?: string;
+  role?: "menu" | "dialog";
+  align?: "start" | "end";
   trigger: ReactNode;
   children: (close: () => void) => ReactNode;
 }
+
+const SettingsPath = createContext<string[]>([]);
 
 interface Position {
   top: number;
@@ -44,11 +52,20 @@ function focusItem(menu: HTMLElement, item: HTMLElement) {
 
 export default function SettingsMenu(props: Props) {
   const menuId = useId();
+  const parentPath = useContext(SettingsPath);
+  const settingsPath = [...parentPath, menuId];
+  const role = props.role || "menu";
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const initialFocus = useRef<"selected" | "last">("selected");
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
+  const lastOpenRequest = useRef(props.openRequest);
+  useEffect(() => {
+    if (lastOpenRequest.current === props.openRequest) return;
+    lastOpenRequest.current = props.openRequest;
+    if (props.openRequest && !props.disabled) setOpen(true);
+  }, [props.openRequest, props.disabled]);
 
   const dismiss = useCallback((restoreFocus: boolean) => {
     setOpen(false);
@@ -57,12 +74,18 @@ export default function SettingsMenu(props: Props) {
   }, []);
   const close = useCallback(() => dismiss(true), [dismiss]);
   const focusSelection = useCallback((menu: HTMLElement) => {
+    if (role === "dialog") {
+      const target = menu.querySelector<HTMLElement>('input:not(:disabled)')
+        || menu.querySelector<HTMLElement>('button:not(:disabled)');
+      (target || menu).focus({ preventScroll: true });
+      return;
+    }
     const items = enabledItems(menu);
     const selected = items.filter((item) => item.getAttribute("aria-checked") === "true").at(-1);
     const target = initialFocus.current === "last" ? items.at(-1) : selected || items[0];
     if (target) focusItem(menu, target);
     else menu.focus({ preventScroll: true });
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     if (props.disabled) dismiss(false);
@@ -93,7 +116,7 @@ export default function SettingsMenu(props: Props) {
       const next = {
         top: placeAbove ? anchor.top - gap - height : anchor.bottom + gap,
         left: Math.max(viewportLeft + gutter, Math.min(
-          anchor.left,
+          props.align === "end" ? anchor.right - width : anchor.left,
           viewportLeft + viewportWidth - gutter - width,
         )),
         width,
@@ -125,7 +148,7 @@ export default function SettingsMenu(props: Props) {
       contentObserver.disconnect();
       menu.removeEventListener("focusin", trackFocus);
     };
-  }, [open, props.disabled, focusSelection]);
+  }, [open, props.disabled, props.align, focusSelection]);
 
   const positioned = position !== null;
   useLayoutEffect(() => {
@@ -136,22 +159,21 @@ export default function SettingsMenu(props: Props) {
 
   useEffect(() => {
     if (!open) return;
+    function containsTarget(target: EventTarget | null) {
+      if (!(target instanceof Node)) return false;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return true;
+      // Nested menus render in portals but still belong to their parent popover.
+      const element = target instanceof Element ? target : target.parentElement;
+      return element?.closest<HTMLElement>("[data-settings-path]")?.dataset.settingsPath?.split(" ").includes(menuId);
+    }
     function outsidePointer(event: PointerEvent) {
-      const target = event.target;
-      if (target instanceof Node &&
-        !triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
-        dismiss(false);
-      }
+      if (!containsTarget(event.target)) dismiss(false);
     }
     function outsideFocus(event: FocusEvent) {
-      const target = event.target;
-      if (target instanceof Node &&
-        !triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
-        dismiss(false);
-      }
+      if (!containsTarget(event.target)) dismiss(false);
     }
     function outsideScroll(event: Event) {
-      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      if (containsTarget(event.target)) return;
       dismiss(false);
     }
     const onResize = () => dismiss(false);
@@ -169,7 +191,7 @@ export default function SettingsMenu(props: Props) {
       window.visualViewport?.removeEventListener("resize", onResize);
       window.visualViewport?.removeEventListener("scroll", onResize);
     };
-  }, [open, dismiss]);
+  }, [open, dismiss, menuId]);
 
   function triggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -183,6 +205,7 @@ export default function SettingsMenu(props: Props) {
   }
 
   function menuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.defaultPrevented) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -190,10 +213,16 @@ export default function SettingsMenu(props: Props) {
       return;
     }
     if (event.key === "Tab") {
+      if (role === "dialog") {
+        const controls = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') || []);
+        const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+        if (document.activeElement !== boundary) return;
+      }
       // Continue the page's tab sequence from the trigger rather than the portal.
       dismiss(true);
       return;
     }
+    if (role === "dialog") return;
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const menu = menuRef.current;
     if (!menu) return;
@@ -214,9 +243,11 @@ export default function SettingsMenu(props: Props) {
         type="button"
         className={`settings-trigger${props.className ? ` ${props.className}` : ""}`}
         aria-label={props.label}
-        aria-haspopup="menu"
+        aria-description={props.title}
+        aria-haspopup={role}
         aria-expanded={open && !props.disabled}
         aria-controls={open && !props.disabled ? menuId : undefined}
+        data-settings-path={settingsPath.join(" ")}
         title={props.title}
         disabled={props.disabled}
         onKeyDown={triggerKeyDown}
@@ -232,9 +263,10 @@ export default function SettingsMenu(props: Props) {
         <div
           ref={menuRef}
           id={menuId}
-          className="settings-menu"
-          role="menu"
+          className={`settings-menu${props.contentClassName ? ` ${props.contentClassName}` : ""}`}
+          role={role}
           aria-label={props.label}
+          data-settings-path={settingsPath.join(" ")}
           tabIndex={-1}
           onKeyDown={menuKeyDown}
           style={{
@@ -248,7 +280,7 @@ export default function SettingsMenu(props: Props) {
             visibility: position ? "visible" : "hidden",
           }}
         >
-          {props.children(close)}
+          <SettingsPath.Provider value={settingsPath}>{props.children(close)}</SettingsPath.Provider>
         </div>,
         document.body,
       )}

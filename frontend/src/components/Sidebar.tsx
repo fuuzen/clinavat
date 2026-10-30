@@ -8,18 +8,21 @@ import {
   GitBranch,
   LogOut,
   MessageSquare,
+  Monitor,
   MoreHorizontal,
   Network,
+  Pause,
   Pencil,
   Plus,
   Search,
   Server,
   Settings2,
+  ShieldCheck,
   TerminalSquare,
   Trash2,
   X,
 } from "lucide-react";
-import { Brand } from "./Auth";
+import Brand from "./Brand";
 import { isActive, statusLabel } from "../api";
 import type { DevHost, Overview, Project, Session } from "../types";
 
@@ -33,7 +36,6 @@ interface Props {
   onNewHost: () => void;
   onEditHost: (host: DevHost) => void;
   onNewProject: (host?: DevHost) => void;
-  onNewSession: (project: Project) => void;
   onConnect: (host: DevHost) => void;
   onDelete: (
     kind: "host" | "project" | "session",
@@ -42,6 +44,8 @@ interface Props {
   ) => void;
   onRename: (session: Session) => void;
   onSettings: () => void;
+  adminOpen: boolean;
+  onAdmin: () => void;
   onLogout: () => void;
 }
 
@@ -78,18 +82,6 @@ export default function Sidebar(props: Props) {
           </button>
           <span className="version-badge">WORKSPACE</span>
         </div>
-        <button
-          className="new-work-button"
-          onClick={() =>
-            selectedProject
-              ? props.onNewSession(selectedProject)
-              : props.onNewProject()
-          }
-        >
-          <Plus size={17} />
-          <span>开启新任务</span>
-          <kbd>＋</kbd>
-        </button>
         <div className="sidebar-search">
           <Search size={14} />
           <input
@@ -154,8 +146,8 @@ export default function Sidebar(props: Props) {
                     ) : (
                       <ChevronDown size={13} />
                     )}
-                    <Server size={15} />
-                    <span>{host.name}</span>
+                    {host.kind === "local" ? <Monitor size={15} /> : <Server size={15} />}
+                    <span title={host.kind === "local" ? "号池机本机 · 管理员专用" : undefined}>{host.name}</span>
                     {host.jump_host && (
                       <span className="host-jump-indicator" title={`通过 ${host.jump_username}@${host.jump_host}:${host.jump_port || 22}`}>
                         <Network size={12} aria-label="通过跳板机连接" />
@@ -176,7 +168,7 @@ export default function Sidebar(props: Props) {
                     </button>
                     {menu === host.id && (
                       <div className="context-menu">
-                        <button
+                        {host.kind !== "local" && <><button
                           onClick={() => {
                             props.onEditHost(host);
                             setMenu("");
@@ -193,7 +185,7 @@ export default function Sidebar(props: Props) {
                         >
                           <TerminalSquare size={14} />
                           测试连接
-                        </button>
+                        </button></>}
                         <button
                           onClick={() => {
                             props.onNewProject(host);
@@ -203,7 +195,7 @@ export default function Sidebar(props: Props) {
                           <FolderPlus size={14} />
                           创建项目
                         </button>
-                        <button
+                        {host.kind !== "local" && <button
                           className="danger-text"
                           onClick={() => {
                             props.onDelete("host", host.id, host.name);
@@ -212,7 +204,7 @@ export default function Sidebar(props: Props) {
                         >
                           <Trash2 size={14} />
                           删除开发机
-                        </button>
+                        </button>}
                       </div>
                     )}
                   </div>
@@ -241,6 +233,7 @@ export default function Sidebar(props: Props) {
                                 props.onSelect(project);
                                 if (collapsed.has(project.id))
                                   toggle(project.id);
+                                props.onClose();
                               }}
                             >
                               <span
@@ -270,15 +263,6 @@ export default function Sidebar(props: Props) {
                               </button>
                               {menu === project.id && (
                                 <div className="context-menu">
-                                  <button
-                                    onClick={() => {
-                                      props.onNewSession(project);
-                                      setMenu("");
-                                    }}
-                                  >
-                                    <Plus size={14} />
-                                    新建对话
-                                  </button>
                                   <button
                                     className="danger-text"
                                     onClick={() => {
@@ -319,7 +303,9 @@ export default function Sidebar(props: Props) {
                                         props.onClose();
                                       }}
                                     >
-                                      {isActive(session.status) ? (
+                                      {session.status === "paused" ? (
+                                        <Pause size={13} aria-label="已暂停" />
+                                      ) : isActive(session.status) ? (
                                         <span className="running-dot" />
                                       ) : (
                                         <MessageSquare size={13} />
@@ -369,13 +355,6 @@ export default function Sidebar(props: Props) {
                                     </div>
                                   </div>
                                 ))}
-                              <button
-                                className="tree-row add-session"
-                                onClick={() => props.onNewSession(project)}
-                              >
-                                <Plus size={13} />
-                                <span>新建对话</span>
-                              </button>
                             </div>
                           )}
                         </div>
@@ -387,7 +366,7 @@ export default function Sidebar(props: Props) {
                         onClick={() => props.onNewProject(host)}
                       >
                         <Plus size={13} />
-                        <span>映射第一个项目</span>
+                        <span>{host.kind === "local" ? "打开第一个项目" : "映射第一个项目"}</span>
                       </button>
                     )}
                   </div>
@@ -402,23 +381,33 @@ export default function Sidebar(props: Props) {
               <GitBranch size={17} />
             </div>
             <div>
-              <strong>{overview.slot?.label || "尚未分配账号"}</strong>
+              <strong>{overview.slots.length ? `${overview.slots.length} 个授权槽位` : "尚无账号授权"}</strong>
               <span>
-                {overview.slot
-                  ? `${overview.slot.cli_types.join(" / ")} · ${statusLabel(overview.slot.status)}`
-                  : "请联系管理员分配独立槽位"}
+                {overview.slots.length ? "在各个对话中选择账号" : "请联系管理员开放槽位访问"}
               </span>
             </div>
             <span
-              className={`status-dot ${overview.slot?.status === "ASSIGNED" ? "online" : ""}`}
+              className={`status-dot ${overview.slots.some((slot) => slot.status === "IDLE") ? "online" : ""}`}
             />
           </div>
           <button className="sidebar-settings" onClick={props.onSettings}>
             <Settings2 size={16} />
-            <span>设置与连接</span>
+            <span>工作台设置</span>
             <CircleHelp size={14} />
           </button>
           <div className="user-profile">
+            {overview.user.role === "admin" && (
+              <button
+                className={`sidebar-admin-entry ${props.adminOpen ? "active" : ""}`}
+                onClick={() => { props.onAdmin(); props.onClose(); }}
+                aria-pressed={props.adminOpen}
+                title={props.adminOpen ? "返回工作台" : "打开管理面板"}
+              >
+                <ShieldCheck size={16} />
+                <span>管理面板</span>
+                <ChevronRight size={14} />
+              </button>
+            )}
             <span className="avatar">
               {overview.user.username.slice(0, 1).toUpperCase()}
             </span>

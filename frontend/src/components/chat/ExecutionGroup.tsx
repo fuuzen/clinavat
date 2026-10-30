@@ -29,10 +29,10 @@ function executionLabel(tools: ToolEvent[]) {
   }).join(" · ");
 }
 
-export default function ExecutionGroup({ tools }: { tools: ToolEvent[] }) {
+export default function ExecutionGroup({ tools, paused = false }: { tools: ToolEvent[]; paused?: boolean }) {
   const [open, setOpen] = useState(false);
   const detailsId = useId();
-  const running = tools.some((tool) => ["running", "waiting", "pending"].includes(tool.status || ""));
+  const running = !paused && tools.some((tool) => ["running", "waiting", "pending"].includes(tool.status || ""));
   return (
     <div className="execution-group">
       <button

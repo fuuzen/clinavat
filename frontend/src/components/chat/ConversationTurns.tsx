@@ -4,6 +4,7 @@ import type { Message, ToolEvent, Turn } from "../../types";
 import ExecutionGroup from "./ExecutionGroup";
 import MessageView, { Markdown } from "./MessageView";
 import TurnProcess from "./TurnProcess";
+import { isActive } from "../../api";
 
 interface Props {
   messages: Message[];
@@ -16,19 +17,31 @@ interface Props {
 
 export default function ConversationTurns(props: Props) {
   const agentName = props.engine === "codex" ? "Codex" : "Claude Code";
-  const turnsByUser = new Map(props.turns.map((turn) => [turn.user_message_id, turn]));
   const messageIds = new Set(props.messages.map((message) => message.id));
-  const liveTurn = props.turns.some((turn) => turn.status === "running");
+  const turnsByMessage = new Map<string, Turn[]>();
+  const previousByUser = new Map<string, Turn>();
+  for (const turn of props.turns) {
+    const previousAnswer = previousByUser.get(turn.user_message_id)?.assistant_message_id;
+    const anchor = messageIds.has(turn.user_message_id) && previousAnswer && messageIds.has(previousAnswer)
+      ? previousAnswer : turn.user_message_id;
+    const anchored = turnsByMessage.get(anchor) ?? [];
+    anchored.push(turn);
+    turnsByMessage.set(anchor, anchored);
+    previousByUser.set(turn.user_message_id, turn);
+  }
+  const liveTurn = props.turns.some((turn) => isActive(turn.status));
   return (
     <>
       {props.messages.map((message) => (
         <Fragment key={message.id}>
           <MessageView message={message} username={props.username} agentName={agentName} />
-          {turnsByUser.has(message.id) && <TurnProcess turn={turnsByUser.get(message.id)!} />}
+          {turnsByMessage.get(message.id)?.map(turn => <TurnProcess key={turn.id} turn={turn} />)}
         </Fragment>
       ))}
       {props.turns.filter((turn) => !messageIds.has(turn.user_message_id)).map((turn) => (
-        <TurnProcess key={turn.id} turn={turn} />
+        <div key={turn.id} id={`conversation-turn-${turn.id}`} className="conversation-turn-anchor" tabIndex={-1}>
+          <TurnProcess turn={turn} />
+        </div>
       ))}
       {!liveTurn && props.streaming && (
         <article className="message message-assistant">

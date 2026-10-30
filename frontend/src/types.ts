@@ -9,14 +9,21 @@ export interface User {
 export interface Slot {
   id: string;
   label: string;
-  cli_types: string[];
-  status: string;
-  assigned_user_id?: string | null;
+  engine: "claude" | "codex";
+  status: "IDLE" | "RATE_LIMITED" | "DISABLED";
+  allowed_user_ids?: string[];
+  max_concurrent_users: 1;
+  in_use: boolean;
+  in_use_by_you: boolean;
+  active_user_id?: string | null;
   home_dir?: string;
+  credential_revision: number;
+  updated_at: string;
 }
 
 export interface DevHost {
   id: string;
+  kind?: "local" | "ssh";
   name: string;
   host: string;
   port: number;
@@ -33,6 +40,9 @@ export interface Project {
   name: string;
   dev_host_id: string;
   remote_path: string;
+  local_path: string;
+  path_mode: "auto" | "direct" | "bwrap" | "symlink";
+  execution_mode: "local" | "direct" | "bwrap" | "symlink" | null;
   sync_status: string;
 }
 
@@ -40,11 +50,23 @@ export interface Session {
   id: string;
   project_id: string;
   engine: "claude" | "codex";
+  slot_id: string | null;
   title: string;
   status: string;
   updated_at: string;
   model?: string | null;
   reasoning_effort?: string | null;
+  permission_mode?: PermissionMode;
+  agent_mode?: AgentMode;
+  role_preset?: RolePreset;
+}
+
+export type PermissionMode = "manual" | "accept-edits" | "auto" | "full-access" | "yolo";
+export type AgentMode = "normal" | "plan";
+export type RolePreset = "default" | "reviewer" | "architect";
+export interface AgentBehavior {
+  agentMode: AgentMode;
+  rolePreset: RolePreset;
 }
 
 export interface AgentSelection {
@@ -101,13 +123,15 @@ export interface Turn {
   started_at: string;
   completed_at?: string | null;
   duration_ms?: number | null;
-  status: "running" | "completed" | "interrupted" | "error";
+  paused_at?: string | null;
+  paused_ms?: number;
+  status: "running" | "pausing" | "paused" | "completed" | "interrupted" | "error";
   items: ActivityItem[];
 }
 
 export interface Overview {
   user: User;
-  slot: Slot | null;
+  slots: Slot[];
   hosts: DevHost[];
   projects: Project[];
   sessions: Session[];
@@ -124,6 +148,51 @@ export interface FileEntry {
   path: string;
   type: "file" | "directory";
   size?: number;
+}
+
+export interface UsageWindow {
+  key: string;
+  label: string;
+  usedPercent: number | null;
+  resetsAt: string | null;
+  windowMinutes: number | null;
+  limited?: boolean;
+}
+
+export interface SlotUsage {
+  slotId: string;
+  state: "pending" | "ok" | "error" | "unavailable";
+  plan: string | null;
+  windows: UsageWindow[];
+  credits: { balance: string | null; unlimited: boolean } | null;
+  limited: boolean | null;
+  observedAt: string | null;
+  checkedAt: string | null;
+  source: "query" | "event" | null;
+  stale: boolean;
+  refreshing: boolean;
+  error: string | null;
+}
+
+export interface SyncScanEntry {
+  path: string;
+  type: "file" | "directory";
+  bytes: number;
+  files: number;
+  tracked: boolean | null;
+}
+
+export interface SyncScan {
+  remotePath: string;
+  totalBytes: number;
+  totalFiles: number;
+  entries: SyncScanEntry[];
+  truncated: boolean;
+}
+
+export interface ProjectUsage {
+  mirrorBytes: number | null;
+  backupBytes: number;
 }
 
 export interface GitState {

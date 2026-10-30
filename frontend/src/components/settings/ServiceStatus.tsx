@@ -76,8 +76,7 @@ export default function ServiceStatus() {
         <div className="info-note">
           <ShieldCheck size={16} />
           <p>
-            官方 CLI 的 OAuth
-            凭据仅在对应槽位内使用。网页不会读取或展示访问令牌。
+            账号槽位管理官方 CLI 的登录凭据，用户会话单独保存。网页不会读取或展示访问令牌。
           </p>
         </div>
       </>
