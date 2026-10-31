@@ -43,7 +43,8 @@ export default function AuthFrame({ settings, preview, children }: {
     ref={frame}
     className={`auth-frame${preview ? " auth-frame-preview" : ""}`}
     title={interpolate(settings.login.texts.frameTitle, settings)}
-    sandbox="allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+    // No sandbox: WebKit skips event listeners on nodes in script-disabled frames, which breaks the
+    // portaled React form. Untrusted content is constrained by DOMPurify and the frame CSP instead.
     srcDoc={frameDocument}
     onLoad={() => setDocument(frame.current?.contentDocument || null)}
     style={{ display: "block", width: "100%", height: preview ? "680px" : "100dvh", border: 0 }}
