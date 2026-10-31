@@ -43,6 +43,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     }) },
   };
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    // Without summarized display the API streams thinking blocks with empty text.
+    '--thinking-display', 'summarized',
     ...(permissionMode === 'bypassPermissions' ? [] : ['--restricted']),
     '--permission-mode', permissionMode, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
     '--setting-sources', '', '--settings', JSON.stringify(settings),
@@ -66,10 +68,10 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   let resultError = '';
   let messageId = '';
   let activeTextIndex: number | undefined;
+  const thinkingBlocks = new Set<number>();
   let textSize = 0;
   const messages = new Map<string, string>();
   const messageGroups = new Map<string, string>();
-  const thinkingBlocks = new Map<number, string>();
   let stopped = false;
   let nativeSessionReceived = false;
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
@@ -96,13 +98,16 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       if (nested?.type === 'content_block_start' && nested.content_block?.type === 'text') {
         activeTextIndex = nested.index;
       }
-      if (nested?.type === 'content_block_start' && nested.content_block?.type === 'thinking') {
-        const id = `${messageId}:thinking:${nested.index}`;
-        thinkingBlocks.set(nested.index, id);
-        services.event('activity', { id, kind: 'reasoning', text: '正在思考…' });
-      }
-      if (nested?.type === 'content_block_stop' && thinkingBlocks.has(nested.index)) {
-        services.event('activity', { id: thinkingBlocks.get(nested.index), kind: 'reasoning', text: '思考已完成' });
+      if (nested?.type === 'content_block_start' && nested.content_block?.type === 'thinking') thinkingBlocks.add(nested.index);
+      if (nested?.type === 'content_block_delta' && nested.delta?.type === 'thinking_delta' && thinkingBlocks.has(nested.index)) {
+        const text = String(nested.delta.thinking ?? '');
+        if (text) {
+          if (textSize + text.length > 8 * 1024 * 1024) {
+            inputError(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
+          }
+          textSize += text.length;
+          services.event('activity', { id: `${messageId}:thinking:${nested.index}`, kind: 'reasoning', text, append: true });
+        }
       }
       if (nested?.type === 'content_block_stop' && nested.index === activeTextIndex) activeTextIndex = undefined;
       if (nested?.type === 'content_block_delta' && nested.delta?.type === 'text_delta') {
