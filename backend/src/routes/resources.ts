@@ -9,6 +9,7 @@ import { appendIgnoreRules, assertIgnorePath } from '../runtime/sync-scan.js';
 import { shellQuote } from '../runtime/types.js';
 import { hostRoutes } from './hosts.js';
 import { localProjectPath } from './local-projects.js';
+import { workspaceFileRoutes } from './workspace-files.js';
 
 const identifier = z.object({ id: z.uuid() });
 const projectInput = z.object({
@@ -21,6 +22,7 @@ const projectInput = z.object({
 }).refine(input => input.source === 'new' || !!input.remotePath, { message: '请选择已有目录', path: ['remotePath'] });
 export function resourceRoutes(app: FastifyInstance, context: Context) {
   hostRoutes(app, context);
+  workspaceFileRoutes(app, context);
   const { store, ssh, workspaces, config, events } = context;
   app.get('/api/projects', async request => store.all(`SELECT projects.* FROM projects
     JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
@@ -115,16 +117,6 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
   app.get('/api/projects/:id/usage', async request => {
     const { id } = identifier.parse(request.params);
     return workspaces.usage(projectFor(context, id, request.user.id));
-  });
-  app.get('/api/projects/:id/files', async request => {
-    const { id } = identifier.parse(request.params);
-    const { path } = z.object({ path: z.string().max(4096).default('') }).parse(request.query);
-    return workspaces.files(projectFor(context, id, request.user.id), path);
-  });
-  app.get('/api/projects/:id/file', async request => {
-    const { id } = identifier.parse(request.params);
-    const { path } = z.object({ path: z.string().min(1).max(4096) }).parse(request.query);
-    return workspaces.file(projectFor(context, id, request.user.id), path);
   });
   app.get('/api/projects/:id/git', async request => {
     const { id } = identifier.parse(request.params);

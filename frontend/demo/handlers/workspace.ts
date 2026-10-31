@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import type { AgentModel, DevHost, Project, SlotUsage } from "../../src/types";
-import { completePaths, gitState, listFiles, readFile, remoteDirectories } from "../filesystem";
+import { completePaths, fileMeta, gitState, listFiles, readFile, remoteDirectories } from "../filesystem";
 import { emit } from "../events";
 import { db } from "../store";
 import { fail, ok, readBody } from "./respond";
@@ -126,9 +126,24 @@ export const workspaceHandlers = [
   http.get("/api/projects/:id/files", ({ request }) =>
     HttpResponse.json({ entries: listFiles(new URL(request.url).searchParams.get("path") || "") })),
   http.get("/api/projects/:id/file", ({ request }) => {
-    const path = new URL(request.url).searchParams.get("path") || "";
+    const meta = fileMeta(new URL(request.url).searchParams.get("path") || "");
+    return meta ? HttpResponse.json(meta) : fail(404, "文件不存在");
+  }),
+  http.get("/api/projects/:id/raw", ({ request }) => {
+    const query = new URL(request.url).searchParams;
+    const path = query.get("path") || "";
     const content = readFile(path);
-    return content === undefined ? fail(404, "文件不存在") : HttpResponse.json({ path, content });
+    if (content === undefined) return fail(404, "文件不存在");
+    const name = path.split("/").pop() || "file";
+    const download = query.get("download") === "1";
+    const types: Record<string, string> = { svg: "image/svg+xml", pdf: "application/pdf" };
+    // The sample PDF is ASCII, so encoding it as UTF-8 yields the exact bytes.
+    return new HttpResponse(new TextEncoder().encode(content), {
+      headers: {
+        "Content-Type": download ? "application/octet-stream" : types[name.split(".").pop() ?? ""] ?? "application/octet-stream",
+        "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
+      },
+    });
   }),
   http.get("/api/projects/:id/git", () => HttpResponse.json(gitState())),
   http.get("/api/projects/:id/completions", ({ request }) =>

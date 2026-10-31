@@ -222,20 +222,28 @@ export class WorkspaceManager {
     const target = await this.safePath(project, path);
     const entries = await readdir(target, {withFileTypes: true});
     const visible = entries.filter(entry => !entry.name.startsWith('.bin') && entry.name !== '.git' && !entry.isSymbolicLink());
-    return {path, entries: visible.map(entry => ({
-      name: entry.name, path: [path.replace(/\/$/, ''), entry.name].filter(Boolean).join('/'),
-      type: entry.isDirectory() ? 'directory' as const : 'file' as const,
-    })).sort((left, right) => (left.type === right.type ? left.name.localeCompare(right.name) : left.type === 'directory' ? -1 : 1))};
+    const listed = await Promise.all(visible.map(async entry => {
+      const type = entry.isDirectory() ? 'directory' as const : 'file' as const;
+      const size = type === 'file' ? await lstat(join(target, entry.name)).then(metadata => metadata.size, () => undefined) : undefined;
+      return { name: entry.name, path: [path.replace(/\/$/, ''), entry.name].filter(Boolean).join('/'), type, size };
+    }));
+    return {path, entries: listed.sort((left, right) => (left.type === right.type ? left.name.localeCompare(right.name) : left.type === 'directory' ? -1 : 1))};
   }
 
-  async file(project: WorkspaceProject, path: string): Promise<{path: string; content: string}> {
+  // Text content is only inlined for small UTF-8 files; anything else is previewed or downloaded through rawFile().
+  async file(project: WorkspaceProject, path: string): Promise<{path: string; size: number; mtime: number; binary: boolean; content?: string}> {
+    const {target, size, mtime} = await this.rawFile(project, path);
+    if (size > 1024 * 1024) return {path, size, mtime, binary: true};
+    const content = await readFile(target);
+    if (content.includes(0)) return {path, size, mtime, binary: true};
+    return {path, size, mtime, binary: false, content: content.toString('utf8')};
+  }
+
+  async rawFile(project: WorkspaceProject, path: string): Promise<{target: string; size: number; mtime: number}> {
     const target = await this.safePath(project, path);
     const metadata = await lstat(target);
     if (!metadata.isFile()) throw new Error('只能预览普通文件');
-    if (metadata.size > 1024 * 1024) throw new Error('文件超过 1 MiB，无法在线预览');
-    const content = await readFile(target);
-    if (content.includes(0)) throw new Error('暂不支持预览二进制文件');
-    return {path, content: content.toString('utf8')};
+    return {target, size: metadata.size, mtime: Math.floor(metadata.mtimeMs)};
   }
 
   async git(userId: string, host: DevHost, project: WorkspaceProject): Promise<{branch: string; status: string; diff: string}> {

@@ -8,6 +8,8 @@
 @import "./styles/agent-settings.css";
 @import "./styles/model-settings.css";
 @import "./styles/inspector.css";
+@import "./styles/file-preview.css";
+@import "./styles/file-viewers.css";
 @import "./styles/dialogs.css";
 @import "./styles/settings.css";
 @import "./styles/user-management.css";

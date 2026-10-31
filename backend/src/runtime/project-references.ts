@@ -28,8 +28,9 @@ export async function expandProjectReferences(workspaces: WorkspaceManager, proj
       text = entries.slice(0, 100).map(item => item.path + (item.type === 'directory' ? '/' : '')).join('\n');
       if (entries.length > 100) text += '\n… directory listing limited to 100 entries';
     } else {
-      try { text = (await workspaces.file(project, path)).content; }
-      catch { throw new HttpError(400, `无法读取引用文件（仅支持不超过 64 KiB 的文本文件）：${path}`); }
+      const content = await workspaces.file(project, path).then(result => result.content, () => undefined);
+      if (content === undefined) throw new HttpError(400, `无法读取引用文件（仅支持不超过 64 KiB 的文本文件）：${path}`);
+      text = content;
       if (Buffer.byteLength(text) > 65536) throw new HttpError(400, `引用文件超过 64 KiB，请改为描述路径让智能体按需读取：${path}`);
     }
     totalBytes += Buffer.byteLength(text);

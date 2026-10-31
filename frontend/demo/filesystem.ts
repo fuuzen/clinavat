@@ -1,4 +1,5 @@
 import type { FileEntry, GitState } from "../src/types";
+import { binarySamples, previewSamples } from "./preview-samples";
 
 const files: Record<string, string> = {
   "README.md": "# 演示项目\n\n这是 Clinavat 在线预览使用的示例仓库，内容均为模拟数据。\n",
@@ -7,7 +8,10 @@ const files: Record<string, string> = {
   "src/config.ts": "export interface AppConfig {\n  port: number;\n  logLevel: \"debug\" | \"info\" | \"warn\";\n}\n",
   "src/cart/useCart.ts": "import { useReducer } from \"react\";\nimport { cartReducer, initialCart } from \"./reducer\";\n\nexport function useCart() {\n  const [cart, dispatch] = useReducer(cartReducer, initialCart);\n  return { cart, dispatch };\n}\n",
   "src/cart/reducer.ts": "export const initialCart = { items: [], coupon: null };\n\nexport function cartReducer(state, action) {\n  return state;\n}\n",
+  ...previewSamples,
 };
+// A fixed timestamp keeps preview URLs stable across demo reloads.
+const demoModified = Date.UTC(2026, 9, 26, 8, 0, 0);
 
 const git: GitState = {
   branch: "feature/request-logging",
@@ -35,7 +39,7 @@ export function listFiles(directory: string): FileEntry[] {
     const [name, ...rest] = path.slice(prefix.length).split("/");
     entries.set(name, rest.length
       ? { name, path: prefix + name, type: "directory" }
-      : { name, path, type: "file", size: content.length });
+      : { name, path, type: "file", size: new TextEncoder().encode(content).length });
   }
   return [...entries.values()].sort((left, right) =>
     left.type === right.type ? left.name.localeCompare(right.name) : left.type === "directory" ? -1 : 1);
@@ -43,6 +47,14 @@ export function listFiles(directory: string): FileEntry[] {
 
 export function readFile(path: string): string | undefined {
   return files[normalize(path)];
+}
+
+export function fileMeta(path: string) {
+  const content = readFile(path);
+  if (content === undefined) return undefined;
+  const size = new TextEncoder().encode(content).length;
+  const binary = binarySamples.has(normalize(path));
+  return { path, size, mtime: demoModified, binary, ...(binary ? {} : { content }) };
 }
 
 export function completePaths(query: string) {

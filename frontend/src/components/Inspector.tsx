@@ -2,8 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   ChevronRight,
-  File,
-  FileCode2,
   Files,
   Folder,
   FolderCheck,
@@ -17,7 +15,9 @@ import {
 } from "lucide-react";
 import { api, errorText, formatBytes, post } from "../api";
 import type { FileEntry, GitState, Project, ProjectUsage } from "../types";
+import { iconFor, kindInfo, detectKind } from "./preview/fileKinds";
 const TerminalView = lazy(() => import("./TerminalView"));
+const FilePreview = lazy(() => import("./preview/FilePreview"));
 
 interface Props {
   tabRequest?: { tab: "changes"; id: number };
@@ -38,10 +38,8 @@ export default function Inspector({
   useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
-  const [selected, setSelected] = useState<{
-    path: string;
-    content: string;
-  } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [previewReloads, setPreviewReloads] = useState(0);
   const [git, setGit] = useState<GitState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -88,26 +86,14 @@ export default function Inspector({
   useEffect(() => {
     void load();
   }, [load, refresh]);
-  async function openFile(entry: FileEntry) {
-    if (entry.type === "directory") {
-      setPath(entry.path);
-      setSelected(null);
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      setSelected(
-        await api<{ path: string; content: string }>(
-          `/projects/${project!.id}/file?path=${encodeURIComponent(entry.path)}`,
-        ),
-      );
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
+  function openFile(entry: FileEntry) {
+    if (entry.type === "directory") setPath(entry.path);
+    setSelected(entry.type === "file" ? entry.path : null);
   }
+  const openLinkedFile = useCallback((target: string) => {
+    setPath(target.split("/").slice(0, -1).join("/"));
+    setSelected(target);
+  }, []);
   async function sync() {
     if (!project) return;
     setSyncing(true);
@@ -137,7 +123,10 @@ export default function Inspector({
         <div>
           <button
             className="inspector-refresh"
-            onClick={() => void load()}
+            onClick={() => {
+              setPreviewReloads((count) => count + 1);
+              void load();
+            }}
             disabled={busy || !project}
             aria-label="刷新工作区"
           >
@@ -211,24 +200,21 @@ export default function Inspector({
           ) : tab === "files" ? (
             <div className="file-browser">
               {selected ? (
-                <>
-                  <div className="file-breadcrumb">
-                    <button
-                      className="icon-button"
-                      onClick={() => setSelected(null)}
-                      aria-label="返回文件列表"
-                    >
-                      <ArrowLeft size={14} />
-                    </button>
-                    <FileCode2 size={14} />
-                    <span title={selected.path}>{selected.path}</span>
-                  </div>
-                  <div className="file-preview">
-                    <pre>
-                      <code>{selected.content}</code>
-                    </pre>
-                  </div>
-                </>
+                <Suspense
+                  fallback={
+                    <div className="loading-state">
+                      <LoaderCircle size={18} className="spin" />
+                    </div>
+                  }
+                >
+                  <FilePreview
+                    projectId={project.id}
+                    path={selected}
+                    refresh={refresh + previewReloads}
+                    onBack={() => setSelected(null)}
+                    onOpen={openLinkedFile}
+                  />
+                </Suspense>
               ) : (
                 <>
                   <div className="file-breadcrumb">
@@ -271,22 +257,25 @@ export default function Inspector({
                               ? -1
                               : 1,
                         )
-                        .map((entry) => (
+                        .map((entry) => {
+                          const FileIcon = iconFor(entry.path);
+                          return (
                           <button
                             key={entry.path}
-                            onClick={() => void openFile(entry)}
+                            onClick={() => openFile(entry)}
                           >
                             {entry.type === "directory" ? (
                               <Folder size={15} className="folder-icon" />
                             ) : (
-                              <File size={14} />
+                              <FileIcon size={14} className={`tone-${kindInfo[detectKind(entry.path)].tone}`} />
                             )}
                             <span>{entry.name}</span>
                             {entry.type === "directory" && (
                               <ChevronRight size={12} />
                             )}
                           </button>
-                        ))}
+                          );
+                        })}
                     </div>
                   )}
                 </>
