@@ -1,14 +1,9 @@
 .workbench-view { display: contents; }
 .workbench-view[hidden], .admin-view[hidden], .admin-panel [hidden] { display: none; }
 .admin-view { display: flex; min-width: 0; min-height: 0; }
-.user-profile { flex-wrap: wrap; }
-.sidebar-admin-entry {
-  display: flex; align-items: center; gap: 9px; flex: 0 0 100%;
-  padding: 10px 11px; margin-bottom: 5px; border: 1px solid var(--line);
-  border-radius: 7px; color: var(--text-secondary); text-align: left; font-size: 12px;
-}
-.sidebar-admin-entry > svg:last-child { margin-left: auto; }
-.sidebar-admin-entry:hover, .sidebar-admin-entry.active { background: var(--accent-dim); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.user-profile > .sidebar-admin-entry { margin-right: -6px; }
+.sidebar-admin-entry:hover:not(:disabled), .sidebar-admin-entry.active { color: var(--accent); }
+.sidebar-admin-entry.active { background: var(--accent-dim); }
 .admin-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; container: admin / inline-size; }
 .admin-navigation { display: flex; align-items: center; flex-shrink: 0; min-width: 0; border-bottom: 1px solid var(--line); }
 .admin-tabs { display: flex; flex: 1; min-width: 0; gap: 23px; padding: 0 38px; overflow-x: auto; scrollbar-width: thin; }

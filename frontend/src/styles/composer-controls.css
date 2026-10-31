@@ -74,8 +74,7 @@
     border-radius: 8px;
     background: color-mix(in srgb, var(--permission-color) 11%, transparent);
   }
-  .composer-toolbar > .send-button .send-button-symbol,
-  .composer-dock > .send-button .send-button-symbol {
+  .composer-toolbar > .send-button .send-button-symbol {
     width: 32px;
     height: 32px;
   }
@@ -91,64 +90,5 @@
     border: 0;
     border-radius: 12px;
     background: transparent;
-  }
-  .composer-floating-controls {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .composer-floating-controls > .scroll-bottom {
-    grid-column: 1;
-    justify-self: start;
-  }
-  .composer-dock {
-    grid-column: 2;
-    max-width: none;
-    padding: 2px;
-    gap: 0;
-  }
-  .composer-dock > .send-button,
-  .composer-dock > .composer-restore {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
-  }
-  .composer-restore .composer-dock-label,
-  .composer-restore .composer-draft-preview,
-  .composer-restore > svg:last-child {
-    display: none;
-  }
-  .composer-restore > svg:first-of-type {
-    width: 20px;
-    height: 20px;
-  }
-  .composer-restore[data-has-draft]::after {
-    content: "";
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--accent);
-  }
-  .composer-dock .composer-restore .composer-dock-warning {
-    display: block;
-    position: absolute;
-    right: 1px;
-    bottom: 1px;
-  }
-  .composer-area .scroll-bottom {
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    min-height: 44px;
-    padding: 0;
-  }
-  .composer-area:not(.composer-area-minimized) > .scroll-bottom {
-    top: -43px;
-  }
-  .scroll-bottom-label {
-    display: none;
   }
 }

@@ -16,6 +16,9 @@
 .composer-body {
   position: relative;
 }
+.composer-pane {
+  position: relative;
+}
 .composer-pane:not([hidden]) {
   transform-origin: bottom right;
   animation: composer-expand 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -144,7 +147,7 @@
 .composer-floating-controls {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-height: 38px;
@@ -154,27 +157,17 @@
   pointer-events: auto;
 }
 .composer-floating-controls > .scroll-bottom {
-  position: static;
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1;
-  justify-self: center;
-  min-height: 34px;
-  transform: none;
-  border-radius: 22px;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  justify-self: start;
 }
 .composer-dock {
   display: flex;
   align-items: center;
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 1;
   justify-self: end;
-  gap: 5px;
-  max-width: min(360px, 100%);
-  min-height: 38px;
-  padding: 3px 5px;
+  padding: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 24px;
   background: color-mix(in srgb, var(--surface) 85%, transparent);
@@ -183,51 +176,44 @@
   -webkit-backdrop-filter: blur(20px) saturate(150%);
   animation: composer-dock-appear 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.composer-dock > .send-button {
-  width: 28px;
-  height: 28px;
+.composer-dock > .send-button,
+.composer-dock > .composer-restore {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   margin-left: 0;
+  padding: 0;
+}
+.composer-dock > .send-button .send-button-symbol {
+  width: 32px;
+  height: 32px;
 }
 .composer-restore {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 30px;
-  padding: 4px 10px;
   border-radius: 18px;
   color: var(--text-secondary);
-  font-size: 12px;
-  white-space: nowrap;
 }
 .composer-restore:hover {
   color: var(--text);
   background: var(--hover);
 }
-.composer-restore > svg,
-.composer-restore > span:not(.composer-draft-preview) {
-  flex-shrink: 0;
-}
-.composer-dock-grip {
+.composer-restore[data-has-draft]::after {
+  content: "";
   position: absolute;
-  top: -4px;
-  left: calc(50% - 10px);
-  width: 20px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--text-secondary);
-  opacity: 0.25;
-}
-.composer-draft-preview {
-  min-width: 0;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--muted);
+  top: 7px;
+  right: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 .composer-dock-warning {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
   color: var(--warning);
 }
 @keyframes composer-expand {
@@ -264,25 +250,27 @@
   border: 1px solid var(--warning-line);
 }
 .scroll-bottom {
-  position: absolute;
-  top: -23px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: 1px solid var(--line-strong);
-  background: var(--surface);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   color: var(--text-secondary);
-  font-size: 11px;
-  border-radius: 15px;
-  padding: 6px 10px;
   box-shadow: 0 5px 20px var(--shadow);
-  z-index: 2;
 }
-@media (max-width: 480px) {
-  .composer-restore > svg:last-child,
-  .composer-dock:has(.stop-button) .composer-dock-warning {
-    display: none;
-  }
+.scroll-bottom:hover {
+  color: var(--text);
+}
+.composer-pane > .scroll-bottom {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 2;
 }

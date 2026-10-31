@@ -1,5 +1,5 @@
 .turn-process {
-  margin: -10px 0 24px 31px;
+  margin: -10px 0 24px;
   min-width: 0;
 }
 .activity-toggle {
@@ -42,7 +42,6 @@
   margin-bottom: 12px;
 }
 .activity-text .markdown {
-  padding-left: 0;
   color: var(--text-secondary);
   font-size: 13px;
 }
@@ -83,9 +82,6 @@
   overflow-wrap: anywhere;
 }
 @media (max-width: 700px) {
-  .turn-process {
-    margin-left: 0;
-  }
   .turn-details {
     padding-left: 11px;
   }

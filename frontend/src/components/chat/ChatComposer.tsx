@@ -9,7 +9,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { AlertCircle, ArrowDown, ArrowUp, ChevronUp, LoaderCircle, MessageSquare, Minus, Pause, Play, ShieldCheck, Square } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, LoaderCircle, MessageSquare, Minus, Pause, Play, ShieldCheck, Square } from "lucide-react";
 import CompletionMenu from "./composer/CompletionMenu";
 import { useComposerCompletion } from "./composer/useComposerCompletion";
 import type { ComposerCommand } from "./composer/commands";
@@ -58,11 +58,9 @@ export default function ChatComposer(props: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const minimizeRef = useRef<HTMLButtonElement>(null);
   const restoreRef = useRef<HTMLButtonElement>(null);
-  const focusAfterExpand = useRef(false);
+  const focusAfterExpand = useRef<"input" | "minimize" | null>(null);
   const hasDraft = !!props.draft.trim();
-  const paused = props.runStatus === "paused";
-  const pausing = props.runStatus === "pausing";
-  const resumable = paused || pausing;
+  const resumable = props.runStatus === "paused" || props.runStatus === "pausing";
   const pauseLabel = resumable ? "继续任务" : "暂停任务";
   const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus;
   const completion = useComposerCompletion({
@@ -76,16 +74,17 @@ export default function ChatComposer(props: Props) {
     else minimizeRef.current?.focus({ preventScroll: true });
   }
 
-  function expand() {
-    if (!minimized) focusInput();
-    else {
-      setCollapsing(false);
-      focusAfterExpand.current = true;
-      setMinimized(false);
+  function expand(focusDraft = true) {
+    if (!minimized) {
+      if (focusDraft) focusInput();
+      return;
     }
+    setCollapsing(false);
+    focusAfterExpand.current = focusDraft ? "input" : "minimize";
+    setMinimized(false);
   }
 
-  useImperativeHandle(props.ref, () => ({ focus: expand }));
+  useImperativeHandle(props.ref, () => ({ focus: () => expand() }));
 
   useEffect(() => {
     if (!collapsing) return;
@@ -96,8 +95,9 @@ export default function ChatComposer(props: Props) {
   useLayoutEffect(() => {
     if (minimized) restoreRef.current?.focus({ preventScroll: true });
     else if (focusAfterExpand.current) {
-      focusAfterExpand.current = false;
-      focusInput();
+      if (focusAfterExpand.current === "input") focusInput();
+      else minimizeRef.current?.focus({ preventScroll: true });
+      focusAfterExpand.current = null;
     }
   }, [minimized]);
 
@@ -153,13 +153,11 @@ export default function ChatComposer(props: Props) {
   const latestButton = (
     <button className="scroll-bottom" type="button" onClick={props.onScrollToBottom} aria-label="最新消息" title="最新消息">
       <ArrowDown size={15} aria-hidden="true" />
-      <span className="scroll-bottom-label">最新消息</span>
     </button>
   );
 
   return (
     <div className={`composer-area${minimized ? " composer-area-minimized" : ""}`}>
-      {props.showScrollToBottom && !minimized && latestButton}
       <div
         className="composer-pane"
         hidden={minimized && !collapsing}
@@ -169,6 +167,7 @@ export default function ChatComposer(props: Props) {
           if (event.target === event.currentTarget && minimized) setCollapsing(false);
         }}
       >
+        {props.showScrollToBottom && !minimized && latestButton}
         {props.warning && <div className="composer-warning"><ShieldCheck size={14} aria-hidden="true" />{props.warning}</div>}
         <div className={`composer${props.active ? " composer-active" : ""}`}>
           <div id={contentId} className="composer-body">
@@ -236,18 +235,15 @@ export default function ChatComposer(props: Props) {
             className="composer-restore"
             data-has-draft={hasDraft || undefined}
             type="button"
-            onClick={expand}
+            // Touch keyboards open after the layout settles and can cover the expanded composer.
+            onClick={() => expand(!window.matchMedia("(pointer: coarse)").matches)}
             aria-label={`${hasDraft ? "展开输入框，继续编辑草稿" : "展开输入框"}${props.warning ? `。${props.warning}` : ""}`}
             aria-expanded="false"
             aria-controls={contentId}
             title={props.warning || (hasDraft ? "草稿已保留，点击继续编辑" : "展开输入框")}
           >
-            <span className="composer-dock-grip" aria-hidden="true" />
-            {resumable ? <Pause size={14} aria-hidden="true" /> : props.active ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <MessageSquare size={14} aria-hidden="true" />}
-            <span className="composer-dock-label">{paused ? "已暂停" : pausing ? "正在暂停" : hasDraft ? "继续编辑" : props.active ? "生成中" : "发消息"}</span>
-            {hasDraft && <span className="composer-draft-preview">{props.draft}</span>}
+            {resumable ? <Pause size={20} aria-hidden="true" /> : props.active ? <LoaderCircle className="spin" size={20} aria-hidden="true" /> : <MessageSquare size={20} aria-hidden="true" />}
             {props.warning && <AlertCircle size={13} className="composer-dock-warning" aria-hidden="true" />}
-            <ChevronUp size={13} aria-hidden="true" />
           </button>
           {props.active && <>{pauseButton}{stopButton}</>}
         </div>

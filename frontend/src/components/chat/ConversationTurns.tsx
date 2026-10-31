@@ -1,8 +1,7 @@
 import { Fragment } from "react";
-import { Sparkles } from "lucide-react";
 import type { Message, ToolEvent, Turn } from "../../types";
 import ExecutionGroup from "./ExecutionGroup";
-import MessageView, { Markdown } from "./MessageView";
+import MessageView, { AgentAvatar, Markdown } from "./MessageView";
 import TurnProcess from "./TurnProcess";
 import { isActive } from "../../api";
 
@@ -16,7 +15,8 @@ interface Props {
 }
 
 export default function ConversationTurns(props: Props) {
-  const agentName = props.engine === "codex" ? "Codex" : "Claude Code";
+  const engine = props.engine ?? "claude";
+  const agentName = engine === "codex" ? "Codex" : "Claude Code";
   const messageIds = new Set(props.messages.map((message) => message.id));
   const turnsByMessage = new Map<string, Turn[]>();
   const previousByUser = new Map<string, Turn>();
@@ -34,7 +34,7 @@ export default function ConversationTurns(props: Props) {
     <>
       {props.messages.map((message) => (
         <Fragment key={message.id}>
-          <MessageView message={message} username={props.username} agentName={agentName} />
+          <MessageView message={message} username={props.username} agentName={agentName} engine={engine} />
           {turnsByMessage.get(message.id)?.map(turn => <TurnProcess key={turn.id} turn={turn} />)}
         </Fragment>
       ))}
@@ -46,7 +46,7 @@ export default function ConversationTurns(props: Props) {
       {!liveTurn && props.streaming && (
         <article className="message message-assistant">
           <div className="message-author">
-            <span className="agent-avatar"><Sparkles size={14} /></span>
+            <AgentAvatar engine={engine} />
             <strong>{agentName}</strong>
             <span className="stream-indicator">正在生成</span>
           </div>

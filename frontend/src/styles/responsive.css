@@ -17,9 +17,6 @@
   .sidebar-brand {
     padding-left: 23px;
   }
-  .version-badge {
-    font-size: 11px;
-  }
   .conversation {
     padding-top: 42px;
   }
@@ -35,11 +32,8 @@
     padding: 0 16px;
     gap: 8px;
   }
-  .version-badge {
-    display: none;
-  }
   .conversation {
-    padding: 25px;
+    padding: 25px 23px;
   }
   .composer-area {
     padding: 10px 23px 17px;
@@ -168,9 +162,6 @@
   .sidebar-brand .mobile-only {
     margin-left: auto;
   }
-  .sidebar-brand .version-badge {
-    display: none;
-  }
   .sidebar-overlay {
     position: fixed;
     inset: 0;
@@ -256,7 +247,7 @@
     display: none;
   }
   .conversation {
-    padding: 25px 20px;
+    padding: 25px 12px;
   }
   .project-welcome,
   .with-inspector .project-welcome {
@@ -322,39 +313,17 @@
   .composer-toolbar {
     padding: 0 8px 6px;
   }
-  .composer-dock {
-    min-height: 36px;
-    max-width: 100%;
-    gap: 4px;
-    padding: 2px 3px;
-  }
   .composer-floating-controls {
     gap: 6px;
   }
-  .composer-restore {
-    gap: 4px;
-    padding-inline: 4px;
-    font-size: 11px;
-  }
-  .composer-draft-preview,
-  .composer-dock-label {
-    display: none;
-  }
   .markdown {
     font-size: 14px;
-    padding-left: 0;
   }
   .message-author {
     margin-bottom: 14px;
   }
   .message {
     padding-bottom: 27px;
-  }
-  .tools-list {
-    padding-left: 0;
-  }
-  .approval-card {
-    margin-left: 0;
   }
   .hover-action {
     opacity: 0.65;

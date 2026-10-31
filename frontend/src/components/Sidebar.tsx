@@ -5,7 +5,6 @@ import {
   CircleHelp,
   Folder,
   FolderPlus,
-  GitBranch,
   LogOut,
   MessageSquare,
   Monitor,
@@ -80,7 +79,6 @@ export default function Sidebar(props: Props) {
           >
             <X size={18} />
           </button>
-          <span className="version-badge">WORKSPACE</span>
         </div>
         <div className="sidebar-search">
           <Search size={14} />
@@ -376,38 +374,12 @@ export default function Sidebar(props: Props) {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="slot-summary">
-            <div className="slot-icon">
-              <GitBranch size={17} />
-            </div>
-            <div>
-              <strong>{overview.slots.length ? `${overview.slots.length} 个授权槽位` : "尚无账号授权"}</strong>
-              <span>
-                {overview.slots.length ? "在各个对话中选择账号" : "请联系管理员开放槽位访问"}
-              </span>
-            </div>
-            <span
-              className={`status-dot ${overview.slots.some((slot) => slot.status === "IDLE") ? "online" : ""}`}
-            />
-          </div>
           <button className="sidebar-settings" onClick={props.onSettings}>
             <Settings2 size={16} />
             <span>工作台设置</span>
             <CircleHelp size={14} />
           </button>
           <div className="user-profile">
-            {overview.user.role === "admin" && (
-              <button
-                className={`sidebar-admin-entry ${props.adminOpen ? "active" : ""}`}
-                onClick={() => { props.onAdmin(); props.onClose(); }}
-                aria-pressed={props.adminOpen}
-                title={props.adminOpen ? "返回工作台" : "打开管理面板"}
-              >
-                <ShieldCheck size={16} />
-                <span>管理面板</span>
-                <ChevronRight size={14} />
-              </button>
-            )}
             <span className="avatar">
               {overview.user.username.slice(0, 1).toUpperCase()}
             </span>
@@ -417,6 +389,17 @@ export default function Sidebar(props: Props) {
                 {overview.user.role === "admin" ? "管理员" : "个人工作空间"}
               </small>
             </div>
+            {overview.user.role === "admin" && (
+              <button
+                className={`icon-button sidebar-admin-entry ${props.adminOpen ? "active" : ""}`}
+                onClick={() => { props.onAdmin(); props.onClose(); }}
+                aria-pressed={props.adminOpen}
+                title={props.adminOpen ? "返回工作台" : "打开管理面板"}
+                aria-label={props.adminOpen ? "返回工作台" : "打开管理面板"}
+              >
+                <ShieldCheck size={16} />
+              </button>
+            )}
             <button
               className="icon-button"
               onClick={props.onLogout}

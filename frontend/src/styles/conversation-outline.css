@@ -23,6 +23,13 @@
   max-height: min(60%, 320px);
   display: flex;
   pointer-events: auto;
+  opacity: 0.55;
+  transition: opacity 140ms ease;
+}
+.outline-rail:hover,
+.outline-rail:focus-within,
+.outline-engaged .outline-rail {
+  opacity: 1;
 }
 .outline-marks {
   width: 100%;
@@ -142,11 +149,6 @@
   outline-offset: 8px;
   border-radius: 4px;
 }
-@media (max-width: 1200px) {
-  .chat-timeline:has(.conversation-outline) .conversation {
-    padding-right: 44px;
-  }
-}
 @media (max-width: 700px), (pointer: coarse) {
   .conversation-outline {
     right: 4px;
@@ -162,6 +164,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .outline-rail,
   .outline-mark > span {
     transition: none;
   }

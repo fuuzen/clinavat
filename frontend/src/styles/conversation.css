@@ -1,7 +1,7 @@
 .conversation {
   max-width: 840px;
   width: 100%;
-  padding: 30px 42px;
+  padding: 30px 35px;
   margin: 0 auto;
 }
 .project-welcome {
@@ -113,6 +113,12 @@
   color: var(--muted);
   margin-left: 4px;
 }
+.message-user > .message-author {
+  flex-direction: row-reverse;
+}
+.message-user > .message-author time {
+  margin: 0 4px 0 0;
+}
 .mini-avatar,
 .agent-avatar {
   display: flex;
@@ -136,7 +142,6 @@
   line-height: 1.95;
   color: var(--text);
   overflow-wrap: anywhere;
-  padding-left: 31px;
 }
 .markdown > *:first-child {
   margin-top: 0;
@@ -228,7 +233,6 @@
   animation: pulse 1s infinite;
 }
 .tools-list {
-  padding-left: 31px;
   margin: 0 0 25px;
 }
 .tool-card {
@@ -280,7 +284,7 @@
 .approval-card {
   border: 1px solid var(--warning-line);
   border-radius: 9px;
-  margin: 5px 0 25px 31px;
+  margin: 5px 0 25px;
   background: var(--warning-bg);
 }
 .approval-heading {
@@ -334,7 +338,6 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-left: 32px;
   color: var(--muted);
   font-size: 12px;
   padding: 10px 0;
