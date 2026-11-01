@@ -1,8 +1,7 @@
 import { shellQuote, type WorkspaceProject } from './types.js';
-import type { ExecutionBinaries } from '../execution/types.js';
 import { renderRemoteRunner } from './remote-paths.js';
 
-export function renderRemoteShell(binaries: Pick<ExecutionBinaries, 'ssh' | 'mutagen'>, project: WorkspaceProject, sshConfig: string, sshTarget: string, environment: NodeJS.ProcessEnv): string {
+export function renderRemoteShell(binaries: { ssh: string; mutagen: string }, project: WorkspaceProject, sshConfig: string, sshTarget: string, environment: NodeJS.ProcessEnv): string {
   const variables = {
     LOCAL_ROOT: project.local_path, REMOTE_RUNNER: renderRemoteRunner(project),
     SYNC_NAME: project.sync_name, SSH_CONFIG: sshConfig, SSH_TARGET: sshTarget,

@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { suspenderOf, type ProcessSuspender } from '../execution/suspension.js';
 import { readFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,7 +13,7 @@ export interface NativeRunDriver {
 }
 interface ProcessIdentity { pid: number; start: string }
 interface ProcessInfo extends ProcessIdentity { parent: number; group: number; status: string }
-interface Root { child: ChildProcess; identity?: ProcessIdentity }
+interface Root { child: ChildProcess; identity?: ProcessIdentity; suspender?: ProcessSuspender }
 interface Gate { resolve(): void; reject(error: Error): void }
 
 function processInfo(pid: number, contents: string): ProcessInfo {
@@ -69,6 +70,7 @@ export class RunControl {
   private current: RunState = 'running';
   private roots = new Set<Root>();
   private frozen = new Map<number, ProcessIdentity>();
+  private frozenDelegates = new Set<ProcessSuspender>();
   private listeners = new Set<(state: RunState) => void>();
   private gates = new Set<Gate>();
   private timers = new Set<() => void>();
@@ -84,7 +86,7 @@ export class RunControl {
 
   track(child: ChildProcess): () => void {
     if (this.closed) throw new Error('运行控制已关闭');
-    const root: Root = { child };
+    const root: Root = { child, suspender: suspenderOf(child) };
     this.roots.add(root);
     const remove = () => { this.roots.delete(root); child.removeListener('close', remove); };
     child.once('close', remove);
@@ -129,8 +131,7 @@ export class RunControl {
     if (!this.native) {
       ++this.generation;
       this.pending = undefined;
-      try { this.thaw(); this.openGates(); return Promise.resolve(); }
-      catch (error) { return Promise.reject(error); }
+      return this.thawDelegates().then(() => { this.thaw(); this.openGates(); });
     }
     if (this.current === 'running' && !this.pending) return Promise.resolve();
     const driver = this.native;
@@ -152,13 +153,15 @@ export class RunControl {
   }
 
   close(): void {
-    if (this.closed && !this.frozen.size) return;
+    if (this.closed && !this.frozen.size && !this.frozenDelegates.size) return;
     this.closed = true;
     ++this.generation;
     this.cancelClose();
     let failure: unknown;
     try { this.native?.close?.(); } catch (error) { failure = error; }
     try { this.thaw(); } catch (error) { failure ??= error; }
+    // Termination follows; a frozen process cannot act on it until thawed.
+    void this.thawDelegates().catch(() => undefined);
     for (const cancel of [...this.timers]) cancel();
     for (const gate of [...this.gates]) gate.reject(new Error('会话已结束'));
     this.listeners.clear();
@@ -241,6 +244,7 @@ export class RunControl {
     const selected = new Set<number>();
     const groups = new Set<number>();
     for (const root of this.roots) {
+      if (root.suspender) continue;
       const child = root.child;
       if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
       const info = processes.get(child.pid);
@@ -274,7 +278,8 @@ export class RunControl {
       const processes = await snapshot();
       if (this.closed || this.generation !== generation) return;
       const descendants = this.descendants(processes);
-      if (!descendants.length) throw new Error('当前执行已结束或尚未就绪，无法暂停');
+      const delegates = [...this.roots].flatMap(root => root.suspender ? [root.suspender] : []);
+      if (!descendants.length && !delegates.length) throw new Error('当前执行已结束或尚未就绪，无法暂停');
       const remote = await Promise.all(descendants.map(remoteExecution));
       if (this.closed || this.generation !== generation) return;
       if (remote.some(Boolean)) {
@@ -282,6 +287,20 @@ export class RunControl {
         previous = '';
         freezingSince = 0;
         await delay(100);
+        continue;
+      }
+      let delegatesSettled = true;
+      for (const delegate of delegates) {
+        if (await delegate.freeze()) this.frozenDelegates.add(delegate);
+        else delegatesSettled = false;
+      }
+      if (this.closed || this.generation !== generation) { await this.thawDelegates(); return; }
+      if (!delegatesSettled) {
+        await this.thawDelegates();
+        this.thaw();
+        previous = '';
+        freezingSince = 0;
+        await delay(500);
         continue;
       }
       freezingSince ||= Date.now();
@@ -301,6 +320,12 @@ export class RunControl {
       }
       await delay(20);
     }
+  }
+
+  private async thawDelegates(): Promise<void> {
+    const delegates = [...this.frozenDelegates];
+    this.frozenDelegates.clear();
+    await Promise.all(delegates.map(delegate => delegate.thaw()));
   }
 
   private thaw(): void {

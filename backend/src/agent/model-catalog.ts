@@ -31,7 +31,7 @@ const effortOption = (value: string) => ({ value, label: effortLabels[value] || 
 
 async function codexModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
   const { execution } = config;
-  const binary = await execution.resolveBinary(context.user.id, execution.binaries.codex);
+  const binary = await execution.binary(agentScope(context), 'codex');
   const child = await execution.spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
     scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
   });
@@ -89,7 +89,7 @@ async function codexModels(config: AgentConfig, context: AgentContext): Promise<
 
 async function claudeModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
   const { execution } = config;
-  const binary = await execution.resolveBinary(context.user.id, execution.binaries.claude);
+  const binary = await execution.binary(agentScope(context), 'claude');
   const child = await execution.spawn(binary, [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--restricted', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',

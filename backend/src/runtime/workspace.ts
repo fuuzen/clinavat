@@ -36,16 +36,17 @@ export class WorkspaceManager {
   private async mutagen(project: WorkspaceProject, args: string[], timeout = 60_000) {
     this.validate(project);
     if (project.execution_mode === 'local') throw new Error('本机项目不使用文件同步');
-    const binary = this.execution.binaries.mutagen;
+    const scope = this.scope(project);
+    const binary = await this.execution.binary(scope, 'mutagen');
     const result = await this.execution.run(binary, args, {
-      scope: this.scope(project), env: await this.ssh.mutagenEnvironment(project.user_id), timeout,
+      scope, env: await this.ssh.mutagenEnvironment(project.user_id), timeout,
     });
     if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${binary} 退出码 ${result.code}`).trim().slice(0, 4000));
     return result;
   }
 
   private scope(project: WorkspaceProject): ExecutionScope {
-    return { userId: project.user_id, paths: [project.local_path] };
+    return { userId: project.user_id, paths: [project.local_path], trusted: project.execution_mode === 'local' };
   }
 
   async create(userId: string, host: DevHost, project: WorkspaceProject): Promise<void> {
@@ -66,7 +67,11 @@ export class WorkspaceManager {
     const environment = await this.ssh.mutagenEnvironment(project.user_id);
     const binDirectory = join(project.local_path, '.bin');
     await mkdir(binDirectory, {recursive: true, mode: 0o700});
-    await atomicWrite(join(binDirectory, 'remote-shell'), renderRemoteShell(this.execution.binaries, project,
+    const binMetadata = await lstat(binDirectory);
+    if (!binMetadata.isDirectory() || binMetadata.isSymbolicLink()) throw new Error('项目执行器目录必须是实际目录');
+    await atomicWrite(join(binDirectory, 'remote-shell'), renderRemoteShell({
+      ssh: await this.execution.binary(this.scope(project), 'ssh'), mutagen: await this.execution.binary(this.scope(project), 'mutagen'),
+    }, project,
       this.ssh.configPath(project.user_id), this.ssh.alias(host), environment), 0o500);
   }
 
@@ -118,6 +123,8 @@ export class WorkspaceManager {
       if (entries.some(name => name !== '.bin')) {
         const backupRoot = join(this.config.dataDir, 'backups', 'workspaces');
         await mkdir(backupRoot, { recursive: true, mode: 0o700 });
+        // A guest keeps its mount on the moved directory otherwise, and would write into the backup.
+        await this.execution.revoke(project.user_id, [project.local_path]);
         await rename(project.local_path, join(backupRoot, `${project.id}-${Date.now()}`));
       }
     }
@@ -179,6 +186,7 @@ export class WorkspaceManager {
     // Stop propagation before deleting the local mirror; reversing this order could delete remote source files.
     try { await this.mutagen(project, ['sync', 'terminate', project.sync_name]); }
     catch (error) { if (!this.missingSession(error, project)) throw error; }
+    await this.execution.revoke(project.user_id, [project.local_path]);
     await rm(project.local_path, {recursive: true, force: true});
   }
 

@@ -108,7 +108,7 @@ export async function accessCodexGoal(
     return null;
   }
   const { execution } = config;
-  const binary = await execution.resolveBinary(context.user.id, execution.binaries.codex);
+  const binary = await execution.binary(agentScope(context), 'codex');
   const arguments_ = codexServerArguments(context);
   if (signal?.aborted) throw new Error('目标操作已取消');
   const child = await execution.spawn(binary, arguments_, {

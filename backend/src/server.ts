@@ -29,6 +29,7 @@ import { SiteSettingsService } from './site-settings.js';
 import type { Host, Project, Session } from './models.js';
 import { AccountCredentials } from './accounts/credentials.js';
 import { SlotUsage } from './accounts/usage.js';
+import { LxdExecutionHost } from './execution/lxd-host.js';
 import { ProcessExecutionHost } from './execution/process-host.js';
 
 const app = Fastify({
@@ -38,7 +39,8 @@ const app = Fastify({
 const store = new Store(config.dataDir);
 const siteAccess = new SiteAccess(store, config);
 let onSlotActivity: (slotId: string) => void = () => undefined;
-const execution = new ProcessExecutionHost(config);
+const localExecution = new ProcessExecutionHost(config);
+const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, localExecution) : localExecution;
 for (const slot of store.all<{ home_dir: string }>('SELECT home_dir FROM account_slots')) await execution.assertReleased(slot.home_dir);
 const credentials = new AccountCredentials(config.dataDir, store, execution, slotId => onSlotActivity(slotId));
 await credentials.recover();
@@ -106,7 +108,14 @@ const agents = new AgentManager(agentConfig, {
   async updateSession(sessionId, fields) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
     if (!session) return;
-    if (fields.jsonl_file_path) fields = { ...fields, jsonl_file_path: await realpath(fields.jsonl_file_path) };
+    if (fields.jsonl_file_path) {
+      // Codex may return its rollout path before asynchronous persistence creates this optional metadata file.
+      const transcript = await realpath(fields.jsonl_file_path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      fields = { ...fields, jsonl_file_path: transcript };
+    }
     for (const key of ['native_session_id', 'status', 'jsonl_file_path'] as const) {
       if (fields[key] !== undefined) store.run(`UPDATE sessions SET ${key}=?,updated_at=datetime('now') WHERE id=?`, fields[key]!, sessionId);
     }
@@ -178,5 +187,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
 });
 try {
   await app.listen({ host: config.host, port: config.port });
+  // Guests run their own Mutagen daemons; asking for status boots the VM and restarts the daemon. Not awaited,
+  // because a cold boot takes about a minute per user and the site must stay available meanwhile.
+  if (execution.kind === 'vm') {
+    void Promise.allSettled(store.all<Project>("SELECT * FROM projects WHERE sync_status='WATCHING' AND execution_mode<>'local'")
+      .map(project => workspaces.status(project).catch(error => app.log.error({ err: error, projectId: project.id }, '无法恢复虚拟机内的项目同步'))));
+  }
 }
 catch (error) { app.log.error(error); await app.close(); process.exitCode = 1; }

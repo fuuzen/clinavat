@@ -10,7 +10,7 @@ export const quoteShell = (value: string): string => `'${value.replaceAll("'", "
 
 export function agentEnvironment(execution: ExecutionHost, context: AgentContext): NodeJS.ProcessEnv {
   return {
-    ...execution.baseEnvironment(),
+    ...execution.baseEnvironment(agentScope(context)),
     HOME: context.runtime_home,
     XDG_CONFIG_HOME: path.join(context.runtime_home, '.config'),
     XDG_CACHE_HOME: path.join(context.runtime_home, '.cache'),
@@ -23,7 +23,7 @@ export function agentEnvironment(execution: ExecutionHost, context: AgentContext
 }
 
 export function agentScope(context: AgentContext): ExecutionScope {
-  return { userId: context.user.id, paths: [context.runtime_home, context.project.local_path] };
+  return { userId: context.user.id, paths: [context.runtime_home, context.project.local_path], trusted: context.project.execution_mode === 'local' };
 }
 
 export async function findExecutable(binary: string): Promise<string> {

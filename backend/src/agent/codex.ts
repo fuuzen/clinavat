@@ -12,7 +12,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
   }
   const { execution } = services.config;
-  const binary = await execution.resolveBinary(services.context.user.id, execution.binaries.codex);
+  const binary = await execution.binary(agentScope(services.context), 'codex');
   const root = services.context.project.local_path;
   const permissions = codexPermissions(services);
   const arguments_ = codexServerArguments(services.context);

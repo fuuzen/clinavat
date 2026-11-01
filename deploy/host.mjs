@@ -73,6 +73,8 @@ async function prepareRuntime() {
 
 async function resumeSync() {
   loadEnvironment();
+  // Guests run their own daemons; the Hub restarts them after it comes up.
+  if (process.env.CLINAVAT_EXECUTION_HOST === 'lxd') return;
   const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
   const usersDirectory = join(dataDirectory, 'users');
   const users = await readdir(usersDirectory, { withFileTypes: true }).catch(error => {
