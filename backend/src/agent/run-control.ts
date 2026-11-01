@@ -73,7 +73,6 @@ export class RunControl {
   private gates = new Set<Gate>();
   private timers = new Set<() => void>();
   private generation = 0;
-  private holds = 0;
   private pending?: Promise<void>;
   private resuming?: Promise<void>;
   private native?: NativeRunDriver;
@@ -183,19 +182,6 @@ export class RunControl {
     });
   }
 
-  // Acquire immediately after waitUntilRunning; already admitted Hub writes must finish before a freeze.
-  hold(): () => void {
-    if (this.closed) throw new Error('运行控制已关闭');
-    if (this.current === 'paused') throw new Error('请先等待执行恢复，再开始工具操作');
-    this.holds += 1;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.holds -= 1;
-    };
-  }
-
   // Pausing still lets in-flight remote work settle; only a confirmed freeze suspends deadlines.
   timer(callback: () => void, milliseconds: number): () => void {
     let remaining = Math.max(0, milliseconds);
@@ -248,7 +234,6 @@ export class RunControl {
     if (!await this.untilClosed(Promise.resolve().then(() => {
       if (!this.closed) return driver.pause();
     }))) return;
-    while (this.holds && !this.closed && this.generation === generation) await delay(20);
     if (!this.closed && this.generation === generation) this.publish('paused');
   }
 
@@ -286,20 +271,13 @@ export class RunControl {
     let previous = '';
     let freezingSince = 0;
     while (!this.closed && this.generation === generation) {
-      if (this.holds) {
-        this.thaw();
-        previous = '';
-        freezingSince = 0;
-        await delay(20);
-        continue;
-      }
       const processes = await snapshot();
       if (this.closed || this.generation !== generation) return;
       const descendants = this.descendants(processes);
       if (!descendants.length) throw new Error('当前执行已结束或尚未就绪，无法暂停');
       const remote = await Promise.all(descendants.map(remoteExecution));
       if (this.closed || this.generation !== generation) return;
-      if (this.holds || remote.some(Boolean)) {
+      if (remote.some(Boolean)) {
         this.thaw();
         previous = '';
         freezingSince = 0;

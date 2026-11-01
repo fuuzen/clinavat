@@ -108,7 +108,6 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     if (message.method === 'item/started') {
       const item = params.item;
       if (item && typeof item === 'object') requests.record(item);
-      if (item?.type === 'dynamicToolCall') services.event('tool', { id: item.id, tool: item.tool, input: item.arguments, status: 'running' });
       if (item?.type === 'agentMessage' && typeof item.phase === 'string') phases.set(String(item.id), item.phase);
       if (item && ['webSearch', 'commandExecution', 'fileChange', 'mcpToolCall'].includes(item.type)) {
         services.event('tool', { id: item.id, tool: item.type === 'fileChange' ? 'apply_patch' : item.type, input: item.command ?? item.action ?? item.arguments ?? item.changes, status: 'running' });

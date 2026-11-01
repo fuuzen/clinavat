@@ -1,5 +1,3 @@
-import { legacyStorageKey, readBrandStorage, removeBrandStorage } from "../../../brandStorage";
-
 export interface ComposerDraftSnapshot {
   text: string;
   revision: string;
@@ -41,7 +39,7 @@ export function readComposerDraft(key: string | null): ComposerDraftSnapshot {
   const cached = entries.get(key);
   if (cached?.unsaved) return cached.snapshot;
   try {
-    const storedValue = readBrandStorage(window.localStorage, key);
+    const storedValue = window.localStorage.getItem(key);
     if (cached && cached.storedValue === storedValue && !cached.snapshot.storageError)
       return cached.snapshot;
     const snapshot = parseDraft(storedValue);
@@ -63,7 +61,7 @@ function persistDraft(key: string, snapshot: ComposerDraftSnapshot) {
   const storedValue = snapshot.text ? JSON.stringify({ text: snapshot.text, revision: snapshot.revision }) : null;
   let saved = true;
   try {
-    if (storedValue === null) removeBrandStorage(window.localStorage, key);
+    if (storedValue === null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, storedValue);
   } catch {
     saved = false;
@@ -114,11 +112,8 @@ export function moveComposerDraft(
 }
 
 function onStorage(event: StorageEvent) {
-  const legacyPrefix = legacyStorageKey(storagePrefix);
-  const currentKey = event.key?.startsWith(legacyPrefix)
-    ? storagePrefix + event.key.slice(legacyPrefix.length) : event.key;
-  if (currentKey !== null && !currentKey.startsWith(storagePrefix)) return;
-  const keys = currentKey === null ? [...subscribers.keys()] : [currentKey];
+  if (event.key !== null && !event.key.startsWith(storagePrefix)) return;
+  const keys = event.key === null ? [...subscribers.keys()] : [event.key];
   for (const key of keys) {
     // Unpersisted local edits remain recoverable even if another tab saves its copy.
     if (entries.get(key)?.unsaved) continue;

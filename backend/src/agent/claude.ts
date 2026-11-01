@@ -48,11 +48,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope: agentScope(services.context), cwd: services.context.project.local_path, env: {
-      ...agentEnvironment(execution, services.context),
-      ...(services.context.session.resume_interrupted ? { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
-        CLAUDE_CODE_RESUME_SHOWS_CUT_OFF_CALLS: '1' } : {}),
-    },
+    scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
   });
   services.control.track(child);
   const closed = observeProcessClose(child);

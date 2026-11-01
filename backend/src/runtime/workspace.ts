@@ -4,8 +4,6 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, childEnvironment, runCommand } from './process.js';
 import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
-import { readWorkspaceMigration, saveWorkspaceMigration } from './workspace-migration.js';
-import { archiveIgnoredMirror } from './mirror-archive.js';
 import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
 import { parseSyncStatus, summarizeSyncFailure } from './sync-status.js';
@@ -101,9 +99,7 @@ export class WorkspaceManager {
     const policy = await loadSyncPolicy(this.config, this.ssh, userId, host, project.remote_path);
     project.execution_mode = await prepareRemotePath(this.config, this.ssh, userId, host, project);
     const session = await this.session(project);
-    const migration = await readWorkspaceMigration(this.config, project.id);
-    const migratedMirror = !session && migration?.phase === 'complete' && migration.reusable && !migration.restored && migration.newPath === project.local_path;
-    const reuse = (session?.labels?.['clinavat-policy'] ?? session?.labels?.['cc-pool-policy']) === policy.fingerprint;
+    const reuse = session?.labels?.['clinavat-policy'] === policy.fingerprint;
     if (session) {
       await this.mutagen(project, ['sync', 'resume', project.sync_name]);
       if (reuse) await this.flush(project);
@@ -113,7 +109,7 @@ export class WorkspaceManager {
         await this.mutagen(project, ['sync', 'terminate', project.sync_name]);
       }
     }
-    if (!reuse && !migratedMirror) {
+    if (!reuse) {
       const entries = await readdir(project.local_path).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return [];
         throw error;
@@ -123,13 +119,6 @@ export class WorkspaceManager {
         await mkdir(backupRoot, { recursive: true, mode: 0o700 });
         await rename(project.local_path, join(backupRoot, `${project.id}-${Date.now()}`));
       }
-    }
-    if (migratedMirror) {
-      const names = await readdir(project.local_path);
-      await archiveIgnoredMirror(this.config, project, [
-        ...policy.archivePaths,
-        ...names.filter(name => (name === '.env' || name.startsWith('.env.')) && !['.env.example', '.env.sample', '.env.template'].includes(name)),
-      ]);
     }
     await mkdir(project.local_path, {recursive: true, mode: 0o700});
     await this.refreshExecutor(project, host);
@@ -145,10 +134,6 @@ export class WorkspaceManager {
       ], 120_000);
       created = true;
       await this.flush(project);
-      if (migration?.reusable) {
-        migration.reusable = false;
-        await saveWorkspaceMigration(this.config, migration);
-      }
     } catch (error) {
       if (created) await this.mutagen(project, ['sync', 'terminate', project.sync_name], 15_000).catch(() => undefined);
       throw error;

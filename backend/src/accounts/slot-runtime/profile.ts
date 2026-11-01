@@ -1,14 +1,11 @@
-import { cp, lstat, readdir, rename, rm } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
-import { pathExists, relocateHomeLinks } from '../migration-state.js';
-import { accountIdentifier, userRuntimeHome, type AccountEngine } from '../paths.js';
-import { sessionStateDirectories, sessionStateFiles } from '../session-state/index.js';
-import { isSlotAccountEntry, moveSlotProfile, removeSeedIdentity } from './profile-files.js';
-import { archiveAccountArtifacts, assertNoAccountArtifacts, isAccountArtifactPath } from './profile-artifacts.js';
+import { accountIdentifier, type AccountEngine } from '../paths.js';
+import { moveSlotProfile, pathExists } from './profile-files.js';
+import { archiveAccountArtifacts, assertNoAccountArtifacts } from './profile-artifacts.js';
 
 interface Initialization { version: 1; slotId: string; home: string; engine: AccountEngine; phase: 'prepared' | 'complete' }
-interface ProfileMarker { version: 1; userId: string; slotId: string; engine: AccountEngine; phase: 'prepared' | 'complete' }
+interface ProfileMarker { version: 1; userId: string; slotId: string; engine: AccountEngine }
 
 function slotHome(dataDir: string, slotId: string, home: string): void {
   if (resolve(home) !== resolve(dataDir, 'slots', accountIdentifier(slotId))) throw new Error('固定槽位运行目录无效');
@@ -39,58 +36,20 @@ export async function initializeSlotProfile(dataDir: string, slotId: string, hom
   await writePrivateJson(markerFile, JSON.stringify(marker));
 }
 
-function seedEntry(source: string, file: string, engine: AccountEngine): boolean {
-  const within = relative(source, file);
-  if (!within) return true;
-  const parts = within.split(sep);
-  if (isAccountArtifactPath(parts.join('/'), engine)) return false;
-  const engineDirectory = engine === 'claude' ? '.claude' : '.codex';
-  if (parts[0] === (engine === 'claude' ? '.codex' : '.claude') || parts[0] === '.cache'
-    || ['.account-home-migration.json', '.conversation-runtime.json', '.claude.lock', '.claude.json.lock', '.claude.json.lock.owner'].includes(parts[0])) return false;
-  if (engine === 'codex' && (parts[0] === '.claude.json' || parts[0].startsWith('.claude.json.'))) return false;
-  if (isSlotAccountEntry(parts.join('/'), engine)) return false;
-  if (parts[0] !== engineDirectory || parts.length < 2) return true;
-  return !new Set([...sessionStateDirectories(engine), ...sessionStateFiles(engine), 'history.jsonl', 'session_index.jsonl', 'models_cache.json',
-    'logs', 'log', 'debug', 'telemetry', 'tmp', 'backups', 'shell-snapshots', 'shell_snapshots', 'session-env', 'sessions']).has(parts[1])
-    && !/\.(?:sqlite|db)(?:-(?:wal|shm))?$/.test(parts[1]);
-}
-
 async function ensureProfile(dataDir: string, userId: string, slotId: string, engine: AccountEngine): Promise<string> {
   const home = profileHome(dataDir, userId, slotId);
   const markerFile = join(dirname(home), 'profile.json');
   const content = await readPrivateJson(markerFile);
-  const marker: ProfileMarker = content ? JSON.parse(content) as ProfileMarker
-    : { version: 1, userId, slotId, engine, phase: 'prepared' };
-  if (marker.version !== 1 || marker.userId !== userId || marker.slotId !== slotId || marker.engine !== engine
-    || !['prepared', 'complete'].includes(marker.phase)) throw new Error('用户槽位配置归属记录无效');
-  if (marker.phase === 'complete') { await privateDirectory(home); return home; }
-  if (!content) {
-    if (await pathExists(home)) throw new Error('用户槽位配置已存在但缺少归属记录');
-    await writePrivateJson(markerFile, JSON.stringify(marker));
-  }
-  const staging = join(dirname(home), '.profile-initializing');
-  if (!await pathExists(home)) {
-    await rm(staging, { recursive: true, force: true });
-    const source = userRuntimeHome(dataDir, userId);
-    if (await pathExists(source)) {
-      await privateDirectory(source);
-      await cp(source, staging, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true,
-        filter: async file => {
-          if (!seedEntry(source, file, engine)) return false;
-          const entry = await lstat(file);
-          return entry.isFile() || entry.isDirectory() || entry.isSymbolicLink();
-        } });
-      await relocateHomeLinks(staging, staging, source, home);
+  if (content) {
+    const marker = JSON.parse(content) as ProfileMarker;
+    if (marker.version !== 1 || marker.userId !== userId || marker.slotId !== slotId || marker.engine !== engine) {
+      throw new Error('用户槽位配置归属记录无效');
     }
-    await privateDirectory(staging);
-    await removeSeedIdentity(staging, engine);
-    await rename(staging, home);
   } else {
-    await privateDirectory(home);
-    if (await pathExists(staging) && (await readdir(staging)).length) throw new Error('用户槽位配置初始化存在两个版本');
+    if (await pathExists(home)) throw new Error('用户槽位配置已存在但缺少归属记录');
+    await writePrivateJson(markerFile, JSON.stringify({ version: 1, userId, slotId, engine } satisfies ProfileMarker));
   }
-  marker.phase = 'complete';
-  await writePrivateJson(markerFile, JSON.stringify(marker));
+  await privateDirectory(home);
   return home;
 }
 

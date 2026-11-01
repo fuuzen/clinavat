@@ -1,15 +1,10 @@
 import path from 'node:path';
-import { executeDynamicTool } from './tools.js';
 import { getPermissionMode } from './permissions.js';
 import type { RpcMessage } from './rpc.js';
 import type { RunServices } from './types.js';
 import type { UserInputQuestion } from './user-input.js';
 
-const nativeApprovals = new Set([
-  'item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
-  'execCommandApproval', 'applyPatchApproval',
-]);
-const legacyWrites = new Set(['remote_command', 'workspace_write', 'workspace_replace']);
+const nativeApprovals = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
 
 function approvalChanges(value: unknown) {
   if (!Array.isArray(value)) return value;
@@ -59,41 +54,6 @@ export function createCodexRequests(
     return !signal.aborted && !controller.signal.aborted && isRunning();
   };
 
-  async function dynamicTool(message: RpcMessage) {
-    const params = message.params ?? {};
-    const name = String(params.tool ?? '');
-    try {
-      const input = typeof params.arguments === 'string' ? JSON.parse(params.arguments) : params.arguments;
-      if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('工具参数无效');
-      const mode = getPermissionMode(services.context.session);
-      if (legacyWrites.has(name) && (mode === 'auto' || mode === 'full-access')) {
-        throw new Error(services.context.project.execution_mode === 'local'
-          ? '当前会话已使用 Codex 原生授权；请使用原生 apply_patch 编辑文件、原生命令工具执行本机命令。'
-          : '当前会话已使用 Codex 原生授权；请使用原生 apply_patch 编辑文件，使用原生命令工具调用项目 .bin/remote-shell 执行远程命令。');
-      }
-      const toolServices: RunServices = { ...services,
-        approve: (tool, input, requestSignal) => services.approve(tool, input,
-          requestSignal ? AbortSignal.any([signal, requestSignal]) : signal),
-        event(type, payload) {
-        services.event(type, type === 'tool' && payload && typeof payload === 'object'
-          ? { ...payload, id: params.callId } : payload);
-      } };
-      const output = await executeDynamicTool(toolServices, name, input, signal);
-      if (!signal.aborted && isRunning()) send({ id: message.id, result: {
-        contentItems: [{ type: 'inputText', text: output }], success: true,
-      } });
-      services.event('tool', { id: params.callId, tool: name, status: signal.aborted ? 'interrupted' : 'completed',
-        ...(signal.aborted ? {} : { output: output.slice(0, 128 * 1024) }) });
-    } catch (error) {
-      const text = error instanceof Error ? error.message : '工具执行失败';
-      if (!signal.aborted && isRunning()) send({ id: message.id, result: {
-        contentItems: [{ type: 'inputText', text }], success: false,
-      } });
-      services.event('tool', { id: params.callId, tool: name, status: signal.aborted ? 'interrupted' : 'failed',
-        ...(signal.aborted ? {} : { output: text }) });
-    }
-  }
-
   return {
     record(item: Record<string, unknown>) {
       if (typeof item.id === 'string' && ['fileChange', 'commandExecution'].includes(String(item.type))) {
@@ -116,10 +76,6 @@ export function createCodexRequests(
     },
     async handle(message: RpcMessage) {
       if (message.id === undefined || !message.method) return false;
-      if (message.method === 'item/tool/call') {
-        await dynamicTool(message);
-        return true;
-      }
       if (message.method === 'item/tool/requestUserInput') {
         const key = String(message.id);
         if (pending.has(key)) return true;
@@ -147,8 +103,7 @@ export function createCodexRequests(
       const controller = new AbortController();
       pending.set(key, controller);
       const params = message.params ?? {};
-      const fileChange = message.method === 'item/fileChange/requestApproval' || message.method === 'applyPatchApproval';
-      const legacy = message.method === 'execCommandApproval' || message.method === 'applyPatchApproval';
+      const fileChange = message.method === 'item/fileChange/requestApproval';
       const itemId = String(params.itemId ?? params.callId ?? '');
       const item = items.get(itemId);
       const command = Array.isArray(params.command) ? params.command.join(' ') : params.command ?? item?.command;
@@ -167,12 +122,9 @@ export function createCodexRequests(
           }),
         }, controller.signal);
         if (remote && result.decision === 'allow' && !signal.aborted && !controller.signal.aborted) await services.verifyShell();
-        if (canReply(key, controller)) send({ id: message.id, result: { decision: legacy
-          ? result.decision === 'allow' ? 'approved' : { denied: { rejection: result.reason ?? '用户拒绝执行' } }
-          : result.decision === 'allow' ? 'accept' : 'decline' } });
+        if (canReply(key, controller)) send({ id: message.id, result: { decision: result.decision === 'allow' ? 'accept' : 'decline' } });
       } catch (error) {
-        if (canReply(key, controller)) send({ id: message.id, result: { decision: legacy
-          ? { denied: { rejection: error instanceof Error ? error.message : '工具审批失败' } } : 'decline' } });
+        if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
       } finally {
         if (pending.get(key) === controller) pending.delete(key);
         controller.abort();

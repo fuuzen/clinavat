@@ -1,12 +1,10 @@
 import { readdir, readlink, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { Store } from '../../database.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import { accountIdentifier, type AccountEngine } from '../paths.js';
 import { metadata } from './files.js';
 import { assertSessionStateFiles, bindSessionStateFiles, detachSessionStateFiles } from './goal-files.js';
 import { engineDirectory, sessionStateDirectories, sessionStateFiles, userSessionStateRoot } from './layout.js';
-import { ensureUserSessionState } from './migration.js';
 
 interface BindingMarker { version: 1; userId: string; engine: AccountEngine; root: string }
 const markerName = '.slot-session-state.json';
@@ -21,8 +19,9 @@ async function readBinding(home: string): Promise<BindingMarker | undefined> {
   return marker;
 }
 
-export async function bindSlotSessionState(dataDir: string, store: Store, userId: string, slotHome: string, engine: AccountEngine): Promise<void> {
-  const root = resolve(await ensureUserSessionState(dataDir, store, userId, engine));
+export async function bindSlotSessionState(dataDir: string, userId: string, slotHome: string, engine: AccountEngine): Promise<void> {
+  const root = resolve(userSessionStateRoot(dataDir, userId, engine));
+  await privateDirectory(root);
   const previous = await readBinding(slotHome);
   if (previous && (previous.userId !== userId || previous.engine !== engine || previous.root !== root)) {
     throw new Error('槽位仍连接其他用户的原生会话存储');

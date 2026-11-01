@@ -72,7 +72,6 @@ export async function prepareRemotePath(
 export function renderRemoteRunner(project: WorkspaceProject): string {
   const mode = project.execution_mode;
   if (mode !== 'direct' && mode !== 'bwrap' && mode !== 'symlink') throw new Error('项目远端路径尚未准备好，请先重新同步');
-  // Existing project scripts may still use CC_POOL_PROJECT_ROOT; both names describe the same visible path.
   return `set -uo pipefail
 readonly visible_root=${shellQuote(project.local_path)}
 readonly source_root=${shellQuote(project.remote_path)}
@@ -99,11 +98,11 @@ else
 fi
 if [[ "$mode" == bwrap ]]; then
   exec bwrap --die-with-parent --bind / / --dev-bind /dev /dev --bind "$source_root" "$visible_root" --chdir "$command_cwd" \\
-    --setenv PWD "$command_cwd" --setenv CLINAVAT_PROJECT_ROOT "$visible_root" --setenv CC_POOL_PROJECT_ROOT "$visible_root" \\
+    --setenv PWD "$command_cwd" --setenv CLINAVAT_PROJECT_ROOT "$visible_root" \\
     --unsetenv SSH_CLIENT --unsetenv SSH_CONNECTION --unsetenv SSH_TTY -- "\${execution[@]}"
 fi
 cd -L -- "$command_cwd" || exit 72
-export PWD="$command_cwd" CLINAVAT_PROJECT_ROOT="$visible_root" CC_POOL_PROJECT_ROOT="$visible_root"
+export PWD="$command_cwd" CLINAVAT_PROJECT_ROOT="$visible_root"
 unset SSH_CLIENT SSH_CONNECTION SSH_TTY
 exec "\${execution[@]}"`;
 }

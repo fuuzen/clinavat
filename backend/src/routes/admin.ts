@@ -7,7 +7,6 @@ import { withResourceLocks, type Context } from '../context.js';
 import { createUser, credentials } from '../users.js';
 import { updateSlot } from '../accounts/assignments.js';
 import { availableSlots, serializeAdminSlot, serializeUserSlot } from '../accounts/access.js';
-import { initializeSlotLayout } from '../accounts/migration.js';
 import { privateDirectory } from '../accounts/credential-files.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
@@ -75,7 +74,6 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
       }
       const homeDir = join(config.dataDir, 'slots', input.id);
       await privateDirectory(homeDir);
-      await initializeSlotLayout(config.dataDir, { id: input.id, home_dir: homeDir });
       store.transaction(() => {
         store.run('INSERT INTO account_slots(id,label,home_dir,engine) VALUES(?,?,?,?)', input.id, input.label, homeDir, input.engine);
         for (const userId of userIds) store.run('INSERT INTO slot_user_access(slot_id,user_id) VALUES(?,?)', input.id, userId);

@@ -19,12 +19,12 @@ export const publicUrlsSchema = z.array(z.string().trim().min(1).max(2048).refin
 interface SiteAccessRow { public_urls: string; revision: number }
 export interface SiteAccessView { publicUrls: string[]; localOrigins: string[]; revision: number }
 
-function migrationPublicUrls(value: string | undefined): string[] {
+function initialPublicUrls(value: string | undefined): string[] {
   if (value === undefined || !value.trim()) return [];
   const groups = value.split(',');
   if (groups.some(group => !group.trim())) throw new Error('CLINAVAT_ORIGIN 不能为空，且逗号分隔的地址不能包含空项');
   try { return publicUrlsSchema.parse(groups.flatMap(group => group.trim().split(/\s+/))); }
-  catch (cause) { throw new Error('CLINAVAT_ORIGIN 首次迁移失败，请检查完整的 HTTP(S) Origin 地址列表', { cause }); }
+  catch (cause) { throw new Error('CLINAVAT_ORIGIN 无效，请检查完整的 HTTP(S) Origin 地址列表', { cause }); }
 }
 
 export class SiteAccess {
@@ -35,9 +35,9 @@ export class SiteAccess {
     this.localOrigins = [...new Set(['localhost', '127.0.0.1']
       .flatMap(host => ports.map(port => new URL(`http://${host}:${port}`).origin)))];
     this.store.transaction(() => {
-      // An empty saved list is intentional; the old environment is only a first-run seed.
+      // An empty saved list is intentional; the environment is only a first-run seed.
       if (!this.store.get('SELECT id FROM site_access WHERE id=1')) {
-        const publicUrls = migrationPublicUrls(config.initialPublicOrigins);
+        const publicUrls = initialPublicUrls(config.initialPublicOrigins);
         this.store.run('INSERT OR IGNORE INTO site_access(id,public_urls,revision) VALUES(1,?,0)', JSON.stringify(publicUrls));
       }
       this.read();

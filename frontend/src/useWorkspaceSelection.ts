@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import { readBrandStorage } from "./brandStorage";
 
 function readSelection(key: string) {
   try {
-    return readBrandStorage(localStorage, key) || "";
+    return localStorage.getItem(key) || "";
   } catch {
     return "";
   }

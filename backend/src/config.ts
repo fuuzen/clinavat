@@ -1,10 +1,9 @@
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { brandedEnvironment, defaultWorkspaceDirectory } from './storage-paths.js';
 
 const environment = z.object({
   CLINAVAT_DATA_DIR: z.string().default('../data'),
-  CLINAVAT_WORKSPACE_DIR: z.string().default(defaultWorkspaceDirectory()),
+  CLINAVAT_WORKSPACE_DIR: z.string().default('/var/tmp/clinavat-workspace'),
   CLINAVAT_MASTER_KEY: z.string().regex(/^[a-f\d]{64}$/i, 'CLINAVAT_MASTER_KEY 必须是 32 字节十六进制密钥'),
   CLINAVAT_HOST: z.string().default('127.0.0.1'),
   CLINAVAT_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
@@ -22,9 +21,9 @@ const environment = z.object({
   CLINAVAT_GATEWAY_HOST: z.string().trim().regex(/^[A-Za-z0-9.:-]*$/, 'CLINAVAT_GATEWAY_HOST 必须是主机名或 IP').default(''),
   CLINAVAT_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(22),
   CLINAVAT_GATEWAY_USER: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('root'),
-}).parse(brandedEnvironment());
+}).parse(process.env);
 // The parsed config is the only holder of the master key; a later {...process.env} cannot hand it to a child.
-for (const name of ['CLINAVAT_MASTER_KEY', 'CC_POOL_MASTER_KEY']) delete process.env[name];
+delete process.env.CLINAVAT_MASTER_KEY;
 
 export const config = {
   dataDir: resolve(environment.CLINAVAT_DATA_DIR),

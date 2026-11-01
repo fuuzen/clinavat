@@ -40,7 +40,6 @@ export default function SlotUserPicker({ slot, users, disabled, onSave }: Props)
         ariaLabel={`${slot.label}分配用户`} searchLabel={`搜索${slot.label}的分配用户`}
         title={slot.active_user_id || slot.in_use ? "槽位使用中，任务结束后可调整分配" : "搜索并选择用户，选中即保存"}
         disabled={disabled} busy={saving} onChange={(userId) => void select(userId)} />
-      {assignedIds.length > 1 && <p className="slot-user-legacy">保留原有多人授权；选择用户后立即替换为单人分配。</p>}
       {error && <p className="slot-user-error" role="alert">{error}</p>}
     </div>
   );

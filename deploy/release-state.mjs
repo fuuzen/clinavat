@@ -6,24 +6,9 @@ import { promisify } from 'node:util';
 import { databasePath } from './environment.mjs';
 
 const execute = promisify(execFile);
-export const currentServices = ['clinavat-hub.service', 'clinavat-web.service'];
-export const legacyServices = ['cc-pool-hub.service', 'cc-pool-web.service'];
-export const services = [...currentServices];
+export const services = ['clinavat-hub.service', 'clinavat-web.service'];
 const gateSuffixes = ['sessions_insert', 'sessions_update', 'turns_insert', 'turns_update'];
 const gateNames = gateSuffixes.map(name => `clinavat_release_${name}`);
-const allGateNames = [...gateNames, ...gateSuffixes.map(name => `cc_pool_release_${name}`)];
-
-export async function discoverServices() {
-  const [current, legacy] = await Promise.all([
-    Promise.all(currentServices.map(serviceState)), Promise.all(legacyServices.map(serviceState)),
-  ]);
-  const running = states => states.some(state => ['active', 'activating', 'deactivating', 'reloading'].includes(state.ActiveState));
-  if (running(current) && running(legacy)) throw new Error('新旧服务同时运行，请先恢复到单一部署');
-  const selected = running(legacy) || (!current.some(state => state.LoadState === 'loaded') && legacy.some(state => state.LoadState === 'loaded'))
-    ? legacyServices : currentServices;
-  services.splice(0, services.length, ...selected);
-  return services;
-}
 
 export async function serviceState(service) {
   const { stdout } = await execute('systemctl', ['--user', 'show', service, '--property=LoadState,ActiveState,SubState,MainPID,ControlGroup,UnitFileState'], { timeout: 10000 });
@@ -55,7 +40,7 @@ export function activityCounts(database) {
 export function hasActivity(counts) { return counts.sessions > 0 || counts.turns > 0 || counts.approvals > 0; }
 
 export function gateCount(database) {
-  return allGateNames.filter(name => database.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?").get(name)).length;
+  return gateNames.filter(name => database.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?").get(name)).length;
 }
 
 export function installGate(database) {
@@ -81,7 +66,7 @@ export function installGate(database) {
 export function removeGate(database) {
   database.exec('BEGIN IMMEDIATE');
   try {
-    for (const name of allGateNames) database.exec(`DROP TRIGGER IF EXISTS ${name}`);
+    for (const name of gateNames) database.exec(`DROP TRIGGER IF EXISTS ${name}`);
     database.exec('COMMIT');
   } catch (error) { database.exec('ROLLBACK'); throw error; }
 }
@@ -115,7 +100,7 @@ export async function runtimeCounts(database, dataDirectory, hub) {
       try {
         const values = (await readFile(`/proc/${pid}/environ`, 'utf8')).split('\0');
         const runtimeHome = values.find(value => value.startsWith('HOME='))?.slice(5);
-        if (values.some(value => value.startsWith('CLINAVAT_SESSION_ID=') || value.startsWith('CC_POOL_SESSION_ID=')) || (runtimeHome && homes.has(resolve(runtimeHome)))) conversationProcesses++;
+        if (values.some(value => value.startsWith('CLINAVAT_SESSION_ID=')) || (runtimeHome && homes.has(resolve(runtimeHome)))) conversationProcesses++;
         if (runtimeHome && resolve(runtimeHome).startsWith(`${probeDirectory}${sep}`)) usageProbeProcesses++;
       } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw new Error(`无法确认 Hub 子进程 ${pid} 的归属`); }
     }
@@ -129,7 +114,6 @@ export function hasRuntimeActivity(runtime, includeUsageProbes = true) {
 }
 
 export async function deploymentStatus(dataDirectory) {
-  await discoverServices();
   const database = openDatabase(dataDirectory);
   try {
     const [hub, web] = await Promise.all(services.map(serviceState));

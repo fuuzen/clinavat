@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { loadEnvironment as readEnvironment } from './environment.mjs';
 import { activateServices, ensureInstallIdle } from './service-install.mjs';
-import { discoverServices, services as installedServices } from './release-state.mjs';
+import { services as installedServices } from './release-state.mjs';
 
 const deploymentDirectory = dirname(fileURLToPath(import.meta.url));
 const projectDirectory = dirname(deploymentDirectory);
@@ -125,8 +125,7 @@ async function install() {
   const script = executableArgument(fileURLToPath(import.meta.url));
   const hub = `[Unit]
 Description=Clinavat host backend
-Conflicts=cc-pool-hub.service
-After=network.target cc-pool-hub.service
+After=network.target
 
 [Service]
 Type=simple
@@ -149,9 +148,8 @@ WantedBy=default.target
 `;
   const web = `[Unit]
 Description=Clinavat host web frontend
-Conflicts=cc-pool-web.service
 Wants=clinavat-hub.service
-After=clinavat-hub.service cc-pool-web.service
+After=clinavat-hub.service
 
 [Service]
 Type=simple
@@ -211,7 +209,6 @@ try {
     loadEnvironment();
     run(process.argv[3] ?? 'caddy', ['run', '--config', join(deploymentDirectory, 'clinavat.Caddyfile'), '--adapter', 'caddyfile']);
   } else if (['start', 'stop', 'status', 'logs'].includes(command)) {
-    await discoverServices();
     if (command === 'logs') run('journalctl', ['--user', '-u', installedServices[0], '-u', installedServices[1], '-f']);
     else run('systemctl', ['--user', command, ...installedServices, ...(command === 'status' ? ['--no-pager'] : [])]);
   } else throw new Error('用法：node deploy/host.mjs install|start|stop|status|logs');

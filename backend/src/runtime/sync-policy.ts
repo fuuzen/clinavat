@@ -14,8 +14,6 @@ export const DEFAULT_IGNORES = [
 ];
 
 export const IGNORE_FILE = '.clinavatignore';
-// Later files retain precedence, including ! rules from existing projects.
-export const IGNORE_FILES = ['.cc-poolignore', '.cc-pool-ignore', IGNORE_FILE];
 export const IGNORE_FILE_LIMIT = 65536;
 
 export interface SyncPolicy {
@@ -45,8 +43,7 @@ export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, use
       `printf '%s\\0' "$(pwd -P)"`,
       `if [ "$(cat -- ${shellQuote(marker)} 2>/dev/null)" = ${shellQuote(token)} ]; then printf 'same-host'; fi`,
       `printf '\\0'`,
-      ...IGNORE_FILES.map(name =>
-        `if [ -f ${name} ]; then head -c ${IGNORE_FILE_LIMIT + 1} -- ${name} || exit; fi; printf '\\0'`),
+      `if [ -f ${IGNORE_FILE} ]; then head -c ${IGNORE_FILE_LIMIT + 1} -- ${IGNORE_FILE} || exit; fi; printf '\\0'`,
       `if command -v git >/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,
       `  printf 'git\\0'`,
       `  git --no-optional-locks -c status.renames=false status --porcelain=v1 --ignored=matching --untracked-files=normal -z || exit`,
@@ -56,19 +53,15 @@ export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, use
     output = result.stdout;
   } finally { await rm(marker, { force: true }); }
 
-  const [remoteRoot, sameHost, ...entries] = output.split('\0');
-  const customRules = entries.slice(0, IGNORE_FILES.length);
-  const [git, ...gitEntries] = entries.slice(IGNORE_FILES.length);
+  const [remoteRoot, sameHost, customRules = '', git, ...gitEntries] = output.split('\0');
   if (!remoteRoot?.startsWith('/')) throw new Error('无法确定远端项目的真实目录');
-  customRules.forEach((contents, index) => {
-    if (Buffer.byteLength(contents) > IGNORE_FILE_LIMIT) throw new Error(`${IGNORE_FILES[index]} 超过 64 KiB`);
-  });
+  if (Buffer.byteLength(customRules) > IGNORE_FILE_LIMIT) throw new Error(`${IGNORE_FILE} 超过 64 KiB`);
   const ignores = [...DEFAULT_IGNORES];
   // Matching mode traverses untracked parents too, while collapsing explicitly ignored output directories.
   const gitIgnored = gitEntries.filter(entry => entry.startsWith('!! ')).map(entry => entry.slice(3));
   const archivePaths = [...gitIgnored];
   ignores.push(...gitIgnored.sort().map(literalIgnore));
-  ignores.push(...customRules.join('\n').split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')));
+  ignores.push(...customRules.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')));
   if (sameHost) {
     if (inside(dataRoot, remoteRoot)) throw new Error('不能将平台运行数据或已有镜像创建为项目，请选择源码目录');
     if (inside(config.workspaceDir, remoteRoot)) throw new Error('不能将号池机本地镜像当成远端源码目录');

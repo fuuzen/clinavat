@@ -26,7 +26,7 @@ export async function assertSlotProcessesStopped(home: string, sessionId?: strin
       if (exited(identity)) continue;
       const environment = await readFile(join('/proc', pid, 'environ'));
       const entries = environment.toString().split('\0');
-      if (sessionId && !entries.includes(`CLINAVAT_SESSION_ID=${sessionId}`) && !entries.includes(`CC_POOL_SESSION_ID=${sessionId}`)) continue;
+      if (sessionId && !entries.includes(`CLINAVAT_SESSION_ID=${sessionId}`)) continue;
       const matches = entries.some(entry => {
         if (entry.startsWith('HOME=')) return resolve(entry.slice(5)) === expected;
         if (entry.startsWith('CODEX_HOME=')) return resolve(dirname(entry.slice(11))) === expected;

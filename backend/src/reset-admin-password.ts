@@ -7,7 +7,7 @@ import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import { ZodError } from 'zod';
 import { credentials, hashPassword } from './users.js';
-import { brandedEnvironment, databasePath as resolveDatabasePath } from './storage-paths.js';
+import { databasePath as resolveDatabasePath } from './database.js';
 
 interface Administrator { id: string; username: string }
 const usage = `用法：
@@ -15,7 +15,7 @@ const usage = `用法：
   admin:reset-password -- --list [--data-dir <数据目录>]
 
 新密码在终端内隐藏输入并确认，长度为 12–256 个字符。
-数据目录默认读取 CLINAVAT_DATA_DIR（兼容 CC_POOL_DATA_DIR），否则使用后端目录下的 ../data。
+数据目录默认读取 CLINAVAT_DATA_DIR，否则使用后端目录下的 ../data。
 `;
 
 function hiddenInput(prompt: string): Promise<string> {
@@ -60,7 +60,7 @@ async function main() {
   if (values.help) { process.stdout.write(usage); return; }
   if (values.list && values.username) throw new Error('--list 和 --username 不能同时使用');
   if (!values.list && !values.username) throw new Error('请通过 --username 指定管理员；忘记用户名时可用 --list 列出');
-  const dataDir = resolve(values['data-dir'] ?? brandedEnvironment().CLINAVAT_DATA_DIR ?? '../data');
+  const dataDir = resolve(values['data-dir'] ?? process.env.CLINAVAT_DATA_DIR ?? '../data');
   const databasePath = resolveDatabasePath(dataDir);
   const metadata = await stat(databasePath).catch(error => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`数据库不存在：${databasePath}，请确认 --data-dir`);

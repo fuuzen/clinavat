@@ -1,6 +1,6 @@
 import { gunzipSync } from 'node:zlib';
 import { SshManager } from './ssh.js';
-import { DEFAULT_IGNORES, IGNORE_FILE, IGNORE_FILES, IGNORE_FILE_LIMIT, literalIgnore, loadSyncPolicy } from './sync-policy.js';
+import { DEFAULT_IGNORES, IGNORE_FILE, IGNORE_FILE_LIMIT, literalIgnore, loadSyncPolicy } from './sync-policy.js';
 import { assertRemotePath, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
 
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
@@ -193,7 +193,7 @@ export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager,
     ...[...directories].filter(([, usage]) => usage.bytes >= MIN_ENTRY_BYTES)
       .map(([path, usage]) => ({ path, type: 'directory' as const, ...usage, tracked: tracked(path, true) })),
     ...largeFiles.map(({ path, bytes }) => ({ path, type: 'file' as const, bytes, files: 1, tracked: tracked(path, false) })),
-  ].filter(entry => !entry.path.includes('�') && !IGNORE_FILES.includes(entry.path))
+  ].filter(entry => !entry.path.includes('�') && entry.path !== IGNORE_FILE)
     .sort((left, right) => right.bytes - left.bytes
       || left.path.split('/').length - right.path.split('/').length
       || (left.type === right.type ? 0 : left.type === 'directory' ? -1 : 1));
@@ -227,15 +227,6 @@ export async function appendIgnoreRules(ssh: SshManager, userId: string, host: D
   const file = shellQuote(IGNORE_FILE);
   const result = await ssh.exec(userId, host, [
     `cd -- ${shellQuote(remotePath)} || exit`,
-    // Rename the highest-precedence legacy file only; older rules stay before it and an existing new file is never replaced.
-    `if [ ! -e ${file} ] && [ ! -L ${file} ]; then`,
-    `  for legacy_file in ${IGNORE_FILES.slice(0, -1).reverse().map(shellQuote).join(' ')}; do`,
-    `    if [ -e "$legacy_file" ] || [ -L "$legacy_file" ]; then`,
-    `      if [ -f "$legacy_file" ] && [ ! -L "$legacy_file" ]; then mv -nT -- "$legacy_file" ${file} || exit; fi`,
-    `      break`,
-    `    fi`,
-    `  done`,
-    `fi`,
     `if [ -L ${file} ] || { [ -e ${file} ] && [ ! -f ${file} ]; }; then echo '${IGNORE_FILE} 必须是普通文件' >&2; exit 3; fi`,
     `if [ -s ${file} ] && [ -n "$(tail -c 1 -- ${file})" ]; then printf '\\n' >> ${file} || exit; fi`,
     `printf '%s\\n' ${lines.map(shellQuote).join(' ')} >> ${file}`,

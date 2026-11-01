@@ -14,9 +14,6 @@ function durationLabel(milliseconds: number) {
   return `${seconds}s`;
 }
 
-// Older Claude turns stored status-only thinking placeholders without any reasoning content.
-const reasoningPlaceholders = new Set(["正在思考…", "思考已完成"]);
-
 function activityGroups(items: ActivityItem[]) {
   const groups: (ActivityItem | ToolEvent[])[] = [];
   for (const item of items) {
@@ -52,7 +49,7 @@ export default function TurnProcess({ turn }: { turn: Turn }) {
       - Date.parse(turn.started_at) - (turn.paused_ms ?? 0)
   );
   const items = turn.items.filter((item) => (live || !item.final)
-    && !(item.kind === "reasoning" && (!item.text?.trim() || reasoningPlaceholders.has(item.text))));
+    && !(item.kind === "reasoning" && !item.text?.trim()));
   const status = paused ? " · 已暂停" : turn.status === "pausing" ? " · 正在暂停" : turn.status === "interrupted" ? " · 已停止" : turn.status === "error" ? " · 出错" : "";
   return (
     <section className={`turn-process ${paused ? "turn-paused" : running ? "turn-running" : "turn-finished"}`}>

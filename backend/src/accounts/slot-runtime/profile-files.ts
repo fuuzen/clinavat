@@ -1,13 +1,33 @@
-import { lstat, readdir, rename, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { lstat, readdir, readlink, rename, rm, symlink } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
-import { pathExists, relocateHomeLinks } from '../migration-state.js';
 import type { AccountEngine } from '../paths.js';
 import { sessionStateDirectories, sessionStateFiles } from '../session-state/index.js';
 
 type Document = Record<string, unknown>;
 type Transfer = 'archive' | 'save' | 'restore';
+
+export async function pathExists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+}
+
+export async function relocateHomeLinks(directory: string, staging: string, oldHome: string, finalHome: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const file = join(directory, entry.name);
+    if (entry.isDirectory()) await relocateHomeLinks(file, staging, oldHome, finalHome);
+    else if (entry.isSymbolicLink()) {
+      const target = await readlink(file);
+      const originalLocation = join(oldHome, relative(staging, file));
+      const absoluteTarget = resolve(dirname(originalLocation), target);
+      const withinHome = relative(oldHome, absoluteTarget);
+      if (withinHome === '..' || withinHome.startsWith(`..${sep}`) || withinHome.startsWith(sep)) continue;
+      await rm(file);
+      await symlink(resolve(finalHome, withinHome), file);
+    }
+  }
+}
 
 const claudeIdentityKeys = [
   'oauthAccount', 'primaryApiKey', 'customApiKeyResponses', 'userID',
@@ -103,27 +123,4 @@ export async function moveSlotProfile(source: string, target: string, engine: Ac
     await moveEntry(join(source, entry.name), join(target, entry.name));
   }
   await relocateHomeLinks(target, target, source, target);
-}
-
-export async function removeSeedIdentity(home: string, engine: AccountEngine): Promise<void> {
-  if (engine === 'codex') {
-    await rm(join(home, '.codex', 'auth.json'), { force: true });
-    return;
-  }
-  for (const file of mixedFiles) {
-    const source = join(home, file.path);
-    const metadata = await lstat(source).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return undefined;
-      throw error;
-    });
-    if (!metadata) continue;
-    if (metadata.isSymbolicLink()) { await rm(source); continue; }
-    await saveDocument(source, separate(await documentAt(source), file.keys).user);
-  }
-}
-
-export function isSlotAccountEntry(relativePath: string, engine: AccountEngine): boolean {
-  const prefix = engine === 'claude' ? '.claude/' : '.codex/';
-  return relativePath.startsWith(prefix) && protectedEngineEntry(relativePath.slice(prefix.length), engine)
-    && !['.claude/.credentials.json', '.claude/.claude.json'].includes(relativePath);
 }

@@ -44,9 +44,7 @@ export class ClaudeControl {
         this.close(error instanceof Error ? error : new Error('Claude CLI 初始化失败'));
       }
     });
-    if (!this.services.context.session.resume_interrupted) {
-      this.write({ type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt } });
-    }
+    this.write({ type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt } });
   }
 
   handle(event: Record<string, any>): boolean {

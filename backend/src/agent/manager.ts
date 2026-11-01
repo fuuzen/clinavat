@@ -38,9 +38,7 @@ export class AgentManager {
 
   async start(context: AgentContext, prompt: string): Promise<void> {
     if (this.closing) throw new Error('服务正在关闭');
-    const nativeResume = context.session.engine === 'codex' && context.session.goal
-      || context.session.engine === 'claude' && context.session.resume_interrupted && context.session.native_session_id;
-    if (!prompt.trim() && !nativeResume) throw new Error('消息不能为空');
+    if (!prompt.trim() && !(context.session.engine === 'codex' && context.session.goal)) throw new Error('消息不能为空');
     if (context.slot.engine !== context.session.engine) throw new Error('当前账号槽位未启用此引擎');
     if (this.active.has(context.session.id)) throw new Error('当前会话正在运行');
     let startupDone!: () => void;

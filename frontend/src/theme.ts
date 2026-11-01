@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import { legacyStorageKey, readBrandStorage } from "./brandStorage";
 
 export type ThemeMode = "dark" | "light";
 
@@ -203,7 +202,7 @@ function publish() {
 export function setSiteDefaultTheme(presetId: string) {
   siteDefaultPreset = themePresets.some((preset) => preset.id === presetId) ? presetId : "forest";
   try {
-    snapshot = { preferences: parsePreferences(readBrandStorage(localStorage, storageKey)), storageAvailable: true };
+    snapshot = { preferences: parsePreferences(localStorage.getItem(storageKey)), storageAvailable: true };
   } catch {
     snapshot = { preferences: parsePreferences(null), storageAvailable: false };
   }
@@ -214,15 +213,15 @@ export function initializeTheme() {
   if (initialized) return;
   initialized = true;
   try {
-    snapshot = { preferences: parsePreferences(readBrandStorage(localStorage, storageKey)), storageAvailable: true };
+    snapshot = { preferences: parsePreferences(localStorage.getItem(storageKey)), storageAvailable: true };
   } catch {
     snapshot = { preferences: parsePreferences(null), storageAvailable: false };
   }
   applyTheme();
   window.addEventListener("storage", (event) => {
-    if (event.key !== storageKey && event.key !== legacyStorageKey(storageKey) && event.key !== null) return;
+    if (event.key !== storageKey && event.key !== null) return;
     try {
-      snapshot = { preferences: parsePreferences(readBrandStorage(localStorage, storageKey)), storageAvailable: true };
+      snapshot = { preferences: parsePreferences(localStorage.getItem(storageKey)), storageAvailable: true };
     } catch {
       snapshot = { ...snapshot, storageAvailable: false };
     }

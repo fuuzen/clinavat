@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, readFile, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { HttpError } from '../models.js';
 import { atomicWrite } from '../runtime/process.js';
@@ -38,7 +38,6 @@ export async function writePrivateJson(file: string, content: string): Promise<v
   await atomicWrite(file, content);
 }
 
-const claudeAccountKeys = ['oauthAccount', 'primaryApiKey', 'customApiKeyResponses'];
 const claudeConfigFiles = ['.claude.json', join('.claude', '.claude.json')];
 const codexAccountKeys = ['auth_mode', 'OPENAI_API_KEY', 'tokens', 'last_refresh'];
 
@@ -70,53 +69,9 @@ export async function readAccountCredential(home: string, engine: AccountEngine)
     for (const relative of claudeConfigFiles) {
       const settings = await readPrivateJson(join(home, relative));
       if (settings && (JSON.parse(settings) as Record<string, unknown>).primaryApiKey) {
-        throw new HttpError(409, '此槽位使用 Claude Console API key，当前迁移仅支持 Claude OAuth；原凭据已保留，请先完成 claude auth login');
+        throw new HttpError(409, '此槽位使用 Claude Console API key，当前仅支持 Claude OAuth；原凭据已保留，请先完成 claude auth login');
       }
     }
   }
   return Object.keys(fields).length ? JSON.stringify(fields) : undefined;
-}
-
-export async function writeAccountCredential(home: string, engine: AccountEngine, content: string | undefined): Promise<void> {
-  const file = credentialPath(home, engine);
-  const existing = await readPrivateJson(file);
-  if (existing === undefined && content === undefined) return;
-  await privateDirectory(dirname(file));
-  const document = existing ? JSON.parse(existing) as Record<string, unknown> : {};
-  for (const key of engine === 'claude' ? ['claudeAiOauth'] : codexAccountKeys) delete document[key];
-  if (content !== undefined) Object.assign(document, accountFields(JSON.parse(content) as Record<string, unknown>, engine));
-  if (Object.keys(document).length) await writePrivateJson(file, JSON.stringify(document));
-  else await rm(file, { force: true });
-}
-
-export async function clearClaudeAccount(home: string): Promise<void> {
-  for (const relative of claudeConfigFiles) {
-    const file = join(home, relative);
-    const content = await readPrivateJson(file);
-    if (content === undefined) continue;
-    const settings = JSON.parse(content) as Record<string, unknown>;
-    if (!claudeAccountKeys.some(key => key in settings)) continue;
-    for (const key of claudeAccountKeys) delete settings[key];
-    await writePrivateJson(file, JSON.stringify(settings));
-  }
-}
-
-export async function copyClaudeAccount(sourceHome: string, targetHome: string): Promise<void> {
-  await clearClaudeAccount(targetHome);
-  for (const relative of claudeConfigFiles) {
-    const source = await readPrivateJson(join(sourceHome, relative));
-    if (!source) continue;
-    const account = (JSON.parse(source) as Record<string, unknown>).oauthAccount;
-    if (!account || typeof account !== 'object' || Array.isArray(account)) continue;
-    const file = join(targetHome, relative);
-    const target = await readPrivateJson(file);
-    const settings = target ? JSON.parse(target) as Record<string, unknown> : {};
-    settings.oauthAccount = account;
-    await writePrivateJson(file, JSON.stringify(settings));
-  }
-}
-
-export async function clearRuntimeCredential(home: string, engine: AccountEngine): Promise<void> {
-  await writeAccountCredential(home, engine, undefined);
-  if (engine === 'claude') await clearClaudeAccount(home);
 }

@@ -11,7 +11,6 @@ import { availableSlots, serializeSlot } from './accounts/access.js';
 export { serializeSlot } from './accounts/access.js';
 
 const cookieName = 'clinavat_session';
-const legacyCookieName = 'cc_pool_session';
 const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -39,7 +38,6 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     reply.setCookie(cookieName, token, {
       path: '/', httpOnly: true, sameSite: 'strict', secure: config.secureCookie, maxAge: sessionLifetime / 1000,
     });
-    reply.clearCookie(legacyCookieName, { path: '/' });
   }
   app.decorateRequest('user', null as unknown as User);
   app.decorateRequest('authSessionHash', '');
@@ -50,7 +48,7 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     if (request.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, '禁止跨站请求');
     const path = request.url.split('?')[0];
     if (['/api/health', '/api/site/settings', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register'].includes(path)) return;
-    const token = request.cookies[cookieName] ?? request.cookies[legacyCookieName];
+    const token = request.cookies[cookieName];
     const user = token && store.get<User & { auth_session_expires_at: number }>(
       'SELECT users.*,auth_sessions.expires_at AS auth_session_expires_at FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id WHERE token_hash=? AND expires_at>?',
       tokenHash(token), Date.now(),
@@ -64,7 +62,6 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
         maxAge: Math.max(0, Math.floor((user.auth_session_expires_at - Date.now()) / 1000)),
       });
     }
-    if (request.cookies[legacyCookieName]) reply.clearCookie(legacyCookieName, { path: '/' });
   });
   app.get('/api/auth/status', async () => ({
     needsSetup: !store.get('SELECT id FROM users LIMIT 1'), registrationEnabled: config.registrationEnabled,
@@ -90,12 +87,12 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     return { user: await describe(user) };
   });
   app.post('/api/auth/logout', async (request, reply) => {
-    for (const token of new Set([request.cookies[cookieName], request.cookies[legacyCookieName]].filter((value): value is string => !!value))) {
+    const token = request.cookies[cookieName];
+    if (token) {
       store.run('DELETE FROM auth_sessions WHERE token_hash=?', tokenHash(token));
       connections.revoke(tokenHash(token));
     }
     reply.clearCookie(cookieName, { path: '/' });
-    reply.clearCookie(legacyCookieName, { path: '/' });
     return { ok: true };
   });
   app.get('/api/auth/me', async request => ({

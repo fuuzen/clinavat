@@ -70,7 +70,7 @@ npm run dev
 | 文档 | 内容 |
 | --- | --- |
 | [部署与运维](docs/deployment.md) | 宿主机 / Docker 部署、配置项、公开访问、备份、不中断任务的发布、重置管理员密码 |
-| [从 CC-Pool 升级](docs/upgrade.md) | 品牌更名后的兼容规则与旧数据迁移 |
+| [虚拟机隔离（规划中）](docs/vm-isolation.md) | 用户隔离的架构、隔离边界、LXD 环境与实施计划 |
 | [账号与槽位](docs/accounts.md) | 创建用户和槽位、登录 CLI、切换账号、额度显示、凭据存放 |
 | [开发机与项目](docs/projects.md) | SSH / 跳板机、三种项目模式、同步与排除规则 |
 | [与智能体对话](docs/agents.md) | 命令与快捷键、暂停与 Goal、权限模式、命令如何在开发机执行 |

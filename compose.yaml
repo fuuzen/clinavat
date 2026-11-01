@@ -11,7 +11,7 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      CLINAVAT_MASTER_KEY: ${CLINAVAT_MASTER_KEY:?请配置 CLINAVAT_MASTER_KEY；已有部署请使用 deploy/compose.legacy.yaml}
+      CLINAVAT_MASTER_KEY: ${CLINAVAT_MASTER_KEY:?请配置 CLINAVAT_MASTER_KEY}
       CLINAVAT_ORIGIN: ${CLINAVAT_PUBLIC_ORIGIN:-}
       CLINAVAT_WEB_PORT: ${CLINAVAT_WEB_PORT:-8080}
       CLINAVAT_COOKIE_SECURE: ${CLINAVAT_COOKIE_SECURE:-false}
@@ -42,6 +42,6 @@ services:
         condition: service_healthy
 volumes:
   data:
-    name: ${CLINAVAT_DATA_VOLUME:?新部署请配置 CLINAVAT_DATA_VOLUME；旧部署请使用 deploy/compose.legacy.yaml}
+    name: ${CLINAVAT_DATA_VOLUME:?请配置 CLINAVAT_DATA_VOLUME}
   workspaces:
-    name: ${CLINAVAT_WORKSPACE_VOLUME:?新部署请配置 CLINAVAT_WORKSPACE_VOLUME；旧部署请使用 deploy/compose.legacy.yaml}
+    name: ${CLINAVAT_WORKSPACE_VOLUME:?请配置 CLINAVAT_WORKSPACE_VOLUME}

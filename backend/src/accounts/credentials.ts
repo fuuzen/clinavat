@@ -225,7 +225,7 @@ export class AccountCredentials {
     await restoreSlotProfile(this.dataDir, journal.userId, journal.slotId, journal.home, journal.engine);
     const key = `${journal.userId}:${journal.engine}`;
     const previous = this.userPreparations.get(key) ?? Promise.resolve();
-    const preparation = previous.then(() => bindSlotSessionState(this.dataDir, this.store, journal.userId, journal.home, journal.engine));
+    const preparation = previous.then(() => bindSlotSessionState(this.dataDir, journal.userId, journal.home, journal.engine));
     const tail = preparation.then(() => undefined, () => undefined);
     this.userPreparations.set(key, tail);
     try { await preparation; }

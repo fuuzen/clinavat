@@ -30,8 +30,8 @@ COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
 RUN npm ci --omit=dev --workspace backend && npm cache clean --force
 COPY --from=build /app/backend/dist backend/dist
-RUN mkdir -p /srv/clinavat /var/tmp/clinavat-workspace /srv/pool /var/tmp/cc-pool-workspace \
-    && chown node:node /srv/clinavat /var/tmp/clinavat-workspace /srv/pool /var/tmp/cc-pool-workspace
+RUN mkdir -p /srv/clinavat /var/tmp/clinavat-workspace \
+    && chown node:node /srv/clinavat /var/tmp/clinavat-workspace
 USER node
 ENV NODE_ENV=production CLINAVAT_DATA_DIR=/srv/clinavat CLINAVAT_WORKSPACE_DIR=/var/tmp/clinavat-workspace CLINAVAT_HOST=0.0.0.0 CLINAVAT_PORT=3001
 EXPOSE 3001

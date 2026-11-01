@@ -38,7 +38,6 @@ export interface AgentContext {
     command?: 'compact';
     turn_id?: string;
     goal?: { action: 'create' | 'resume'; objective?: string };
-    resume_interrupted?: boolean;
   };
 }
 
