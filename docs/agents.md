@@ -110,7 +110,7 @@ CLI 自带的自动审核器仍可能拒绝操作。YOLO 不会生成审批卡�
 - 使用隔离的 settings、固定的工具白名单和 `PreToolUse` Hook。
 - Hook 检查路径是否在项目内，并把 Bash 命令改写为经 `remote-shell` 执行，然后仍由 CLI 判断权限；CLI 需要确认时，通过 stream-json 控制协议在网页上显示审批。
 - Full access 使用 `bypassPermissions`，其他模式保留 `--restricted`。
-- Hook 与 Hub 通过每次运行随机生成令牌的 Unix Socket 通信，超时或断开即拒绝（`onFailure: block`）。
+- Hook 通过 stream-json 控制协议的 `hook_callback` 回调到 Hub，与对话共用 CLI 的标准输入输出，不经过任何 socket。Hub 对回调总是返回格式合法的允许或拒绝，处理出错时一律拒绝；回调超时，CLI 会拒绝执行该工具。任何工具结果如果没有经过这道回调，Hub 会立即停止本次运行。
 
 **Codex**：
 

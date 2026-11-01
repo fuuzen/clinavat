@@ -2,6 +2,9 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { RunServices } from './types.js';
 import { answerClaudeQuestions } from './claude-questions.js';
+import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
+
+const preToolUseCallback = 'clinavat-pre-tool-use';
 
 interface Initialization {
   id: string;
@@ -13,6 +16,7 @@ interface Initialization {
 export class ClaudeControl {
   private initialization?: Initialization;
   private requests = new Map<string, AbortController>();
+  private checkedToolUses = new Set<string>();
   closed = false;
 
   constructor(
@@ -31,7 +35,11 @@ export class ClaudeControl {
       }, 60_000);
       this.initialization = { id, cancelTimeout, resolve, reject };
       try {
-        this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize', hooks: null } });
+        this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize', hooks: { PreToolUse: [{
+          matcher: '.*', hookCallbackIds: [preToolUseCallback],
+          // An unanswered callback blocks the tool. Hub deadlines exclude paused time; this native one uses wall time even after SIGSTOP.
+          timeout: Math.max(86400, Math.ceil(this.services.config.approvalTimeoutMs / 1000) + 10),
+        }] } } });
       } catch (error) {
         this.close(error instanceof Error ? error : new Error('Claude CLI 初始化失败'));
       }
@@ -64,6 +72,12 @@ export class ClaudeControl {
     if (!id || this.closed || this.requests.has(id)) return true;
     const token = new AbortController();
     this.requests.set(id, token);
+    if (event.request?.subtype === 'hook_callback') {
+      void this.respondHook(id, token, event.request).finally(() => {
+        if (this.requests.get(id) === token) this.requests.delete(id);
+      });
+      return true;
+    }
     void this.respond(id, token, event.request).catch((error: unknown) => {
       if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI 审批响应失败'));
     }).finally(() => {
@@ -71,6 +85,9 @@ export class ClaudeControl {
     });
     return true;
   }
+
+  /** Every executed tool must have passed the Hub's PreToolUse callback; anything else means the gate was bypassed. */
+  wasChecked(toolUseId: string): boolean { return this.checkedToolUses.has(toolUseId); }
 
   close(error = new Error('Claude CLI 控制通道已关闭')): void {
     if (this.closed) return;
@@ -90,6 +107,19 @@ export class ClaudeControl {
       throw new Error('Claude CLI 控制通道已关闭');
     }
     this.child.stdin.write(JSON.stringify(value) + '\n');
+  }
+
+  // Never answers with an error: the CLI would treat it as no opinion and run the tool.
+  private async respondHook(id: string, token: AbortController, request: Record<string, any>): Promise<void> {
+    if (typeof request.tool_use_id === 'string') this.checkedToolUses.add(request.tool_use_id);
+    const input = request.input;
+    const output = request.callback_id !== preToolUseCallback ? denyHook('未知的工具审批回调')
+      : !input || typeof input !== 'object' || Array.isArray(input) ? denyHook('工具审批输入无效')
+        : validHookOutput(await preToolUseDecision(this.services, input).catch((error: unknown) =>
+          denyHook(error instanceof Error ? error.message : '工具路径或审批校验失败')));
+    if (this.closed || token.signal.aborted || this.requests.get(id) !== token) return;
+    try { this.write({ type: 'control_response', response: { subtype: 'success', request_id: id, response: output } }); }
+    catch (error) { if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI 审批响应失败')); }
   }
 
   private async respond(id: string, token: AbortController, request: Record<string, unknown> | undefined): Promise<void> {

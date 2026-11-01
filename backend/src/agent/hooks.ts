@@ -1,53 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, unlink, writeFile } from 'node:fs/promises';
-import { createServer, type Server, type Socket } from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { quoteShell, workspacePath } from './environment.js';
 import { getPermissionMode } from './permissions.js';
 import type { RunServices } from './types.js';
 import { answerClaudeQuestions } from './claude-questions.js';
-
-const hookClient = String.raw`const net = require('node:net');
-const [socketPath, token] = process.argv.slice(2);
-let input = '', response = '', finished = false;
-function finish(value) {
-  if (finished) return;
-  finished = true;
-  process.stdout.write(JSON.stringify(value) + '\n', () => process.exit(0));
-}
-function deny(reason) {
-  finish({hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason}});
-}
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => {
-  input += chunk;
-  if (input.length > 2097152) deny('工具输入过大');
-});
-process.stdin.on('end', () => {
-  let payload;
-  try { payload = JSON.parse(input); } catch { return deny('工具审批输入无效'); }
-  const socket = net.connect(socketPath);
-  socket.setEncoding('utf8');
-  socket.on('connect', () => socket.write(JSON.stringify({token, input: payload}) + '\n'));
-  socket.on('data', chunk => {
-    response += chunk.toString();
-    if (response.length > 2097152) return deny('工具审批响应过大');
-    if (response.includes('\n')) {
-      try { finish(JSON.parse(response.split('\n')[0])); } catch { deny('工具审批响应无效'); }
-    }
-  });
-  socket.on('error', () => deny('工具审批服务不可用，已拒绝'));
-  socket.on('end', () => { if (!finished) deny('工具审批连接已关闭'); });
-});
-process.stdin.on('error', () => deny('无法读取工具审批输入'));
-`;
-
-export interface HookServer {
-  command: string;
-  args: string[];
-  close(): Promise<void>;
-}
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {
@@ -62,7 +17,21 @@ function nativeDecision(updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', ...(updatedInput ? { updatedInput } : {}) } };
 }
 
-async function handleTool(services: RunServices, input: Record<string, unknown>) {
+export type HookOutput = ReturnType<typeof decision> | ReturnType<typeof nativeDecision>;
+
+export const denyHook = (reason: string) => decision(false, reason);
+
+/** The CLI treats an invalid or failed callback answer as no opinion and runs the tool, so only well-formed answers leave the Hub. */
+export function validHookOutput(value: unknown): HookOutput {
+  const output = (value as { hookSpecificOutput?: Record<string, unknown> } | undefined)?.hookSpecificOutput;
+  const updatedInput = output?.updatedInput;
+  const valid = !!output && output.hookEventName === 'PreToolUse'
+    && (output.permissionDecision === undefined || output.permissionDecision === 'allow' || output.permissionDecision === 'deny')
+    && (updatedInput === undefined || (!!updatedInput && typeof updatedInput === 'object' && !Array.isArray(updatedInput)));
+  return valid ? value as HookOutput : denyHook('平台审批结果无效，已拒绝');
+}
+
+export async function preToolUseDecision(services: RunServices, input: Record<string, unknown>): Promise<HookOutput> {
   const tool = String(input.tool_name ?? '');
   const args = input.tool_input as Record<string, unknown> | undefined;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return decision(false, '工具输入无效');
@@ -136,54 +105,4 @@ async function handleTool(services: RunServices, input: Record<string, unknown>)
   } catch (error) {
     return decision(false, error instanceof Error ? error.message : '工具路径或审批校验失败');
   }
-}
-
-export async function createHookServer(services: RunServices): Promise<HookServer> {
-  const runtimeDirectory = path.join(services.config.dataDir, 'agent-runtime');
-  await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
-  const clientPath = path.join(runtimeDirectory, 'approval-hook.cjs');
-  await writeFile(clientPath, hookClient, { mode: 0o700 });
-  const token = randomBytes(32).toString('hex');
-  const socketPath = path.join(os.tmpdir(), `clinavat-${randomBytes(12).toString('hex')}.sock`);
-  const connections = new Set<Socket>();
-  const server: Server = createServer((socket) => {
-    socket.setEncoding('utf8');
-    connections.add(socket);
-    socket.on('close', () => connections.delete(socket));
-    socket.on('error', () => socket.destroy());
-    const cancelTimeout = services.control.timer(() => socket.destroy(), services.config.approvalTimeoutMs + 5000);
-    socket.once('close', cancelTimeout);
-    let data = '';
-    let handled = false;
-    socket.on('data', (chunk) => {
-      if (handled) return;
-      data += chunk.toString();
-      if (data.length > 2 * 1024 * 1024) { socket.destroy(); return; }
-      if (!data.includes('\n')) return;
-      handled = true;
-      void (async () => {
-        try {
-          const request = JSON.parse(data.split('\n')[0]!) as { token: string; input: Record<string, unknown> };
-          const result = request.token === token
-            ? await handleTool(services, request.input)
-            : decision(false, '审批认证无效');
-          socket.end(JSON.stringify(result) + '\n');
-        } catch { socket.end(JSON.stringify(decision(false, '审批请求无效')) + '\n'); }
-      })();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => { server.off('error', reject); resolve(); });
-  });
-  await chmod(socketPath, 0o600);
-  return {
-    command: process.execPath,
-    args: [clientPath, socketPath, token],
-    async close() {
-      for (const connection of connections) connection.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await unlink(socketPath).catch(() => undefined);
-    },
-  };
 }

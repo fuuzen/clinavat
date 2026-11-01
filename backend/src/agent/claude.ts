@@ -3,7 +3,6 @@ import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { ClaudeControl } from './claude-control.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
-import { createHookServer } from './hooks.js';
 import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
@@ -25,17 +24,11 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const binary = await execution.resolveBinary(services.context.user.id, execution.binaries.claude);
   const plansDirectory = path.join(services.context.runtime_home, '.claude', 'plans');
   await mkdir(plansDirectory, { recursive: true, mode: 0o700 });
-  const hook = await createHookServer(services);
-  if (signal?.aborted) { await hook.close(); throw new Error('会话已停止'); }
+  if (signal?.aborted) throw new Error('会话已停止');
   const nativeId = services.context.session.native_session_id || randomUUID();
   const permissionMode = services.context.session.agent_mode === 'plan' ? 'plan' : claudePermissionMode(services.context.session);
   const settings = {
     plansDirectory,
-    hooks: { PreToolUse: [{ matcher: '.*', hooks: [{
-      type: 'command', command: hook.command, args: hook.args, onFailure: 'block',
-      // Hub deadlines exclude paused time; the native watchdog uses wall time even after SIGSTOP.
-      timeout: Math.max(86400, Math.ceil(services.config.approvalTimeoutMs / 1000) + 10),
-    }] }] },
     permissions: { deny: ['.bin', '.git', '.claude', '.codex'].flatMap((directory) => {
       const root = `/${services.context.project.local_path}`;
       return [`${root}/${directory}/**`, `${root}/**/${directory}/**`]
@@ -60,7 +53,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       ...(services.context.session.resume_interrupted ? { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
         CLAUDE_CODE_RESUME_SHOWS_CUT_OFF_CALLS: '1' } : {}),
     },
-  }).catch(async (error: unknown) => { await hook.close(); throw error; });
+  });
   services.control.track(child);
   const closed = observeProcessClose(child);
   let diagnostics = '';
@@ -146,6 +139,9 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     }
     if (event.type === 'user' && Array.isArray(event.message?.content)) {
       for (const entry of event.message.content) {
+        if (entry.type === 'tool_result' && !entry.is_error && !control.wasChecked(String(entry.tool_use_id))) {
+          inputError(new Error('工具调用未经过平台审批校验，已停止会话')); return;
+        }
         if (entry.type === 'tool_result') services.event('tool', {
           id: entry.tool_use_id, status: entry.is_error ? 'failed' : 'completed',
           output: (typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content ?? '')).slice(0, 128 * 1024),
@@ -197,7 +193,6 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         finally {
           signal?.removeEventListener('abort', stop);
           lines.close();
-          try { await hook.close(); } catch (error) { failure ??= error; }
         }
         if (failure) reject(failure); else resolve();
       })();
@@ -216,7 +211,6 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     terminateProcess(child);
     await closed;
     await completion.catch(() => undefined);
-    await hook.close();
     throw error;
   }
   return { process: child, completion, stop };
