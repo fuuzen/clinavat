@@ -1,7 +1,7 @@
 import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { atomicWrite, runCommand } from './process.js';
+import { atomicWrite, childEnvironment, runCommand } from './process.js';
 import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { readWorkspaceMigration, saveWorkspaceMigration } from './workspace-migration.js';
@@ -275,7 +275,7 @@ async function diskUsage(paths: string[]): Promise<number> {
     .filter((path): path is string => !!path);
   if (!existing.length) return 0;
   // du reports allocated blocks, matching the space the mirror actually consumes.
-  const result = await runCommand('du', ['-skc', '--', ...existing], { timeout: 60_000, env: { ...process.env, LC_ALL: 'C' } });
+  const result = await runCommand('du', ['-skc', '--', ...existing], { timeout: 60_000, env: childEnvironment({ LC_ALL: 'C' }) });
   const total = /^(\d+)\s+total$/m.exec(result.stdout.trim().split('\n').at(-1) ?? '');
   if (!total) throw new Error(result.stderr.trim() || '无法统计工作区磁盘占用');
   return Number(total[1]) * 1024;

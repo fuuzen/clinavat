@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { KeyStore } from './keys.js';
-import { atomicWrite, checkedCommand, runCommand } from './process.js';
+import { atomicWrite, checkedCommand, childEnvironment, runCommand } from './process.js';
 import { assertHostOwner, assertRemotePath, remoteBash, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
 
 function configQuote(value: string): string {
@@ -133,7 +133,7 @@ export class SshManager {
     for (const [name, binary] of binaries) {
       await atomicWrite(join(wrapperDirectory, name), `#!/bin/sh\nexec ${shellQuote(binary)} -F ${shellQuote(this.configPath(userId))} "$@"\n`, 0o700);
     }
-    return {...process.env, MUTAGEN_DATA_DIRECTORY: mutagenDirectory, MUTAGEN_SSH_PATH: wrapperDirectory};
+    return childEnvironment({MUTAGEN_DATA_DIRECTORY: mutagenDirectory, MUTAGEN_SSH_PATH: wrapperDirectory});
   }
 
   async deleteHost(userId: string, host: DevHost): Promise<void> {

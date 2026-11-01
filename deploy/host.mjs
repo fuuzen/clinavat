@@ -93,7 +93,11 @@ async function resumeSync() {
     });
     if (!sessions.some(session => session.isFile())) continue;
     run(process.env.CLINAVAT_MUTAGEN_BIN ?? 'mutagen', ['daemon', 'start'], {
-      env: { ...process.env, MUTAGEN_DATA_DIRECTORY: mutagenDirectory, MUTAGEN_SSH_PATH: join(userDirectory, 'mutagen-ssh') },
+      // The daemon outlives this command; it must not inherit the master key loaded from .env.
+      env: {
+        ...Object.fromEntries(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ'].filter(name => process.env[name]).map(name => [name, process.env[name]])),
+        MUTAGEN_DATA_DIRECTORY: mutagenDirectory, MUTAGEN_SSH_PATH: join(userDirectory, 'mutagen-ssh'),
+      },
       timeout: 20_000,
     });
   }

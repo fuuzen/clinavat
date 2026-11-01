@@ -23,6 +23,8 @@ const environment = z.object({
   CLINAVAT_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(22),
   CLINAVAT_GATEWAY_USER: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('root'),
 }).parse(brandedEnvironment());
+// The parsed config is the only holder of the master key; a later {...process.env} cannot hand it to a child.
+for (const name of ['CLINAVAT_MASTER_KEY', 'CC_POOL_MASTER_KEY']) delete process.env[name];
 
 export const config = {
   dataDir: resolve(environment.CLINAVAT_DATA_DIR),

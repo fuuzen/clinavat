@@ -11,6 +11,16 @@ interface CommandOptions {
   input?: string;
 }
 
+// An allowlist, so secrets loaded into the Hub's environment never reach child processes.
+const childVariables = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR'];
+
+export function childEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of childVariables) if (process.env[name]) environment[name] = process.env[name];
+  return {...environment, ...extra};
+}
+
 export async function atomicWrite(path: string, content: string, mode = 0o600): Promise<void> {
   const temporary = `${path}.${randomBytes(8).toString('hex')}.tmp`;
   try {
@@ -22,7 +32,7 @@ export async function atomicWrite(path: string, content: string, mode = 0o600): 
 export function runCommand(binary: string, args: string[], options: CommandOptions = {}): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
-      cwd: options.cwd, env: options.env ?? process.env,
+      cwd: options.cwd, env: options.env ?? childEnvironment(),
       stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true,
     });
     if (options.input !== undefined) {

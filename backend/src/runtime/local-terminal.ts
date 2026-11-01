@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import type { WebSocket } from 'ws';
+import { childEnvironment } from './process.js';
 import type { WorkspaceProject } from './types.js';
 import type { WorkspaceManager } from './workspace.js';
 
@@ -123,9 +124,10 @@ finally:
 export async function attachLocalTerminal(socket: WebSocket, project: WorkspaceProject, workspaces: WorkspaceManager): Promise<void> {
   await workspaces.flush(project);
   if (socket.readyState !== 1) return;
+  // The administrator's local-host terminal is a host shell by design, even when agents run in VMs.
   const child = spawn('python3', ['-u', '-c', terminalBridge], {
     cwd: project.local_path,
-    env: {...process.env, PWD: project.local_path, TERM: 'xterm-256color'},
+    env: childEnvironment({PWD: project.local_path, TERM: 'xterm-256color'}),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const decoder = new StringDecoder('utf8');
