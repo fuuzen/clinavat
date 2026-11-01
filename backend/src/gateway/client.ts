@@ -6,7 +6,7 @@ import { atomicWrite, checkedCommand, runCommand } from '../runtime/process.js';
 import { HttpError } from '../models.js';
 
 export type GatewayTarget = NonNullable<Config['gateway']>;
-export const gwctlPath = '/usr/local/lib/cc-pool-gw/gwctl.py';
+export const gwctlPath = '/usr/local/lib/clinavat-gw/gwctl.py';
 
 /** Calls the gateway controller through its forced-command SSH key; one JSON request per connection. */
 export class GatewayClient {

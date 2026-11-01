@@ -1,12 +1,12 @@
 #!/usr/bin/python3 -I
-"""CC-Pool gateway controller.
+"""Clinavat gateway controller.
 
 Remote use: the Hub's dedicated SSH key is pinned to this program with a forced
 command; one JSON request is read from stdin and one JSON response is written.
 Local use (root shell): gwctl.py <op> [json-args], plus local-only maintenance ops.
 
-The controller owns /etc/cc-pool-gw/state.json and renders sing-box, nftables and
-nginx from it. Infrastructure facts live in /etc/cc-pool-gw/infra.json and can
+The controller owns /etc/clinavat-gw/state.json and renders sing-box, nftables and
+nginx from it. Infrastructure facts live in /etc/clinavat-gw/infra.json and can
 only be changed by editing that file on the gateway.
 """
 import fcntl
@@ -24,26 +24,26 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-ETC = '/etc/cc-pool-gw'
-VAR = '/var/lib/cc-pool-gw'
+ETC = '/etc/clinavat-gw'
+VAR = '/var/lib/clinavat-gw'
 INFRA_PATH = f'{ETC}/infra.json'
 STATE_PATH = f'{ETC}/state.json'
 CERT_DIR = f'{ETC}/certs'
 ACME_HOME = f'{VAR}/acme'
 # acme.sh runs as this user; sing-box excludes its uid from tun so DNS API calls leave directly.
-ACME_USER = 'cc-pool-acme'
+ACME_USER = 'clinavat-acme'
 REVISION_DIR = f'{VAR}/revisions'
 APPLIED_PATH = f'{VAR}/applied.json'
 PENDING_PATH = f'{VAR}/pending.json'
 AUDIT_PATH = f'{VAR}/audit.jsonl'
 LOCK_PATH = f'{VAR}/lock'
-GWCTL = '/usr/local/lib/cc-pool-gw/gwctl.py'
+GWCTL = '/usr/local/lib/clinavat-gw/gwctl.py'
 
 TARGETS = {
     'sing-box': '/etc/sing-box/config.json',
     'guard': f'{ETC}/rendered/guard.nft',
-    'nginx': '/etc/nginx/sites-available/cc-pool.conf',
-    'nginx-map': '/etc/nginx/conf.d/cc-pool-map.conf',
+    'nginx': '/etc/nginx/sites-available/clinavat.conf',
+    'nginx-map': '/etc/nginx/conf.d/clinavat-map.conf',
 }
 CONFIRM_SECONDS = 90
 NODE_TYPES = {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'anytls', 'naive'}
@@ -112,7 +112,7 @@ def file_digest(path):
 
 
 def remote_mode() -> bool:
-    return os.environ.get('CC_POOL_GW_REMOTE') == '1'
+    return os.environ.get('CLINAVAT_GW_REMOTE') == '1'
 
 
 def audit(action, status, **detail):
@@ -289,10 +289,10 @@ def render_guard(state, infra):
     dnat = '\n'.join(
         f'    iifname "{wan_if}" {item.get("proto", "tcp")} dport {item["port"]} dnat ip to {pool_ip}:{item["to_port"]}'
         for item in state['forwards'])
-    return f'''# Managed by gwctl. Do not edit; change /etc/cc-pool-gw/state.json through gwctl.
-table inet cc_pool_guard
-delete table inet cc_pool_guard
-table inet cc_pool_guard {{
+    return f'''# Managed by gwctl. Do not edit; change /etc/clinavat-gw/state.json through gwctl.
+table inet clinavat_guard
+delete table inet clinavat_guard
+table inet clinavat_guard {{
   set lan_direct {{
     type ipv4_addr; flags interval; auto-merge
     {"elements = { " + nft_elements(infra["lan_direct"]) + " }" if infra["lan_direct"] else ""}
@@ -344,7 +344,7 @@ server {{
     ssl_certificate {cert}/fullchain.pem;
     ssl_certificate_key {cert}/key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_session_cache shared:cc_pool_ssl:10m;
+    ssl_session_cache shared:clinavat_ssl:10m;
     add_header Strict-Transport-Security "max-age=31536000" always;
     client_max_body_size 1m;
 
@@ -357,7 +357,7 @@ server {{
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $cc_pool_connection_upgrade;
+        proxy_set_header Connection $clinavat_connection_upgrade;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
@@ -372,7 +372,7 @@ server {{
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $cc_pool_connection_upgrade;
+        proxy_set_header Connection $clinavat_connection_upgrade;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
@@ -387,7 +387,7 @@ server {{
 
 
 NGINX_MAP = '''# Managed by gwctl.
-map $http_upgrade $cc_pool_connection_upgrade {
+map $http_upgrade $clinavat_connection_upgrade {
     default upgrade;
     '' close;
 }
@@ -413,7 +413,7 @@ def install_files(rendered):
     for name, content in rendered.items():
         atomic_write(TARGETS[name], content, 0o600 if name == 'sing-box' else 0o644)
     if 'nginx' in rendered:
-        link = '/etc/nginx/sites-enabled/cc-pool.conf'
+        link = '/etc/nginx/sites-enabled/clinavat.conf'
         if not os.path.islink(link):
             os.symlink(TARGETS['nginx'], link)
 
@@ -458,7 +458,7 @@ def health(state, infra, wait=20):
         if report['sing_box'] and report['tun']:
             break
         time.sleep(1)
-    report['guard'] = run(['nft', 'list', 'table', 'inet', 'cc_pool_guard'], check=False).returncode == 0
+    report['guard'] = run(['nft', 'list', 'table', 'inet', 'clinavat_guard'], check=False).returncode == 0
     if report['tun']:
         for _ in range(3):
             report['egress_ip'] = egress_ip()
@@ -525,15 +525,15 @@ def restore(revision):
             shutil.copy2(f'{directory}/{name}', path)
         elif name in ('nginx', 'nginx-map') and os.path.exists(path):
             os.unlink(path)
-    if not os.path.exists(TARGETS['nginx']) and os.path.islink('/etc/nginx/sites-enabled/cc-pool.conf'):
-        os.unlink('/etc/nginx/sites-enabled/cc-pool.conf')
+    if not os.path.exists(TARGETS['nginx']) and os.path.islink('/etc/nginx/sites-enabled/clinavat.conf'):
+        os.unlink('/etc/nginx/sites-enabled/clinavat.conf')
     # The guard is never removed by a rollback; an older table is still a kill switch.
     activate(set(TARGETS) | {'selector'}, read_json(STATE_PATH), read_json(INFRA_PATH))
     record_applied({name: open(path).read() for name, path in TARGETS.items() if os.path.exists(path)})
 
 
 def cancel_timer(revision):
-    run(['systemctl', 'stop', f'cc-pool-gw-rollback-{revision}.timer'], check=False)
+    run(['systemctl', 'stop', f'clinavat-gw-rollback-{revision}.timer'], check=False)
 
 
 def transact(action, mutate, args, wait_confirm=True, activate_only=None):
@@ -570,7 +570,7 @@ def transact(action, mutate, args, wait_confirm=True, activate_only=None):
         raise GatewayError(f'健康检查未通过，已回滚：{"；".join(report["problems"])}')
     record_applied(rendered)
     if wait_confirm:
-        run(['systemd-run', f'--unit=cc-pool-gw-rollback-{revision}', f'--on-active={CONFIRM_SECONDS}',
+        run(['systemd-run', f'--unit=clinavat-gw-rollback-{revision}', f'--on-active={CONFIRM_SECONDS}',
              '--timer-property=AccuracySec=1s', GWCTL, 'timer-rollback', str(revision)])
         atomic_write(PENDING_PATH, json.dumps({'revision': revision, 'action': action,
                                                'deadline': time.time() + CONFIRM_SECONDS}), 0o600)

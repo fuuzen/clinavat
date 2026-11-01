@@ -1,23 +1,23 @@
 #!/bin/bash
-# One-time CC-Pool gateway control plane installation. Run as root on the gateway from a
+# One-time Clinavat gateway control plane installation. Run as root on the gateway from a
 # directory containing this script, gwctl.py, gateway-rules.sh and gateway-rules.service.
 #
 #   ./install.sh --wan-ip 192.0.2.10 --site clinavat.example.com [--drop-direct 17.0.0.0/8] \
-#                [--acme-dns dns_ali] [--hub-key 'ssh-ed25519 AAAA... cc-pool-hub']
+#                [--acme-dns dns_ali] [--hub-key 'ssh-ed25519 AAAA... clinavat-hub']
 #
 # Every change is shown before it is applied; activation waits for confirmation and rolls
 # back automatically after 90 seconds without it.
 set -euo pipefail
 
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-LIB=/usr/local/lib/cc-pool-gw
+LIB=/usr/local/lib/clinavat-gw
 GWCTL="$LIB/gwctl.py"
-ETC=/etc/cc-pool-gw
-VAR=/var/lib/cc-pool-gw
+ETC=/etc/clinavat-gw
+VAR=/var/lib/clinavat-gw
 ACME_HOME="$VAR/acme"
 BACKUP="$VAR/pre-install-$(date -u +%Y%m%dT%H%M%SZ)"
 POOL_IP=10.10.10.10
-ACME_USER=cc-pool-acme
+ACME_USER=clinavat-acme
 
 wan_ip="" sites=() drop_direct=() acme_dns=dns_ali hub_key=""
 while (($#)); do
@@ -116,7 +116,7 @@ fi
 echo "== review"
 gw render "{\"directory\": \"$VAR/review\"}" >/dev/null
 diff -u /etc/sing-box/config.json "$VAR/review/sing-box" || true
-echo "--- guard (replaces iptables POOL_DNAT / MASQUERADE)"
+echo "--- guard"
 cat "$VAR/review/guard"
 confirm "Apply this configuration?" || exit 1
 
@@ -126,7 +126,6 @@ install -m 644 "$SOURCE/gateway-rules.service" /etc/systemd/system/gateway-rules
 systemctl daemon-reload
 result="$(gw activate)"
 wait_confirm "$result"
-# The confirmed guard owns DNAT and MASQUERADE now; restart drops the legacy iptables copies.
 systemctl restart gateway-rules
 systemctl enable gateway-rules >/dev/null
 
@@ -135,9 +134,9 @@ hook="$(dpkg -L acme.sh | grep "/dnsapi/${acme_dns}.sh$" | head -1 || true)"
 [[ -n "$hook" ]] || { echo "acme.sh has no DNS hook $acme_dns" >&2; exit 1; }
 ln -sfn "$(dirname "$hook")" "$ACME_HOME/dnsapi"
 chown -h "$ACME_USER:$ACME_USER" "$ACME_HOME/dnsapi"
-cat >/etc/systemd/system/cc-pool-gw-acme.service <<EOF
+cat >/etc/systemd/system/clinavat-gw-acme.service <<EOF
 [Unit]
-Description=CC-Pool gateway certificate renewal
+Description=Clinavat gateway certificate renewal
 
 [Service]
 Type=oneshot
@@ -148,9 +147,9 @@ ExecStart=/usr/bin/acme.sh --cron --home $ACME_HOME --config-home $ACME_HOME
 # Root copies renewed certificates into the nginx tree and reloads it.
 ExecStartPost=+$GWCTL certs.sync
 EOF
-cat >/etc/systemd/system/cc-pool-gw-acme.timer <<EOF
+cat >/etc/systemd/system/clinavat-gw-acme.timer <<EOF
 [Unit]
-Description=Daily CC-Pool gateway certificate renewal
+Description=Daily Clinavat gateway certificate renewal
 
 [Timer]
 OnCalendar=daily
@@ -161,7 +160,7 @@ Persistent=true
 WantedBy=timers.target
 EOF
 systemctl daemon-reload
-systemctl enable --now cc-pool-gw-acme.timer >/dev/null
+systemctl enable --now clinavat-gw-acme.timer >/dev/null
 
 if [[ "$acme_dns" == dns_ali ]] && ! grep -q '^SAVED_Ali_Key=' "$ACME_HOME/account.conf" 2>/dev/null; then
   # acme.sh stores the credentials in $ACME_HOME/account.conf on first use; they never leave the gateway.
@@ -180,7 +179,7 @@ unset Ali_Key Ali_Secret
 if [[ -n "$hub_key" ]]; then
   echo "== hub key"
   [[ "$hub_key" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+(\ [^\"]*)?$ ]] || { echo "invalid ed25519 public key" >&2; exit 1; }
-  line="restrict,from=\"$POOL_IP\",command=\"CC_POOL_GW_REMOTE=1 $GWCTL\" $hub_key"
+  line="restrict,from=\"$POOL_IP\",command=\"CLINAVAT_GW_REMOTE=1 $GWCTL\" $hub_key"
   install -d -m 700 /root/.ssh
   touch /root/.ssh/authorized_keys
   grep -qxF "$line" /root/.ssh/authorized_keys || echo "$line" >>/root/.ssh/authorized_keys
