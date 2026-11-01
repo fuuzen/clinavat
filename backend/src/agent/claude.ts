@@ -8,6 +8,8 @@ import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
 import type { AgentRun, RunServices } from './types.js';
 
+const EXIT_GRACE_MS = 10_000;
+
 async function transcriptPath(home: string, nativeId: string): Promise<string | undefined> {
   const projects = path.join(home, '.claude', 'projects');
   for (const directory of await readdir(projects, { withFileTypes: true }).catch(() => [])) {
@@ -48,7 +50,11 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
+    scope: agentScope(services.context), cwd: services.context.project.local_path, env: {
+      ...agentEnvironment(execution, services.context),
+      // A task finishing after the result would start an unattended turn that nobody can approve or see.
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+    },
   });
   services.control.track(child);
   const closed = observeProcessClose(child);
@@ -62,12 +68,16 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const messageGroups = new Map<string, string>();
   let stopped = false;
   let nativeSessionReceived = false;
+  let resultReceived = false;
+  let exitGraceExpired = false;
+  let exitGrace: NodeJS.Timeout | undefined;
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
   const control = new ClaudeControl(child, services, inputError);
   const stop = () => { stopped = true; control.close(new Error('会话已停止')); terminateProcess(child); };
   child.stdin.on('error', (error) => { if (!control.closed) inputError(error); });
   const lines = readJsonLines(child.stdout, (event) => {
     if (control.handle(event)) return;
+    if (resultReceived) return;
     if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event', event.rate_limit_info);
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
       nativeSessionReceived = true;
@@ -148,6 +158,10 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       // The turn is terminal; a late pause must not freeze the CLI while it drains and exits.
       services.control.close();
       control.close();
+      resultReceived = true;
+      // The CLI waits for leftover tasks instead of exiting, which would hold the slot with nothing left to do.
+      exitGrace = setTimeout(() => { exitGraceExpired = true; terminateProcess(child); }, EXIT_GRACE_MS);
+      exitGrace.unref();
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
         resultError = Array.isArray(event.errors) ? event.errors.join('\n') : String(event.result ?? event.subtype);
       } else if (!messages.size && event.result) {
@@ -164,7 +178,9 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   child.stderr.on('data', (chunk) => { diagnostics = (diagnostics + chunk.toString()).slice(-16 * 1024); });
   const completion = new Promise<void>((resolve, reject) => {
     child.once('error', error => { resultError = error.message; });
-    child.once('close', (code, exitSignal) => {
+    child.once('close', (exitCode, exitSignal) => {
+      clearTimeout(exitGrace);
+      const code = exitGraceExpired ? 0 : exitCode;
       control.close(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
       void (async () => {
         let failure: unknown;
