@@ -134,31 +134,8 @@ hook="$(dpkg -L acme.sh | grep "/dnsapi/${acme_dns}.sh$" | head -1 || true)"
 [[ -n "$hook" ]] || { echo "acme.sh has no DNS hook $acme_dns" >&2; exit 1; }
 ln -sfn "$(dirname "$hook")" "$ACME_HOME/dnsapi"
 chown -h "$ACME_USER:$ACME_USER" "$ACME_HOME/dnsapi"
-cat >/etc/systemd/system/clinavat-gw-acme.service <<EOF
-[Unit]
-Description=Clinavat gateway certificate renewal
-
-[Service]
-Type=oneshot
-User=$ACME_USER
-Group=$ACME_USER
-Environment=HOME=$ACME_HOME
-ExecStart=/usr/bin/acme.sh --cron --home $ACME_HOME --config-home $ACME_HOME
-# Root copies renewed certificates into the nginx tree and reloads it.
-ExecStartPost=+$GWCTL certs.sync
-EOF
-cat >/etc/systemd/system/clinavat-gw-acme.timer <<EOF
-[Unit]
-Description=Daily Clinavat gateway certificate renewal
-
-[Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
+source "$SOURCE/acme-units.sh"
+write_acme_units "$ACME_HOME" "$ACME_USER" "$GWCTL"
 systemctl daemon-reload
 systemctl enable --now clinavat-gw-acme.timer >/dev/null
 

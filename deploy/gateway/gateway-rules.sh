@@ -7,6 +7,8 @@ set -euo pipefail
 GUARD=/etc/clinavat-gw/rendered/guard.nft
 LAN_IF="eth1"
 WAN_IF="eth0"
+# A host whose interfaces have other names overrides LAN_IF and WAN_IF here.
+if [[ -f /etc/clinavat-gw/interfaces ]]; then source /etc/clinavat-gw/interfaces; fi
 LAN_SUBNET="10.10.10.0/24"
 
 fail_closed() {

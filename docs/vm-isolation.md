@@ -1,6 +1,6 @@
 # 虚拟机隔离
 
-> 状态：已完成运行系统从宿主机到虚拟机的切换，并验证真实 Claude/Codex 对话、审批、原生会话恢复、开发机同步和文件预览；Claude 另验证了暂停、继续、暂停后停止和槽位再租用。默认配置仍为宿主机模式，用 `CLINAVAT_EXECUTION_HOST=lxd` 开启。网关尚未迁入虚拟机。
+> 状态：已完成运行系统从宿主机到虚拟机的切换，并验证真实 Claude/Codex 对话、审批、原生会话恢复、开发机同步和文件预览；Claude 另验证了暂停、继续、暂停后停止和槽位再租用。默认配置仍为宿主机模式，用 `CLINAVAT_EXECUTION_HOST=lxd` 开启。
 >
 > 宿主机模式**只适用于单一、受信任的使用者**：智能体命令与 Hub 是同一个系统用户，可以读取数据目录和 `.env`。
 
@@ -162,7 +162,66 @@ sudo lxc project set clinavat limits.memory=<本机内存的 75%> limits.cpu=<�
 - **授权覆盖**：本次真实验收中，Claude 使用非管理员账号，Codex 使用原有授权的管理员账号，三个现有槽位均已运行；按使用者要求保持原授权，因此未覆盖非管理员 Codex 和同一用户跨 Claude 槽位切换。
 - **按用户的出站规则**：目前所有虚拟机共用一份开发机白名单，用户 A 的虚拟机也能连到用户 B 的开发机（仍需要 SSH 密钥）。
 - **按需启停虚拟机**：目前开机后一直运行，内存占用随用户数增长。配合计划中的对话运行时空闲回收（默认 5 分钟），但有同步项目时还不能关机。
-- **网关虚拟机**：上线后切换用户虚拟机的出口。需要一个能直接访问外网的上行接口，而这台机器目前的默认路由就指向现有网关，所以要先调整上层虚拟化平台的网络。**这一步可能切断宿主机连接，必须准备带外访问途径。** 切换后保留旧网关，确认出口 IP 和防泄漏规则正常后再下线。
+
+## 网关虚拟机
+
+把上游网关迁到本机的一台虚拟机里，地址和 MAC 都沿用旧网关，所以宿主机路由、Hub 配置和防泄漏规则都不用改：
+
+```text
+外网 ─ 第二张网卡（宿主机不配地址）─ macvlan ─ 网关 VM eth0（原 WAN 地址和 MAC）
+                                              网关 VM eth1（原 LAN 地址和 MAC）
+                                                    │ 网桥 clinavat-lan
+                                              宿主机（原地址）─ 用户 VM（NAT）
+```
+
+网关虚拟机在独立的 LXD 项目 `clinavat-gateway` 中，Hub 的受限证书访问不到。Hub 仍通过 SSH 强制命令管理它，SSH 主机密钥沿用旧网关的，指纹校验不受影响。
+
+**第二张网卡上绝不能有宿主机地址。** 这张网卡直通外网，一旦宿主机在上面拿到地址（包括 IPv6 自动配置），流量就会绕开网关，用真实 IP 出站。加上网卡后立即禁用自动配置：
+
+```bash
+sudo tee /etc/systemd/network/10-<网卡>-wan.network >/dev/null <<'NETWORK'
+[Match]
+Name=<网卡>
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+NETWORK
+sudo networkctl reload && sudo networkctl reconfigure <网卡>
+```
+
+**准备**（不影响线上流量，约 15 分钟）：先给运行脚本的用户配好登录旧网关 root 的 SSH 密钥。
+
+```bash
+sudo deploy/lxd/gateway-vm.sh prepare --old root@<旧网关> --ssh-user <用户> --wan-if <网卡>
+```
+
+脚本会先用随机 MAC 验证 macvlan 流量能穿过上层网桥，再安装、迁移配置，并用 `sing-box check`、`nft -c`、`nginx -t` 校验。中途失败时，删除虚拟机后重跑：`sudo lxc delete clinavat-gateway --force --project clinavat-gateway`。
+
+准备之后如果改了脚本或配置，用 `gateway-vm.sh refresh` 更新已准备好的虚拟机，再用 `gateway-vm.sh diagnose --report <文件>` 检查。这两个命令都把 WAN 口临时接到空网桥上，不影响线上。
+
+**切换**（公开站点和所有对话会中断几分钟）：**在上层虚拟化平台的控制台运行**，切换期间经网关的 SSH 会断开。
+
+```bash
+sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户> --host-address <宿主机地址/掩码> --gateway <网关 LAN 地址>
+```
+
+脚本依次：挂上 10 分钟后自动回滚的定时器 → 让旧网关的 WAN 口下线 → 启动网关虚拟机 → 同步最新状态 → 把宿主机地址移到网桥 → 激活并做健康检查 → 等你输入 `yes`。超时、输入其他内容、任何一步失败或控制台掉线，都会自动恢复原状。
+
+网关虚拟机的网卡固定命名为 `wan0`、`lan0`。不能用 `eth0`、`eth1`：内核按探测顺序分配这两个名字，互换会失败，配置和防泄漏规则都会接反。脚本在移动宿主机地址之前会核对 MAC 和地址。
+
+**回滚**：确认前自动进行；确认之后，只要旧网关还在，可以手动执行 `gateway-vm.sh rollback`（参数同上）。如果旧网关连不上，就从平台控制台重启它。
+
+**确认后：**
+
+1. **立刻在平台上关掉旧网关并取消它的开机自启。** 它和新网关的 WAN 地址相同，重启后会冲突。
+2. 验证一段时间后删除旧网关，并移除宿主机的第一张网卡（它已经不再使用）。
+3. 清理 `authorized_keys` 中临时添加的管理密钥。
+4. 确认管理面板能连上网关。
 
 ## 切换到虚拟机模式
 

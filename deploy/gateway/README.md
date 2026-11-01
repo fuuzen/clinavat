@@ -1,5 +1,7 @@
 # 网关控制面
 
+> 新部署把网关放在本机虚拟机中，用 `deploy/lxd/gateway-vm.sh` 安装，见[虚拟机隔离](../../docs/vm-isolation.md#网关虚拟机)。下面的 `install.sh` 用于独立主机。
+
 网关（`10.10.10.1`，Linux + sing-box）由 `gwctl.py` 统一管理代理节点、分流规则、开发机直连名单、DNAT 端口映射、Nginx 站点和 acme.sh 证书。期望状态保存在 `/etc/clinavat-gw/state.json`，`/etc/sing-box/config.json`、`/etc/clinavat-gw/rendered/guard.nft` 和 `/etc/nginx/sites-available/clinavat.conf` 均由其渲染，不再手工编辑。接口、号池机地址、内网段、DNS 上游与 sing-box 控制接口密钥等基础设施保存在 `/etc/clinavat-gw/infra.json`，只能在网关上修改。
 
 ## 防泄漏护栏
