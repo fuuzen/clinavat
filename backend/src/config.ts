@@ -23,6 +23,8 @@ const environment = z.object({
   CLINAVAT_LXD_REMOTE: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).default('clinavat-host'),
   CLINAVAT_LXD_PROJECT: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).default('clinavat'),
   CLINAVAT_LXD_IMAGE: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).default('clinavat-agent'),
+  CLINAVAT_VM_START_TIMEOUT_MS: z.coerce.number().int().min(10_000).default(900_000),
+  CLINAVAT_VM_BUS_PORTS: z.coerce.number().int().min(8).max(32).default(32),
   CLINAVAT_GATEWAY_HOST: z.string().trim().regex(/^[A-Za-z0-9.:-]*$/, 'CLINAVAT_GATEWAY_HOST 必须是主机名或 IP').default(''),
   CLINAVAT_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(22),
   CLINAVAT_GATEWAY_USER: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('root'),
@@ -52,6 +54,8 @@ export const config = {
   lxdRemote: environment.CLINAVAT_LXD_REMOTE,
   lxdProject: environment.CLINAVAT_LXD_PROJECT,
   lxdImage: environment.CLINAVAT_LXD_IMAGE,
+  vmStartTimeoutMs: environment.CLINAVAT_VM_START_TIMEOUT_MS,
+  vmBusPorts: environment.CLINAVAT_VM_BUS_PORTS,
   gateway: environment.CLINAVAT_GATEWAY_HOST ? {
     host: environment.CLINAVAT_GATEWAY_HOST, port: environment.CLINAVAT_GATEWAY_PORT, username: environment.CLINAVAT_GATEWAY_USER,
   } : undefined,

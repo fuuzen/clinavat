@@ -7,6 +7,8 @@
 #
 # --storage   lvm:<vg>/<existing thin pool> or dir:<directory> for the LXD storage pool
 # --allow     private development-host endpoints the VMs may reach (public addresses are always allowed)
+# --max-vms   project quota for user VMs, default 8. Memory and CPU quotas are sized from it and from this
+#             machine: 75% of RAM, and two vCPUs per VM since vCPUs can be shared.
 #
 # The script locks the LXD socket to root, then creates a storage pool, an isolated bridge, an
 # egress ACL, a restricted project and a restricted client token for the Hub.
@@ -21,7 +23,7 @@ BRIDGE_SUBNET=24
 ADMIN_GROUP=lxd-admin
 LISTEN=127.0.0.1:8443
 
-storage="" hub_user="" data_dir="" workspace_dir="" allows=()
+storage="" hub_user="" data_dir="" workspace_dir="" allows=() max_vms=8
 while (($#)); do
   case "$1" in
     --storage) storage="$2"; shift 2 ;;
@@ -29,6 +31,7 @@ while (($#)); do
     --data-dir) data_dir="$2"; shift 2 ;;
     --workspace-dir) workspace_dir="$2"; shift 2 ;;
     --allow) allows+=("$2"); shift 2 ;;
+    --max-vms) max_vms="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -134,9 +137,9 @@ lxc project set "$PROJECT" \
   restricted.snapshots=block \
   restricted.backups=block \
   limits.containers=0 \
-  limits.virtual-machines=8 \
-  limits.cpu=6 \
-  limits.memory=5GiB
+  limits.virtual-machines="$max_vms" \
+  limits.cpu="$((max_vms * 2))" \
+  limits.memory="$(awk '/^MemTotal:/ { print int($2 * 3 / 4 / 1024) }' /proc/meminfo)MiB"
 lxc profile set default --project "$PROJECT" limits.cpu=2 limits.memory=1536MiB limits.max_bus_ports=32
 exists profile device get default root pool --project "$PROJECT" || \
   lxc profile device add default root disk --project "$PROJECT" pool="$POOL" path=/ size=8GiB

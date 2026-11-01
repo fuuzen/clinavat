@@ -9,14 +9,16 @@ import type { ProcessExecutionHost } from './process-host.js';
 import { delegateSuspension } from './suspension.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScope, ExecutionSpawnOptions } from './types.js';
 
-export interface LxdConfig { dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string }
+export interface LxdConfig {
+  dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
+  vmStartTimeoutMs: number; vmBusPorts: number;
+}
 
 interface Machine { name: string; mounts: Set<string>; prepared: boolean; queue: Promise<unknown> }
-interface InstanceRow { name: string; status: string; devices?: Record<string, Record<string, string>> }
+interface InstanceRow { name: string; status: string; devices?: Record<string, Record<string, string>>; expanded_config?: Record<string, string> }
 
 const guestPath = '/usr/local/bin:/usr/bin:/bin';
 // Concurrent first-time image initialization shares host storage and can take several minutes.
-const startDeadline = 600_000;
 const machineName = (userId: string) => `u-${userId}`;
 const deviceName = (path: string) => `m-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`;
 
@@ -25,6 +27,8 @@ export class LxdExecutionHost implements ExecutionHost {
   readonly kind = 'vm' as const;
   private readonly machines = new Map<string, Machine>();
   private loaded?: Promise<void>;
+  // Cold starts contend for the same storage, and a queue makes each one's timeout independent of the others.
+  private startQueue: Promise<unknown> = Promise.resolve();
   private readonly uid = process.getuid!();
   private readonly gid = process.getgid!();
 
@@ -72,20 +76,37 @@ export class LxdExecutionHost implements ExecutionHost {
   }
 
   private async boot(machine: Machine): Promise<void> {
-    const shown = await this.lxc(['list', `${this.config.lxdRemote}:`, `^${machine.name}$`, '--format', 'json']);
-    const row = shown.code === 0 ? (JSON.parse(shown.stdout) as InstanceRow[])[0] : undefined;
+    const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, `^${machine.name}$`, '--format', 'json']);
+    const row = (JSON.parse(shown.stdout) as InstanceRow[])[0];
+    if (row?.status === 'Running' && machine.prepared) return;
+    const start = () => this.start(machine, row);
+    const next = this.startQueue.then(start, start);
+    this.startQueue = next.catch(() => undefined);
+    await next;
+  }
+
+  private async start(machine: Machine, row: InstanceRow | undefined): Promise<void> {
+    const { vmBusPorts, vmStartTimeoutMs } = this.config;
     if (!row) {
       const idmap = this.uid === this.gid ? `both ${this.uid} ${this.uid}` : `uid ${this.uid} ${this.uid}\ngid ${this.gid} ${this.gid}`;
-      await this.checkedLxc(['init', this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `raw.idmap=${idmap}`], startDeadline);
+      await this.checkedLxc(['init', this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `raw.idmap=${idmap}`,
+        '-c', `limits.max_bus_ports=${vmBusPorts}`], vmStartTimeoutMs).catch((error: Error) => {
+        throw /limit|exceed/i.test(error.message)
+          ? new Error(`${error.message}（LXD 项目配额不足，请调高 limits.memory、limits.cpu 或 limits.virtual-machines）`) : error;
+      });
     }
     if (row?.status !== 'Running') {
-      await this.checkedLxc(['start', this.target(machine.name)], startDeadline);
+      // Bus ports can only change while stopped; instances from before this setting catch up on their next start.
+      if (row && Number(row.expanded_config?.['limits.max_bus_ports'] ?? 0) < vmBusPorts) {
+        await this.checkedLxc(['config', 'set', this.target(machine.name), `limits.max_bus_ports=${vmBusPorts}`]);
+      }
+      await this.checkedLxc(['start', this.target(machine.name)], vmStartTimeoutMs);
       machine.prepared = false;
     }
     if (machine.prepared) return;
-    const deadline = Date.now() + startDeadline;
+    const deadline = Date.now() + vmStartTimeoutMs;
     while ((await this.exec(machine, ['true'], { timeout: 15_000 })).code !== 0) {
-      if (Date.now() > deadline) throw new Error('用户虚拟机启动超时');
+      if (Date.now() > deadline) throw new Error(`用户虚拟机启动超时（${Math.round(vmStartTimeoutMs / 1000)} 秒），可调高 CLINAVAT_VM_START_TIMEOUT_MS`);
       await delay(1000);
     }
     const prepared = await this.exec(machine, ['bash', '-c', prepareScript, 'clinavat-prepare', String(this.uid), String(this.gid), join(this.config.dataDir, 'run', 'cm')]);
@@ -126,7 +147,10 @@ export class LxdExecutionHost implements ExecutionHost {
           await mkdir(path, { recursive: true, mode: 0o700 });
           // LXD refuses a source reached through a symlink, such as the data directory's run link.
           await this.checkedLxc(['config', 'device', 'add', this.target(machine.name), deviceName(path), 'disk',
-            `source=${await realpath(path)}`, `path=${path}`, ...(readonly ? ['readonly=true'] : [])]);
+            `source=${await realpath(path)}`, `path=${path}`, ...(readonly ? ['readonly=true'] : [])]).catch((error: Error) => {
+            throw /\bport|pci/i.test(error.message)
+              ? new Error(`${error.message}（虚拟机设备端口可能已用尽：每个项目和槽位各占一个。调高 limits.max_bus_ports 后需重启该虚拟机）`) : error;
+          });
           machine.mounts.add(path);
         }
       }

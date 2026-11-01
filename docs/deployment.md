@@ -32,6 +32,7 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 | `CLINAVAT_APPROVAL_TIMEOUT_MS` | 网页审批的等待时间，默认 5 分钟 |
 | `CLINAVAT_EXECUTION_HOST` | `process`（默认）或 `lxd`，见[虚拟机隔离](vm-isolation.md) |
 | `CLINAVAT_LXD_REMOTE` / `_PROJECT` / `_IMAGE`、`CLINAVAT_LXC_BIN` | LXD 模式的连接配置，默认 `clinavat-host`、`clinavat`、`clinavat-agent`、`lxc` |
+| `CLINAVAT_VM_START_TIMEOUT_MS` / `CLINAVAT_VM_BUS_PORTS` | 虚拟机开机等待上限和设备端口数，见[容量与默认值](vm-isolation.md#容量与默认值) |
 | `CLINAVAT_GATEWAY_HOST` / `_PORT` / `_USER` | [上游网关](../deploy/gateway/README.md)的 SSH 地址；留空则管理面板不连接网关 |
 | `CLINAVAT_*_BIN` | `claude`、`codex`、`mutagen`、`ssh`、`ssh-keygen` 的可执行文件路径 |
 
