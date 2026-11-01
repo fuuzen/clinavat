@@ -1,6 +1,5 @@
-import { spawn } from 'node:child_process';
 import { HttpError } from '../models.js';
-import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
 import { readJsonLines } from './ndjson.js';
 import { RpcClient } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
@@ -31,10 +30,10 @@ const effortLabels: Record<string, string> = {
 const effortOption = (value: string) => ({ value, label: effortLabels[value] || value });
 
 async function codexModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
-  const binary = await findExecutable(config.codexBinary);
-  const child = spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
-    cwd: context.project.local_path, env: agentEnvironment(context),
-    detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+  const { execution } = config;
+  const binary = await execution.resolveBinary(context.user.id, execution.binaries.codex);
+  const child = await execution.spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
+    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();
@@ -89,14 +88,14 @@ async function codexModels(config: AgentConfig, context: AgentContext): Promise<
 }
 
 async function claudeModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
-  const binary = await findExecutable(config.claudeBinary);
-  const child = spawn(binary, [
+  const { execution } = config;
+  const binary = await execution.resolveBinary(context.user.id, execution.binaries.claude);
+  const child = await execution.spawn(binary, [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--restricted', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--tools', '', '--disable-slash-commands', '--no-session-persistence',
   ], {
-    cwd: context.project.local_path, env: agentEnvironment(context),
-    detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();

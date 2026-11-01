@@ -1,5 +1,4 @@
-import { spawn } from 'node:child_process';
-import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
 import { RpcClient, type RpcMessage } from './rpc.js';
 import { loadAgentModels } from './model-catalog.js';
 import { codexPermissions, createCodexRequests } from './codex-requests.js';
@@ -12,13 +11,14 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   if (services.context.session.goal && services.context.session.agent_mode === 'plan') {
     throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
   }
-  const binary = await findExecutable(services.config.codexBinary);
+  const { execution } = services.config;
+  const binary = await execution.resolveBinary(services.context.user.id, execution.binaries.codex);
   const root = services.context.project.local_path;
   const permissions = codexPermissions(services);
   const arguments_ = codexServerArguments(services.context);
   if (signal.aborted) throw new Error('会话已停止');
-  const child = spawn(binary, arguments_, {
-    cwd: root, env: agentEnvironment(services.context), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+  const child = await execution.spawn(binary, arguments_, {
+    scope: agentScope(services.context), cwd: root, env: agentEnvironment(execution, services.context),
   });
   services.control.track(child);
   const closed = observeProcessClose(child);

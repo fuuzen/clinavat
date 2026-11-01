@@ -1,11 +1,12 @@
-import { shellQuote, type RuntimeConfig, type WorkspaceProject } from './types.js';
+import { shellQuote, type WorkspaceProject } from './types.js';
+import type { ExecutionBinaries } from '../execution/types.js';
 import { renderRemoteRunner } from './remote-paths.js';
 
-export function renderRemoteShell(config: RuntimeConfig, project: WorkspaceProject, sshConfig: string, sshTarget: string, environment: NodeJS.ProcessEnv): string {
+export function renderRemoteShell(binaries: Pick<ExecutionBinaries, 'ssh' | 'mutagen'>, project: WorkspaceProject, sshConfig: string, sshTarget: string, environment: NodeJS.ProcessEnv): string {
   const variables = {
     LOCAL_ROOT: project.local_path, REMOTE_RUNNER: renderRemoteRunner(project),
     SYNC_NAME: project.sync_name, SSH_CONFIG: sshConfig, SSH_TARGET: sshTarget,
-    SSH_BINARY: config.sshBinary ?? 'ssh', MUTAGEN_BINARY: config.mutagenBinary ?? 'mutagen',
+    SSH_BINARY: binaries.ssh, MUTAGEN_BINARY: binaries.mutagen,
     MUTAGEN_DATA_DIRECTORY: environment.MUTAGEN_DATA_DIRECTORY ?? '',
     MUTAGEN_SSH_PATH: environment.MUTAGEN_SSH_PATH ?? '',
   };

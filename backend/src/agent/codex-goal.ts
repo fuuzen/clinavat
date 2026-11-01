@@ -1,5 +1,4 @@
-import { spawn } from 'node:child_process';
-import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
 import { RpcClient, type RpcMessage } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
 
@@ -108,12 +107,12 @@ export async function accessCodexGoal(
     if (change) throw new Error('当前对话尚未创建原生目标');
     return null;
   }
-  const binary = await findExecutable(config.codexBinary);
+  const { execution } = config;
+  const binary = await execution.resolveBinary(context.user.id, execution.binaries.codex);
   const arguments_ = codexServerArguments(context);
   if (signal?.aborted) throw new Error('目标操作已取消');
-  const child = spawn(binary, arguments_, {
-    cwd: context.project.local_path, env: agentEnvironment(context),
-    detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+  const child = await execution.spawn(binary, arguments_, {
+    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();

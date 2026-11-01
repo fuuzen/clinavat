@@ -6,7 +6,7 @@ import { credentialHash, privateDirectory, readAccountCredential, readPrivateJso
 import { accountIdentifier, type AccountEngine } from './paths.js';
 import { assertSlotSessionState, bindSlotSessionState, detachSlotSessionState } from './session-state/index.js';
 import { initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
-import { assertSlotProcessesStopped } from './slot-runtime/processes.js';
+import type { ExecutionHost } from '../execution/types.js';
 
 interface CredentialContext {
   user: { id: string }; runtime_home: string; runtime_kind?: 'conversation' | 'probe';
@@ -36,7 +36,8 @@ export class AccountCredentials {
   private pauses = new Map<string, Promise<void>>();
   private failedReleases = new Set<LeaseRelease>();
 
-  constructor(private dataDir: string, private store: Store, private onSlotActivity?: (slotId: string) => void) {}
+  constructor(private dataDir: string, private store: Store, private execution: ExecutionHost,
+    private onSlotActivity?: (slotId: string) => void) {}
 
   isUserBusy(userId: string): boolean { return [...this.leases.values()].some(lease => lease.journal.userId === userId); }
   isSlotBusy(slotId: string): boolean { return this.leases.has(slotId); }
@@ -154,7 +155,7 @@ export class AccountCredentials {
   private async releaseLease(release: LeaseRelease): Promise<void> {
     const { lease, sessionId, projectId } = release;
     if (release.counted) {
-      if (sessionId && this.sessions.get(sessionId)?.count === 1) await assertSlotProcessesStopped(lease.journal.home, sessionId);
+      if (sessionId && this.sessions.get(sessionId)?.count === 1) await this.execution.assertReleased(lease.journal.home, sessionId);
       // Final profile recovery can fail after this decrement; retries must not subtract twice.
       lease.count -= 1;
       release.counted = false;
@@ -214,7 +215,7 @@ export class AccountCredentials {
 
   private async prepare(journal: SlotJournal): Promise<void> {
     this.currentSlot(journal, true);
-    await assertSlotProcessesStopped(journal.home);
+    await this.execution.assertReleased(journal.home);
     if (await readPrivateJson(this.file(journal.slotId))) throw new Error('槽位仍有未处理的运行恢复日志，请先重启 Hub 完成恢复');
     if (await readAccountCredential(journal.home, journal.engine) === undefined) {
       throw new HttpError(409, `授权槽位尚未完成 ${journal.engine} 登录，请联系管理员`);
@@ -240,7 +241,8 @@ export class AccountCredentials {
     this.validateJournal(saved);
     if (saved.userId !== journal.userId || saved.slotId !== journal.slotId) throw new Error('槽位恢复日志归属发生变化');
     this.currentSlot(saved);
-    await assertSlotProcessesStopped(saved.home);
+    await this.execution.assertReleased(saved.home);
+    await this.execution.revoke(saved.userId, [saved.home]);
     saved.phase = 'releasing';
     await writePrivateJson(this.file(saved.slotId), JSON.stringify(saved));
     await detachSlotSessionState(saved.home, saved.engine);

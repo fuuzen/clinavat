@@ -4,6 +4,7 @@ import type { SlotUsage } from '../accounts/usage.js';
 import type { UserInputAnswers, UserInputQuestion } from './user-input.js';
 import type { RunControl } from './run-control.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
+import type { ExecutionHost } from '../execution/types.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -11,6 +12,7 @@ export interface AgentConfig {
   codexBinary: string;
   approvalTimeoutMs: number;
   credentials: AccountCredentials;
+  execution: ExecutionHost;
   usage?: SlotUsage;
 }
 

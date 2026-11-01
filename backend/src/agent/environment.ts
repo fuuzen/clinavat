@@ -3,17 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { constants } from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import type { AgentContext } from './types.js';
 
 export const quoteShell = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
-export function agentEnvironment(context: AgentContext): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR']) {
-    if (process.env[name]) environment[name] = process.env[name];
-  }
+export function agentEnvironment(execution: ExecutionHost, context: AgentContext): NodeJS.ProcessEnv {
   return {
-    ...environment,
+    ...execution.baseEnvironment(),
     HOME: context.runtime_home,
     XDG_CONFIG_HOME: path.join(context.runtime_home, '.config'),
     XDG_CACHE_HOME: path.join(context.runtime_home, '.cache'),
@@ -23,6 +20,10 @@ export function agentEnvironment(context: AgentContext): NodeJS.ProcessEnv {
     SHELL: '/bin/bash',
     TERM: 'xterm-256color',
   };
+}
+
+export function agentScope(context: AgentContext): ExecutionScope {
+  return { userId: context.user.id, paths: [context.runtime_home, context.project.local_path] };
 }
 
 export async function findExecutable(binary: string): Promise<string> {

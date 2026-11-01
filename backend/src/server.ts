@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { access, realpath } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
@@ -38,14 +36,7 @@ import { recoverLegacyCredentials } from './accounts/credential-recovery.js';
 import { recoverConversationCredentials } from './accounts/credential-recovery-v2.js';
 import { migrateSlotSchema } from './accounts/slot-schema.js';
 import { assertAccountProcessesStopped } from './accounts/migration-state.js';
-
-async function binaryAvailable(binary: string) {
-  const paths = isAbsolute(binary) ? [binary] : (process.env.PATH ?? '').split(':').map(path => join(path, binary));
-  for (const path of paths) {
-    try { await access(path, constants.X_OK); return true; } catch { /* Try the next executable directory. */ }
-  }
-  return false;
-}
+import { ProcessExecutionHost } from './execution/process-host.js';
 
 const app = Fastify({
   logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
@@ -59,7 +50,8 @@ await recoverLegacyCredentials(config.dataDir, store);
 await migrateSlotSchema(config.dataDir, store);
 await recoverConversationCredentials(config.dataDir, store);
 let onSlotActivity: (slotId: string) => void = () => undefined;
-const credentials = new AccountCredentials(config.dataDir, store, slotId => onSlotActivity(slotId));
+const execution = new ProcessExecutionHost(config);
+const credentials = new AccountCredentials(config.dataDir, store, execution, slotId => onSlotActivity(slotId));
 await credentials.recover();
 const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
@@ -70,7 +62,7 @@ const usage = new SlotUsage(config, credentials, slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot-usage', payload });
 });
 await usage.init();
-const agentConfig = { ...config, credentials, usage };
+const agentConfig = { ...config, credentials, usage, execution };
 onSlotActivity = slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot', payload: { id: slotId } });
 };
@@ -79,7 +71,7 @@ const turns = new ConversationStore(store, turn => {
   if (session) events.broadcast(session.user_id, { type: 'turn', sessionId: turn.session_id, payload: turn });
 });
 const ssh = new SshManager(config);
-const workspaces = new WorkspaceManager(config, ssh);
+const workspaces = new WorkspaceManager(config, ssh, execution);
 for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
   if (host.kind === 'local') continue;
   try { await ssh.addHost(host.user_id, host); }
@@ -200,12 +192,10 @@ adminRoutes(app, context);
 siteAccessRoutes(app, siteAccess);
 siteSettingsRoutes(app, new SiteSettingsService(store), store, events);
 gatewayRoutes(app, new GatewayService(new GatewayClient(config, ssh.keys), store));
-app.get('/api/health', async () => ({
-  status: 'ok', version: '0.1.0', runtime: {
-    claude: await binaryAvailable(config.claudeBinary), codex: await binaryAvailable(config.codexBinary),
-    mutagen: await binaryAvailable(config.mutagenBinary), ssh: await binaryAvailable(config.sshBinary),
-  },
-}));
+app.get('/api/health', async () => {
+  const { kind, ...runtime } = await execution.health();
+  return { status: 'ok', version: '0.1.0', execution: kind, runtime };
+});
 let recovery: ReturnType<typeof recoverSessionRuns> | undefined;
 app.addHook('preClose', async () => {
   const recovered = recovery?.close();

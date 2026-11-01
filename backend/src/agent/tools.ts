@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { agentEnvironment, observeProcessClose, terminateProcess, workspacePath } from './environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess, workspacePath } from './environment.js';
 import type { RunServices } from './types.js';
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[]) {
@@ -56,12 +55,11 @@ export async function executeDynamicTool(services: RunServices, name: string, in
     if (signal.aborted) throw new Error('会话已停止');
     const release = services.control.hold();
     let closed: Promise<void> | undefined;
-    return new Promise<string>((resolve, reject) => {
-      const shell = services.context.project.execution_mode === 'local' ? '/bin/bash' : path.join(root, '.bin', 'remote-shell');
-      const child = spawn(shell, ['-c', command], {
-        cwd, env: agentEnvironment(services.context), detached: process.platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    const { execution } = services.config;
+    const shell = services.context.project.execution_mode === 'local' ? '/bin/bash' : path.join(root, '.bin', 'remote-shell');
+    return execution.spawn(shell, ['-c', command], {
+      scope: agentScope(services.context), cwd, env: agentEnvironment(execution, services.context), stdin: 'ignore',
+    }).then(child => new Promise<string>((resolve, reject) => {
       closed = observeProcessClose(child);
       services.control.track(child);
       let contents = '';
@@ -80,7 +78,7 @@ export async function executeDynamicTool(services: RunServices, name: string, in
         signal.removeEventListener('abort', abort);
         resolve(`Exit code: ${code ?? exitSignal}\n${contents}`);
       });
-    }).finally(async () => { try { await closed; } finally { release(); } });
+    })).finally(async () => { try { await closed; } finally { release(); } });
   }
   const requested = name === 'workspace_list' || name === 'workspace_search'
     ? String(input.path ?? '.') : requireString(input, 'path');

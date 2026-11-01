@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { ClaudeControl } from './claude-control.js';
-import { agentEnvironment, findExecutable, observeProcessClose, terminateProcess } from './environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
 import { createHookServer } from './hooks.js';
 import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
@@ -22,7 +21,8 @@ async function transcriptPath(home: string, nativeId: string): Promise<string | 
 
 export async function startClaude(services: RunServices, prompt: string, signal?: AbortSignal): Promise<AgentRun> {
   if (signal?.aborted) throw new Error('会话已停止');
-  const binary = await findExecutable(services.config.claudeBinary);
+  const { execution } = services.config;
+  const binary = await execution.resolveBinary(services.context.user.id, execution.binaries.claude);
   const plansDirectory = path.join(services.context.runtime_home, '.claude', 'plans');
   await mkdir(plansDirectory, { recursive: true, mode: 0o700 });
   const hook = await createHookServer(services);
@@ -54,14 +54,13 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
-  const child = spawn(binary, args, {
-    cwd: services.context.project.local_path, env: {
-      ...agentEnvironment(services.context),
+  const child = await execution.spawn(binary, args, {
+    scope: agentScope(services.context), cwd: services.context.project.local_path, env: {
+      ...agentEnvironment(execution, services.context),
       ...(services.context.session.resume_interrupted ? { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
         CLAUDE_CODE_RESUME_SHOWS_CUT_OFF_CALLS: '1' } : {}),
     },
-    detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }).catch(async (error: unknown) => { await hook.close(); throw error; });
   services.control.track(child);
   const closed = observeProcessClose(child);
   let diagnostics = '';

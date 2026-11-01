@@ -1,7 +1,7 @@
 import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { atomicWrite, checkedCommand, runCommand } from './process.js';
+import { atomicWrite, runCommand } from './process.js';
 import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { readWorkspaceMigration, saveWorkspaceMigration } from './workspace-migration.js';
@@ -10,11 +10,12 @@ import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
 import { parseSyncStatus, summarizeSyncFailure } from './sync-status.js';
 import { assertHostOwner, assertIdentifier, assertRemotePath, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
+import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 
 export class WorkspaceManager {
   private readonly initializations = new Map<string, Promise<void>>();
 
-  constructor(readonly config: RuntimeConfig, readonly ssh: SshManager) {}
+  constructor(readonly config: RuntimeConfig, readonly ssh: SshManager, readonly execution: ExecutionHost) {}
 
   private validate(project: WorkspaceProject): void {
     assertIdentifier(project.id);
@@ -36,9 +37,16 @@ export class WorkspaceManager {
   private async mutagen(project: WorkspaceProject, args: string[], timeout = 60_000) {
     this.validate(project);
     if (project.execution_mode === 'local') throw new Error('本机项目不使用文件同步');
-    return checkedCommand(this.config.mutagenBinary ?? 'mutagen', args, {
-      env: await this.ssh.mutagenEnvironment(project.user_id), timeout,
+    const binary = this.execution.binaries.mutagen;
+    const result = await this.execution.run(binary, args, {
+      scope: this.scope(project), env: await this.ssh.mutagenEnvironment(project.user_id), timeout,
     });
+    if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${binary} 退出码 ${result.code}`).trim().slice(0, 4000));
+    return result;
+  }
+
+  private scope(project: WorkspaceProject): ExecutionScope {
+    return { userId: project.user_id, paths: [project.local_path] };
   }
 
   async create(userId: string, host: DevHost, project: WorkspaceProject): Promise<void> {
@@ -59,7 +67,7 @@ export class WorkspaceManager {
     const environment = await this.ssh.mutagenEnvironment(project.user_id);
     const binDirectory = join(project.local_path, '.bin');
     await mkdir(binDirectory, {recursive: true, mode: 0o700});
-    await atomicWrite(join(binDirectory, 'remote-shell'), renderRemoteShell(this.config, project,
+    await atomicWrite(join(binDirectory, 'remote-shell'), renderRemoteShell(this.execution.binaries, project,
       this.ssh.configPath(project.user_id), this.ssh.alias(host), environment), 0o500);
   }
 
@@ -254,7 +262,7 @@ export class WorkspaceManager {
     await this.flush(project);
     const command = "git rev-parse --abbrev-ref HEAD && printf '\\0' && git status --short && printf '\\0' && git diff --no-ext-diff --no-color HEAD -- .";
     const result = project.execution_mode === 'local'
-      ? await runCommand('/bin/bash', ['-c', command], {cwd: project.local_path})
+      ? await this.execution.run('/bin/bash', ['-c', command], {scope: this.scope(project), cwd: project.local_path})
       : await this.ssh.exec(userId, host, remoteCommand(project, command));
     if (result.code !== 0) throw new Error(result.stderr.trim() || '无法读取 Git 状态，请确认目录为 Git 仓库');
     const [branch = '', status = '', diff = ''] = result.stdout.split('\0');
