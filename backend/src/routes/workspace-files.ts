@@ -1,4 +1,3 @@
-import { createReadStream } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -48,7 +47,7 @@ export function workspaceFileRoutes(app: FastifyInstance, context: Context) {
   app.get('/api/projects/:id/raw', async (request, reply) => {
     const { id } = identifier.parse(request.params);
     const { path, download } = z.object({ path: filePath, download: z.enum(['1']).optional() }).parse(request.query);
-    const { target, size, mtime } = await workspaces.rawFile(projectFor(context, id, request.user.id), path)
+    const { handle, size, mtime } = await workspaces.rawFile(projectFor(context, id, request.user.id), path)
       // Filesystem errors embed absolute server paths; only the workspace's own validation messages are passed through.
       .catch((error: NodeJS.ErrnoException) => { throw new HttpError(404, error.code ? '文件不存在或无法访问' : error.message); });
     const etag = `"${size.toString(36)}-${mtime.toString(36)}"`;
@@ -61,15 +60,15 @@ export function workspaceFileRoutes(app: FastifyInstance, context: Context) {
       .header('ETag', etag);
     // SVG may carry scripts; keep it inert even if opened directly rather than through <img>.
     if (type === 'image/svg+xml') reply.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
-    if (request.headers['if-none-match'] === etag) return reply.code(304).send();
+    if (request.headers['if-none-match'] === etag) { await handle.close(); return reply.code(304).send(); }
     const range = parseRange(request.headers.range, size);
-    if (range === 'invalid') return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+    if (range === 'invalid') { await handle.close(); return reply.code(416).header('Content-Range', `bytes */${size}`).send(); }
     if (range) {
       reply.code(206).header('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
         .header('Content-Length', range.end - range.start + 1);
-      return reply.send(createReadStream(target, range));
+      return reply.send(handle.createReadStream(range));
     }
     reply.header('Content-Length', size);
-    return reply.send(createReadStream(target));
+    return reply.send(handle.createReadStream());
   });
 }

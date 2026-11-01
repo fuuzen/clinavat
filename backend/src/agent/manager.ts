@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, realpath, stat } from 'node:fs/promises';
-import path from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
+import { openContained } from '../runtime/contained-files.js';
 import { startClaude } from './claude.js';
 import { startCodex } from './codex.js';
 import { getPermissionMode } from './permissions.js';
@@ -213,9 +213,11 @@ export class AgentManager {
       }
       return directory;
     }
-    const script = path.join(context.project.local_path, '.bin', 'remote-shell');
-    try { return createHash('sha256').update(await readFile(script)).digest('hex'); }
-    catch { throw new Error('项目远程执行器尚未准备好，请先重新同步项目'); }
+    try {
+      const { handle } = await openContained(context.project.local_path, '.bin/remote-shell');
+      try { return createHash('sha256').update(await handle.readFile()).digest('hex'); }
+      finally { await handle.close(); }
+    } catch { throw new Error('项目远程执行器尚未准备好，请先重新同步项目'); }
   }
 
   private awaitApproval(sessionId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal, control: RunControl): Promise<ApprovalDecision> {

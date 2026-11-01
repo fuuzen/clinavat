@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, readFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { HttpError } from '../models.js';
+import { openContained } from '../runtime/contained-files.js';
 import { atomicWrite } from '../runtime/process.js';
 import { credentialPath, type AccountEngine } from './paths.js';
 
@@ -12,16 +13,18 @@ export async function privateDirectory(directory: string): Promise<void> {
   await chmod(directory, 0o700);
 }
 
-export async function readPrivateJson(file: string): Promise<string | undefined> {
-  const metadata = await lstat(file).catch((error: NodeJS.ErrnoException) => {
+/** Reads a JSON document that may live in a tree writable by an execution environment; `root` is the trusted boundary. */
+export async function readPrivateJson(file: string, root = dirname(file)): Promise<string | undefined> {
+  const opened = await openContained(root, file).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return undefined;
-    throw error;
-  });
-  if (!metadata) return undefined;
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 4 * 1024 * 1024) {
     throw new HttpError(409, '认证或运行状态文件类型无效');
-  }
-  const content = await readFile(file, 'utf8');
+  });
+  if (!opened) return undefined;
+  let content: string;
+  try {
+    if (opened.size > 4 * 1024 * 1024) throw new HttpError(409, '认证或运行状态文件类型无效');
+    content = await opened.handle.readFile('utf8');
+  } finally { await opened.handle.close(); }
   try {
     const parsed: unknown = JSON.parse(content);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid');
@@ -63,11 +66,11 @@ function accountFields(document: Record<string, unknown>, engine: AccountEngine)
 }
 
 export async function readAccountCredential(home: string, engine: AccountEngine): Promise<string | undefined> {
-  const content = await readPrivateJson(credentialPath(home, engine));
+  const content = await readPrivateJson(credentialPath(home, engine), home);
   const fields = accountFields(content ? JSON.parse(content) as Record<string, unknown> : {}, engine);
   if (engine === 'claude' && !fields.claudeAiOauth) {
     for (const relative of claudeConfigFiles) {
-      const settings = await readPrivateJson(join(home, relative));
+      const settings = await readPrivateJson(join(home, relative), home);
       if (settings && (JSON.parse(settings) as Record<string, unknown>).primaryApiKey) {
         throw new HttpError(409, '此槽位使用 Claude Console API key，当前仅支持 Claude OAuth；原凭据已保留，请先完成 claude auth login');
       }

@@ -1,7 +1,8 @@
-import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access, lstat, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, childEnvironment, runCommand } from './process.js';
+import { descriptorPath, openContained, type ContainedFile } from './contained-files.js';
 import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
@@ -192,16 +193,16 @@ export class WorkspaceManager {
     return { mirrorBytes, backupBytes };
   }
 
-  private async safePath(project: WorkspaceProject, path: string): Promise<string> {
+  private async openProjectPath(project: WorkspaceProject, path: string, directory = false): Promise<ContainedFile> {
     this.validate(project);
     if (project.execution_mode === 'local') await this.checkLocalDirectory(project);
     if (path.includes('\0') || path.split(/[\\/]/).includes('.bin')) throw new Error('无法访问此工作区路径');
-    const root = await realpath(project.local_path);
-    const target = await realpath(resolve(root, path || '.'));
-    const child = relative(root, target);
-    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) throw new Error('路径超出工作区范围');
-    if (child.split(sep).includes('.bin')) throw new Error('无法访问运行时内部文件');
-    return target;
+    const opened = await openContained(project.local_path, path || '.', { directory, followLinks: true });
+    if (relative(await realpath(project.local_path), opened.actualPath).split(sep).includes('.bin')) {
+      await opened.handle.close();
+      throw new Error('无法访问运行时内部文件');
+    }
+    return opened;
   }
 
   private async checkLocalDirectory(project: WorkspaceProject): Promise<void> {
@@ -212,31 +213,33 @@ export class WorkspaceManager {
   }
 
   async files(project: WorkspaceProject, path = '') {
-    const target = await this.safePath(project, path);
-    const entries = await readdir(target, {withFileTypes: true});
-    const visible = entries.filter(entry => !entry.name.startsWith('.bin') && entry.name !== '.git' && !entry.isSymbolicLink());
-    const listed = await Promise.all(visible.map(async entry => {
-      const type = entry.isDirectory() ? 'directory' as const : 'file' as const;
-      const size = type === 'file' ? await lstat(join(target, entry.name)).then(metadata => metadata.size, () => undefined) : undefined;
-      return { name: entry.name, path: [path.replace(/\/$/, ''), entry.name].filter(Boolean).join('/'), type, size };
-    }));
-    return {path, entries: listed.sort((left, right) => (left.type === right.type ? left.name.localeCompare(right.name) : left.type === 'directory' ? -1 : 1))};
+    const {handle, actualPath} = await this.openProjectPath(project, path, true);
+    try {
+      const entries = await readdir(descriptorPath(handle), {withFileTypes: true});
+      const visible = entries.filter(entry => !entry.name.startsWith('.bin') && entry.name !== '.git' && !entry.isSymbolicLink());
+      const listed = await Promise.all(visible.map(async entry => {
+        const type = entry.isDirectory() ? 'directory' as const : 'file' as const;
+        const size = type === 'file' ? await lstat(join(actualPath, entry.name)).then(metadata => metadata.size, () => undefined) : undefined;
+        return { name: entry.name, path: [path.replace(/\/$/, ''), entry.name].filter(Boolean).join('/'), type, size };
+      }));
+      return {path, entries: listed.sort((left, right) => (left.type === right.type ? left.name.localeCompare(right.name) : left.type === 'directory' ? -1 : 1))};
+    } finally { await handle.close(); }
   }
 
   // Text content is only inlined for small UTF-8 files; anything else is previewed or downloaded through rawFile().
   async file(project: WorkspaceProject, path: string): Promise<{path: string; size: number; mtime: number; binary: boolean; content?: string}> {
-    const {target, size, mtime} = await this.rawFile(project, path);
-    if (size > 1024 * 1024) return {path, size, mtime, binary: true};
-    const content = await readFile(target);
-    if (content.includes(0)) return {path, size, mtime, binary: true};
-    return {path, size, mtime, binary: false, content: content.toString('utf8')};
+    const {handle, size, mtime} = await this.rawFile(project, path);
+    try {
+      if (size > 1024 * 1024) return {path, size, mtime, binary: true};
+      const content = await handle.readFile();
+      if (content.includes(0)) return {path, size, mtime, binary: true};
+      return {path, size, mtime, binary: false, content: content.toString('utf8')};
+    } finally { await handle.close(); }
   }
 
-  async rawFile(project: WorkspaceProject, path: string): Promise<{target: string; size: number; mtime: number}> {
-    const target = await this.safePath(project, path);
-    const metadata = await lstat(target);
-    if (!metadata.isFile()) throw new Error('只能预览普通文件');
-    return {target, size: metadata.size, mtime: Math.floor(metadata.mtimeMs)};
+  /** The caller owns the returned handle and must close it. */
+  rawFile(project: WorkspaceProject, path: string): Promise<ContainedFile> {
+    return this.openProjectPath(project, path);
   }
 
   async git(userId: string, host: DevHost, project: WorkspaceProject): Promise<{branch: string; status: string; diff: string}> {

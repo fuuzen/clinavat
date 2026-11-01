@@ -175,24 +175,24 @@ export function parseCodexEvent(params: any): UsageUpdate {
   };
 }
 
-async function readJson(file: string): Promise<any> {
-  const content = await readPrivateJson(file);
+async function readJson(file: string, home: string): Promise<any> {
+  const content = await readPrivateJson(file, home);
   return content ? JSON.parse(content) : undefined;
 }
 
 async function accountKey(home: string, engine: AccountEngine): Promise<string | null> {
   try {
     if (engine === 'codex') {
-      const auth = await readJson(credentialPath(home, 'codex'));
+      const auth = await readJson(credentialPath(home, 'codex'), home);
       const id = auth?.tokens?.account_id ?? (typeof auth?.OPENAI_API_KEY === 'string' ? `key:${auth.OPENAI_API_KEY}` : null);
       return typeof id === 'string' ? digest(`codex:${id}`) : null;
     }
     for (const file of ['.claude.json', join('.claude', '.claude.json')]) {
-      const uuid = (await readJson(join(home, file)))?.oauthAccount?.accountUuid;
+      const uuid = (await readJson(join(home, file), home))?.oauthAccount?.accountUuid;
       if (typeof uuid === 'string') return digest(`claude:${uuid}`);
     }
     // Without account metadata the refresh token is the best identity; rotation only causes a fresh query.
-    const token = (await readJson(credentialPath(home, 'claude')))?.claudeAiOauth?.refreshToken;
+    const token = (await readJson(credentialPath(home, 'claude'), home))?.claudeAiOauth?.refreshToken;
     return typeof token === 'string' ? digest(`claude-token:${token}`) : null;
   } catch { return null; }
 }
@@ -200,7 +200,7 @@ async function accountKey(home: string, engine: AccountEngine): Promise<string |
 type Credential = { kind: 'none' } | { kind: 'apikey' } | { kind: 'oauth'; fresh: boolean };
 
 async function inspectCredential(home: string, engine: AccountEngine): Promise<Credential> {
-  const document = await readJson(credentialPath(home, engine));
+  const document = await readJson(credentialPath(home, engine), home);
   const deadline = Date.now() + TOKEN_MARGIN;
   if (engine === 'claude') {
     const oauth = document?.claudeAiOauth;
@@ -421,7 +421,8 @@ export class SlotUsage {
 
   private async isolatedProbe(slot: UsageSlot): Promise<UsageUpdate> {
     const source = credentialPath(slot.home_dir, slot.engine);
-    const original = await readFile(source, 'utf8');
+    const original = await readPrivateJson(source, slot.home_dir);
+    if (original === undefined) throw new Error('槽位尚未完成登录');
     const home = join(this.root, `${slot.id}-${randomBytes(6).toString('hex')}`);
     const copy = credentialPath(home, slot.engine);
     try {
@@ -431,7 +432,7 @@ export class SlotUsage {
       const update = await (slot.engine === 'claude' ? claudeProbe(binary, home) : codexProbe(binary, home));
       const after = await readFile(copy, 'utf8').catch(() => original);
       // Keep a rotated refresh token only if nobody changed the slot credential meanwhile.
-      if (after !== original && await readFile(source, 'utf8') === original) await writePrivateJson(source, after);
+      if (after !== original && await readPrivateJson(source, slot.home_dir) === original) await writePrivateJson(source, after);
       return update;
     } finally {
       await rm(home, { recursive: true, force: true });
