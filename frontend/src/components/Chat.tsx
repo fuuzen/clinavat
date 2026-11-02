@@ -99,6 +99,9 @@ export default function Chat(props: Props) {
   const runStatus = isActive(session?.status) ? session!.status : currentTurn?.status;
   const active = props.sending || isActive(session?.status) ||
     !!currentTurn;
+  // Locks the input from the moment a message is submitted until the server accepts it.
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const { slot, slotId, slotSaving, changeSlot } = useConversationSlot(overview, project?.id, session, props.onSlotChange);
   const syncReady = project?.sync_status === "WATCHING" || project?.sync_status === "LOCAL";
   const host = overview.hosts.find(
@@ -165,7 +168,17 @@ export default function Chat(props: Props) {
     return () => observer.disconnect();
   }, [stickToBottom, session?.id, project?.id, props.loading]);
   async function send() {
-    if (!draft.trim()) return;
+    if (!draft.trim() || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      await submit();
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
+  }
+  async function submit() {
     const version = draftVersion.current.revision;
     const command = await commands.handleCommand(draft);
     if (command !== "message") {
@@ -373,7 +386,8 @@ export default function Chat(props: Props) {
           connected={props.streamConnected}
           active={active}
           available={slotAvailable}
-          sendDisabled={!draft.trim() || permissionSaving || behaviorSaving || slotSaving || !slotAvailable || !syncReady || !props.streamConnected}
+          locked={submitting || props.sending}
+          sendDisabled={!draft.trim() || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || !slotAvailable || !syncReady || !props.streamConnected}
           warning={[composerWarning, storageError].filter(Boolean).join(" ") || undefined}
           showScrollToBottom={!stickToBottom}
           onScrollToBottom={() => setStickToBottom(true)}

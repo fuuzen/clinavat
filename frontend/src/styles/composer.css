@@ -45,6 +45,10 @@
   box-shadow: none;
   color: var(--text);
 }
+.composer-body > textarea[aria-busy="true"] {
+  opacity: 0.5;
+  cursor: progress;
+}
 .composer-body > textarea::placeholder {
   color: var(--muted);
 }

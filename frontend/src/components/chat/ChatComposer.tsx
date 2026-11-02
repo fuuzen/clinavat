@@ -38,6 +38,8 @@ interface Props {
   onToggleMode?: () => void;
   active: boolean;
   available: boolean;
+  /** A submitted message is still on its way; keep the draft as sent. */
+  locked: boolean;
   sendDisabled: boolean;
   warning?: string;
   showScrollToBottom: boolean;
@@ -65,7 +67,7 @@ export default function ChatComposer(props: Props) {
   const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus;
   const completion = useComposerCompletion({
     inputRef, draft: props.draft, onDraftChange: props.onDraftChange, projectId: props.projectId,
-    commands: props.commands ?? noCommands, enabled: !minimized && props.available,
+    commands: props.commands ?? noCommands, enabled: !minimized && props.available && !props.locked,
   });
 
   function focusInput() {
@@ -130,6 +132,10 @@ export default function ChatComposer(props: Props) {
     if (event.key === "Tab" && event.shiftKey && props.onToggleMode) {
       event.preventDefault();
       props.onToggleMode();
+      return;
+    }
+    if (props.locked) {
+      if (event.key === "Enter" && !event.shiftKey) event.preventDefault();
       return;
     }
     if (completion.onKeyDown(event)) return;
@@ -208,6 +214,8 @@ export default function ChatComposer(props: Props) {
               onKeyDown={keydown}
               placeholder={props.available ? "描述任务… 输入 / 查看指令，@ 引用文件" : "等待可用账号…"}
               disabled={!props.available}
+              readOnly={props.locked}
+              aria-busy={props.locked || undefined}
               rows={1}
               aria-label="对话消息"
               aria-description="Enter 发送，Shift + Enter 换行；/ 查看指令，@ 引用文件，Tab 补全"

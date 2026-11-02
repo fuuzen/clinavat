@@ -9,7 +9,7 @@ export interface UsageRing {
 
 const STALE_AFTER = 15 * 60_000;
 
-function accountWindows(engine: "claude" | "codex", windows: UsageWindow[]) {
+export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[]) {
   if (engine === "claude") {
     return {
       main: windows.find((window) => window.key === "seven_day"),

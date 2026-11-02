@@ -65,6 +65,7 @@ const MAX_PROBES = 2;
 // Probes on busy slots must not rotate refresh tokens that a running CLI still holds.
 const TOKEN_MARGIN = 15 * 60_000;
 const CODEX_REFRESH_AGE = 7 * 24 * 3600_000;
+const SAVE_DELAY = 2_000;
 
 const claudeWindows: [string, string, number | null][] = [
   ['five_hour', '5 小时', 300], ['seven_day', '每周', 10080], ['seven_day_opus', '每周 · Opus', 10080],
@@ -191,11 +192,18 @@ async function accountKey(home: string, engine: AccountEngine): Promise<string |
       const uuid = (await readJson(join(home, file), home))?.oauthAccount?.accountUuid;
       if (typeof uuid === 'string') return digest(`claude:${uuid}`);
     }
-    // Without account metadata the refresh token is the best identity; rotation only causes a fresh query.
+    // Without account metadata the refresh token is the best identity, but it rotates; see sameAccount.
     const token = (await readJson(credentialPath(home, 'claude'), home))?.claudeAiOauth?.refreshToken;
-    return typeof token === 'string' ? digest(`claude-token:${token}`) : null;
+    return typeof token === 'string' ? `token:${digest(`claude-token:${token}`)}` : null;
   } catch { return null; }
 }
+
+// Cached usage is only dropped on a proven account change; an unreadable or rotating identity keeps it.
+function sameAccount(cached: string | null, current: string | null): boolean {
+  return !cached || !current || cached === current || cached.startsWith('token:') || current.startsWith('token:');
+}
+
+interface CachedSnapshot extends Omit<Snapshot, 'windows'> { windows: UsageWindow[] }
 
 type Credential = { kind: 'none' } | { kind: 'apikey' } | { kind: 'oauth'; fresh: boolean };
 
@@ -291,14 +299,45 @@ export class SlotUsage {
   private running = 0;
   private queue: (() => void)[] = [];
   private readonly root: string;
+  private readonly cacheFile: string;
+  private saveTimer?: NodeJS.Timeout;
+  private saving = Promise.resolve();
 
   constructor(private config: { dataDir: string; claudeBinary: string; codexBinary: string },
     private credentials: AccountCredentials, private notify: (slotId: string) => void) {
     this.root = join(config.dataDir, 'run', 'usage-probes');
+    this.cacheFile = join(config.dataDir, 'cache', 'slot-usage.json');
   }
 
   // Probe homes hold credential copies; remove any left by an interrupted process.
-  async init(): Promise<void> { await rm(this.root, { recursive: true, force: true }); }
+  async init(): Promise<void> {
+    await rm(this.root, { recursive: true, force: true });
+    await this.load();
+  }
+
+  // The last observed usage survives restarts so a failing query still has something to show.
+  private async load(): Promise<void> {
+    let cached: Record<string, CachedSnapshot>;
+    try { cached = JSON.parse(await readFile(this.cacheFile, 'utf8')); }
+    catch { return; }
+    for (const [slotId, entry] of Object.entries(cached ?? {})) {
+      if (!entry || !Array.isArray(entry.windows) || typeof entry.observedAt !== 'number') continue;
+      this.state(slotId).snapshot = { ...entry, windows: new Map(entry.windows.map(window => [window.key, window])) };
+    }
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      const cached: Record<string, CachedSnapshot> = {};
+      for (const [slotId, { snapshot }] of this.states) {
+        if (snapshot) cached[slotId] = { ...snapshot, windows: [...snapshot.windows.values()] };
+      }
+      this.saving = this.saving.then(() => writePrivateJson(this.cacheFile, JSON.stringify(cached))).catch(() => undefined);
+    }, SAVE_DELAY);
+    this.saveTimer.unref();
+  }
 
   private state(slotId: string): SlotState {
     let state = this.states.get(slotId);
@@ -310,9 +349,10 @@ export class SlotUsage {
     const result: Record<string, SlotUsageView> = {};
     for (const slot of slots) {
       const state = this.state(slot.id);
-      if (state.snapshot && state.snapshot.accountKey !== await accountKey(slot.home_dir, slot.engine)) {
+      if (state.snapshot && !sameAccount(state.snapshot.accountKey, await accountKey(slot.home_dir, slot.engine))) {
         state.snapshot = undefined;
         state.checkedAt = undefined;
+        this.scheduleSave();
       }
       if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - (state.checkedAt ?? 0) >= AUTO_INTERVAL) {
         void this.query(slot);
@@ -363,7 +403,7 @@ export class SlotUsage {
     const state = this.state(slot.id);
     const key = await accountKey(slot.home_dir, slot.engine);
     let snapshot = state.snapshot;
-    if (snapshot && snapshot.accountKey !== key) snapshot = undefined;
+    if (snapshot && !sameAccount(snapshot.accountKey, key)) snapshot = undefined;
     if (!snapshot || mode === 'replace' || snapshot.unavailable) {
       snapshot = { accountKey: key, plan: null, windows: new Map(), credits: null, limited: null, observedAt: Date.now(), source };
     }
@@ -379,8 +419,10 @@ export class SlotUsage {
     if (update.unavailable) snapshot.unavailable = update.unavailable;
     snapshot.observedAt = Date.now();
     snapshot.source = source;
+    snapshot.accountKey = key ?? snapshot.accountKey;
     state.snapshot = snapshot;
     if (mode === 'replace') state.error = undefined;
+    this.scheduleSave();
     this.notify(slot.id);
   }
 

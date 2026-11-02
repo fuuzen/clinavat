@@ -21,8 +21,15 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
+// A response without data keeps the last observed usage on screen, marked stale, as a reference.
+function withFallback(next: SlotUsage, previous: SlotUsage | undefined): SlotUsage {
+  if (next.state === "ok" || next.state === "unavailable" || previous?.state !== "ok") return next;
+  return { ...previous, stale: true, refreshing: next.refreshing, checkedAt: next.checkedAt,
+    error: next.error ?? previous.error ?? "额度暂未更新" };
+}
+
 export function receiveSlotUsage(usage: SlotUsage) {
-  publish({ ...snapshot, [usage.slotId]: usage });
+  publish({ ...snapshot, [usage.slotId]: withFallback(usage, snapshot[usage.slotId]) });
 }
 
 function load() {
@@ -36,7 +43,7 @@ function load() {
       const next = { ...snapshot };
       for (const [slotId, usage] of Object.entries(result)) {
         // A live event received while this request was running is newer than its response.
-        if (snapshot[slotId] === before[slotId]) next[slotId] = usage;
+        if (snapshot[slotId] === before[slotId]) next[slotId] = withFallback(usage, snapshot[slotId]);
       }
       publish(next);
     })
