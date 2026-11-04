@@ -16,8 +16,6 @@ export interface ExecutionScope {
   paths: string[];
   /** Files the Hub writes and reads back; a guest must not be able to replace them. */
   readOnlyPaths?: string[];
-  /** The administrator's local-host projects always run on the host, with full system access. */
-  trusted?: boolean;
 }
 
 export interface ExecutionSpawnOptions {

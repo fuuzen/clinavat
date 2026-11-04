@@ -285,13 +285,9 @@ export class LxdExecutionHost implements ExecutionHost {
     };
   }
 
-  baseEnvironment(scope: ExecutionScope): NodeJS.ProcessEnv {
-    return scope.trusted ? this.local.baseEnvironment() : this.guestEnvironment();
-  }
+  baseEnvironment(_scope: ExecutionScope): NodeJS.ProcessEnv { return this.guestEnvironment(); }
 
-  async binary(scope: ExecutionScope, name: ExecutionBinary): Promise<string> {
-    return scope.trusted ? this.local.binary(scope, name) : name;
-  }
+  async binary(_scope: ExecutionScope, name: ExecutionBinary): Promise<string> { return name; }
 
   private command(id: string, cwd: string, binary: string, args: string[]): string[] {
     return ['bash', '-c', runScript, 'clinavat-run', id, String(this.uid), String(this.gid), cwd, binary, ...args];
@@ -301,7 +297,6 @@ export class LxdExecutionHost implements ExecutionHost {
   private runId(scope: ExecutionScope): string { return `${scope.userId ? 'run' : 'probe'}-${randomBytes(12).toString('hex')}`; }
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
-    if (options.scope.trusted) return this.local.spawn(binary, args, options);
     const machine = await this.attach(options.scope);
     const id = this.runId(options.scope);
     const child = spawn(this.config.lxcBinary, this.execArguments(machine, this.command(id, options.cwd, binary, args), options.env), {
@@ -322,7 +317,6 @@ export class LxdExecutionHost implements ExecutionHost {
   }
 
   async run(binary: string, args: string[], options: ExecutionRunOptions) {
-    if (options.scope.trusted) return this.local.run(binary, args, options);
     const machine = await this.attach(options.scope);
     const env = { ...this.guestEnvironment(), ...options.env };
     if (binary === 'mutagen') {

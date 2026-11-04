@@ -46,7 +46,7 @@ export class WorkspaceManager {
   }
 
   private scope(project: WorkspaceProject): ExecutionScope {
-    return { userId: project.user_id, paths: [project.local_path], trusted: project.execution_mode === 'local' };
+    return { userId: project.user_id, paths: [project.local_path] };
   }
 
   async create(userId: string, host: DevHost, project: WorkspaceProject): Promise<void> {
@@ -213,9 +213,18 @@ export class WorkspaceManager {
     return opened;
   }
 
+  /** A local project is mounted into a slot machine, so it must not reach the Hub's own secrets. */
+  private assertMountable(path: string): void {
+    if (this.execution.kind !== 'vm') return;
+    const within = (outer: string, inner: string) => inner === outer || inner.startsWith(`${outer}${sep}`);
+    const exposed = (this.config.protectedPaths ?? []).find(item => within(path, item) || within(item, path));
+    if (exposed) throw new Error(`本机项目目录不能包含或位于 ${exposed}：项目目录会挂载进虚拟机，其中运行的智能体将能读取这些内容`);
+  }
+
   private async checkLocalDirectory(project: WorkspaceProject): Promise<void> {
     this.validate(project);
     const actual = await realpath(project.local_path);
+    this.assertMountable(actual);
     if (actual !== project.local_path || !(await stat(actual)).isDirectory()) throw new Error('本机项目目录已改变或不再可用');
     await access(actual, constants.R_OK | constants.W_OK | constants.X_OK);
   }
@@ -258,7 +267,8 @@ export class WorkspaceManager {
     await this.flush(project);
     const command = "git rev-parse --abbrev-ref HEAD && printf '\\0' && git status --short && printf '\\0' && git diff --no-ext-diff --no-color HEAD -- .";
     const result = project.execution_mode === 'local'
-      ? await this.execution.run('/bin/bash', ['-c', command], {scope: this.scope(project), cwd: project.local_path})
+      // Agents can edit the repository's Git configuration, which can name commands to run; never read it on the host.
+      ? await this.execution.run('/bin/bash', ['-c', command], {scope: this.scope(project), cwd: project.local_path, env: {GIT_OPTIONAL_LOCKS: '0'}})
       : await this.ssh.exec(userId, host, remoteCommand(project, command));
     if (result.code !== 0) throw new Error(result.stderr.trim() || '无法读取 Git 状态，请确认目录为 Git 仓库');
     const [branch = '', status = '', diff = ''] = result.stdout.split('\0');

@@ -23,8 +23,7 @@ export function agentEnvironment(execution: ExecutionHost, context: AgentContext
 }
 
 export function agentScope(context: AgentContext): ExecutionScope {
-  return { userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home, context.project.local_path],
-    trusted: context.project.execution_mode === 'local' };
+  return { userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home, context.project.local_path] };
 }
 
 export async function findExecutable(binary: string): Promise<string> {

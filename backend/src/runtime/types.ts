@@ -3,6 +3,8 @@ import { isIP } from 'node:net';
 export interface RuntimeConfig {
   dataDir: string;
   workspaceDir: string;
+  /** Paths a local project may neither contain nor lie within, because projects are mounted into slot machines. */
+  protectedPaths?: string[];
   encryptionKey: string;
   sshBinary?: string;
   scpBinary?: string;
