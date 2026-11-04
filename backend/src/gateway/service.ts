@@ -3,17 +3,22 @@ import { isIPv4 } from 'node:net';
 import type { Store } from '../database.js';
 import { HttpError } from '../models.js';
 import { GatewayClient, gwctlPath } from './client.js';
+import type { MachinePlan } from '../execution/machine-plan.js';
+import { machineName } from '../execution/lxd-host.js';
 
 interface Health { problems: string[]; [key: string]: unknown }
 interface MutationResult { changed: boolean; revision?: number; pending?: boolean; health?: Health }
+export interface GatewayBinding { node: string; label?: string }
 export interface GatewayState {
   nodes: Record<string, unknown>[]; selected: string; rules: Record<string, unknown>[];
   dev_direct: string[]; forwards: Record<string, unknown>[]; sites: string[];
+  source_policy: 'shared' | 'bound'; bindings: Record<string, GatewayBinding>;
 }
 interface GatewayAuditRow { id: number; username: string | null; action: string; revision: number | null; status: string; detail: string | null; created_at: string }
 
 // These restart sing-box or switch the egress node, which drops running CLI connections.
-const interrupting = new Set(['nodes.put', 'selector.select', 'rules.put', 'dev_direct.put', 'rollback']);
+// A single source binding switches at runtime and only cuts that source's connections when asked to.
+const interrupting = new Set(['nodes.put', 'selector.select', 'rules.put', 'dev_direct.put', 'source_policy.set', 'rollback']);
 
 function ipv4Number(address: string): number {
   return address.split('.').reduce((value, part) => value * 256 + Number(part), 0);
@@ -27,7 +32,25 @@ export function cidrContains(cidr: string, address: string): boolean {
 }
 
 export class GatewayService {
-  constructor(readonly client: GatewayClient, private readonly store: Store) {}
+  private bindingCache?: { at: number; state: Promise<{ policy: string; bindings: Record<string, GatewayBinding> } | undefined> };
+
+  constructor(readonly client: GatewayClient, private readonly store: Store, private readonly machines?: MachinePlan,
+    private readonly builderAddress?: string) {}
+
+  /** Under per-source binding, a slot machine without a node has no internet at all. */
+  async assertBound(slotId: string): Promise<void> {
+    const address = this.machines?.get('slot', slotId)?.address;
+    if (!address || !this.client.target) return;
+    if (!this.bindingCache || Date.now() - this.bindingCache.at > 15_000) {
+      this.bindingCache = { at: Date.now(), state: this.client.call<{ state: GatewayState }>('state.get', {}, 20_000)
+        .then(({ state }) => ({ policy: state.source_policy ?? 'shared', bindings: state.bindings ?? {} }), () => undefined) };
+    }
+    // An unreadable gateway does not block runs; the network itself still fails closed.
+    const state = await this.bindingCache.state;
+    if (state?.policy === 'bound' && !state.bindings[address]) {
+      throw new HttpError(409, '该槽位尚未绑定网关出口，请管理员在「网关 → 出口绑定」中为它选择节点');
+    }
+  }
 
   async info() {
     const target = this.client.target;
@@ -46,7 +69,24 @@ export class GatewayService {
       this.client.call<Record<string, unknown>[]>('audit.tail', { limit: 100 }),
       this.client.call<number[]>('revisions.list'),
     ]);
-    return { status, ...state, audit: audit.reverse(), revisions, hubAudit: this.hubAudit(), busySessions: this.busySessions() };
+    return { status, ...state, sources: this.sources(String(state.infra.pool_ip)), audit: audit.reverse(), revisions,
+      hubAudit: this.hubAudit(), busySessions: this.busySessions() };
+  }
+
+  /** Every source the gateway can bind, named by what runs there. */
+  private sources(poolIp: string) {
+    // Every slot gets its address before its machine exists, so it can be bound before the first login.
+    for (const slot of this.store.all<{ id: string }>('SELECT id FROM account_slots')) this.machines?.ensure('slot', slot.id, machineName('slot', slot.id));
+    const slots = new Map(this.store.all<{ id: string; label: string }>('SELECT id,label FROM account_slots').map(slot => [slot.id, slot.label]));
+    const users = new Map(this.store.all<{ id: string; username: string }>('SELECT id,username FROM users').map(user => [user.id, user.username]));
+    return [
+      { address: poolIp, kind: 'host', label: '号池机（宿主机）' },
+      // Image builds need packages and CLI downloads; the builder uses this fixed address.
+      ...(this.machines && this.builderAddress ? [{ address: this.builderAddress, kind: 'builder', label: '镜像构建' }] : []),
+      ...(this.machines?.list() ?? []).map(machine => machine.kind === 'slot'
+        ? { address: machine.address, kind: 'slot', label: `槽位 ${slots.get(machine.ownerId) ?? '已删除'}（${machine.ownerId}）` }
+        : { address: machine.address, kind: 'workspace', label: `工作区 ${users.get(machine.ownerId) ?? '已删除用户'}` }),
+    ];
   }
 
   read<T>(op: 'nodes.delay' | 'connections') { return this.client.call<T>(op, {}, 60_000); }
@@ -105,6 +145,7 @@ export class GatewayService {
         throw new HttpError(502, `号池机验证未通过，${rollback}：${problems.join('；')}`);
       }
       await this.client.call('confirm', { revision: result.revision });
+      this.bindingCache = undefined;
       this.record(userId, op, result.revision, 'CONFIRMED');
       return { ...result, confirmed: true };
     });

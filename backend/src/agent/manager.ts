@@ -114,6 +114,7 @@ export class AgentManager {
       }
     };
     try {
+      await this.config.egress?.assertBound(context.slot.id);
       releaseLease = await this.config.credentials.acquire(context);
       if (state.abort.signal.aborted) throw new Error('会话已停止');
       expectedShellHash = await this.shellHash(context);

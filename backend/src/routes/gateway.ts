@@ -41,6 +41,16 @@ export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
   app.put('/api/admin/gateway/nodes', mutation, change('nodes.put',
     z.object({ nodes: z.array(node).min(1).max(64), force }).strict()));
   app.post('/api/admin/gateway/select', mutation, change('selector.select', z.object({ tag, force }).strict()));
+  app.put('/api/admin/gateway/bindings/:address', mutation, async request => {
+    requireAdmin(request);
+    const { address } = z.object({ address: z.ipv4() }).parse(request.params);
+    const { force: _force, ...input } = z.object({
+      node: tag.nullable(), label: z.string().max(80).optional(), interrupt: z.boolean().default(false), force,
+    }).strict().parse(request.body);
+    return gateway.mutate(request.user.id, 'binding.set', { address, ...input });
+  });
+  app.post('/api/admin/gateway/source-policy', mutation, change('source_policy.set',
+    z.object({ source_policy: z.enum(['shared', 'bound']), force }).strict()));
   app.put('/api/admin/gateway/rules', mutation, change('rules.put',
     z.object({ rules: z.array(z.record(z.string(), z.unknown())).max(200), force }).strict()));
   app.put('/api/admin/gateway/dev-direct', mutation, change('dev_direct.put',

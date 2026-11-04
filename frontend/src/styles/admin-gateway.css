@@ -44,3 +44,6 @@
   .gateway-summary { grid-template-columns: minmax(0, 1fr); }
   .gateway-summary-actions { justify-content: space-between; }
 }
+.gateway-bindings { display: flex; flex-direction: column; }
+.gateway-binding > div { display: flex; flex: 1 1 220px; flex-direction: column; min-width: 0; }
+.gateway-binding select { min-width: 140px; }

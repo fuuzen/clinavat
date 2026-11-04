@@ -62,7 +62,11 @@ const usage = new SlotUsage({ dataDir: config.dataDir, execution }, credentials,
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot-usage', payload });
 });
 await usage.init();
-const agentConfig = { ...config, credentials, usage, execution };
+// Slot machines exist only with the VM host, and only then does a slot need a gateway binding.
+const slotMachines = config.executionHost === 'lxd' ? machines : undefined;
+let gateway: GatewayService | undefined;
+const agentConfig = { ...config, credentials, usage, execution,
+  egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } } };
 onSlotActivity = slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot', payload: { id: slotId } });
 };
@@ -202,7 +206,8 @@ completionRoutes(app, context);
 adminRoutes(app, context);
 siteAccessRoutes(app, siteAccess);
 siteSettingsRoutes(app, new SiteSettingsService(store), store, events);
-gatewayRoutes(app, new GatewayService(new GatewayClient(config, ssh.keys), store));
+gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMachines, config.imageBuilderAddress);
+gatewayRoutes(app, gateway);
 app.get('/api/health', async () => {
   const { kind, ...runtime } = await execution.health();
   return { status: 'ok', version: '0.1.0', execution: kind, runtime };

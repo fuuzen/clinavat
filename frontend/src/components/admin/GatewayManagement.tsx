@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  Activity, Check, Copy, FileJson, Globe2, History, KeyRound, LoaderCircle, Network, RefreshCw, Route, Save, ShieldCheck, Undo2, Waypoints, Zap,
+  Activity, Check, Copy, FileJson, Globe2, History, KeyRound, LoaderCircle, Network, RefreshCw, Route, Save, ShieldCheck, Split, Undo2, Waypoints, Zap,
 } from "lucide-react";
 import { api, ApiError, errorText } from "../../api";
 import SiteAccessSettings from "./SiteAccessSettings";
@@ -13,12 +13,18 @@ interface Health {
 }
 interface Node { tag: string; type: string; server?: string; server_port?: number; [key: string]: unknown }
 interface Forward { proto: "tcp" | "udp"; port: number; to_port: number; note?: string }
-interface GatewayState { nodes: Node[]; selected: string; rules: Record<string, unknown>[]; dev_direct: string[]; forwards: Forward[]; sites: string[] }
+interface Binding { node: string; label?: string }
+interface GatewayState {
+  nodes: Node[]; selected: string; rules: Record<string, unknown>[]; dev_direct: string[]; forwards: Forward[]; sites: string[];
+  source_policy: "shared" | "bound"; bindings: Record<string, Binding>;
+}
+interface Source { address: string; kind: "host" | "builder" | "slot" | "workspace"; label: string }
 interface AuditEntry { at: string; action: string; status: string; via: string; revision?: number; error?: string; problems?: string[]; reason?: string }
 interface HubAudit { id: number; username: string | null; action: string; revision: number | null; status: string; detail: string | null; created_at: string }
 interface Overview {
   status: { health: Health; drift: string[]; pending: { revision: number } | null; certificates: Record<string, string | null>; selected: string; nginx_installed: boolean };
-  state: GatewayState; infra: { lan_direct: string[]; pool_ip: string; wan_ip: string; forbidden_egress_ips?: string[] };
+  state: GatewayState; infra: { lan_direct: string[]; pool_ip: string; wan_ip: string; forbidden_egress_ips?: string[]; bindable?: string[] };
+  sources: Source[];
   audit: AuditEntry[]; revisions: number[]; hubAudit: HubAudit[]; busySessions: number;
 }
 interface DevHost { id: string; name: string; owner: string; endpoints: { host: string; resolved: boolean; addresses: { address: string; covered: "dev" | "lan" | null }[] }[] }
@@ -27,6 +33,7 @@ const actionLabels: Record<string, string> = {
   import: "导入配置", activate: "激活", "nodes.put": "修改节点", "selector.select": "切换节点", "rules.put": "修改分流规则",
   "dev_direct.put": "修改直连名单", "forwards.put": "修改端口映射", "sites.put": "修改站点", "cert.issue": "签发证书",
   "cert.enable": "启用证书", "certs.sync": "证书续期", confirm: "确认", rollback: "回滚",
+  "binding.set": "修改出口绑定", "source_policy.set": "切换来源策略", "vm_subnet.set": "设置虚拟机网段",
 };
 const statusLabels: Record<string, string> = {
   PENDING: "待确认", CONFIRMED: "已确认", APPLIED: "已应用", UNCHANGED: "无变化", ROLLED_BACK: "已回滚",
@@ -90,6 +97,31 @@ function Section({ icon: Icon, title, description, children, actions }: { icon: 
       <p className="gateway-description">{description}</p>
       {children}
     </section>
+  );
+}
+
+function BindingRow({ source, binding, nodes, disabled, bound, onSave }: {
+  source: Source; binding?: Binding; nodes: Node[]; disabled: boolean; bound: boolean;
+  onSave: (node: string | null, interrupt: boolean) => void;
+}) {
+  const current = binding?.node ?? "";
+  const [draft, setDraft] = useState(current);
+  const [interrupt, setInterrupt] = useState(false);
+  useEffect(() => { setDraft(current); setInterrupt(false); }, [current]);
+  return (
+    <div className="gateway-row gateway-binding">
+      <div><strong>{source.label}</strong><small><code>{source.address}</code></small></div>
+      <select value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} aria-label={`${source.label}的出口节点`}>
+        <option value="">未绑定{bound ? "（断网）" : ""}</option>
+        {nodes.map((node) => <option key={node.tag} value={node.tag}>{node.tag}</option>)}
+      </select>
+      <label className="gateway-force" title="切换后已有连接默认继续使用原节点，直到它们自然结束">
+        <input type="checkbox" checked={interrupt} disabled={disabled || draft === current} onChange={(event) => setInterrupt(event.target.checked)} />
+        中断已有连接
+      </label>
+      <button type="button" className="button button-primary button-small" disabled={disabled || draft === current}
+        onClick={() => onSave(draft || null, interrupt)}><Save size={14} />应用</button>
+    </div>
   );
 }
 
@@ -230,7 +262,28 @@ export default function GatewayManagement() {
           </details>
         </Section>
 
-        <Section icon={Route} title="分流规则" description="在默认走 proxy 的基础上追加 sing-box 路由规则。规则只能指向 proxy、某个节点，或 action=reject；直连仅由下方直连名单产生。">
+        <Section icon={Split} title="出口绑定" description={state.source_policy === "bound"
+          ? "按来源绑定：号池机和每台虚拟机只经各自绑定的节点出站，DNS 也经同一节点解析；未绑定的来源断网，节点失败时不会改走其他出口。切换绑定不重启 sing-box。"
+          : "共享模式：所有来源都经上方的节点选择器出站。绑定可以先配置好，切换到按来源绑定后生效；切换策略会重启 sing-box。"}
+          actions={state.source_policy === "bound"
+            ? <span className="admin-status success">按来源绑定</span>
+            : <button type="button" className="button button-secondary button-small" disabled={disabled || !state.bindings[overview.infra.pool_ip]}
+              title={state.bindings[overview.infra.pool_ip] ? undefined : "请先为号池机绑定节点"}
+              onClick={() => { if (window.confirm("切换到按来源绑定？未绑定的来源将无法访问外网，sing-box 会重启。")) void change("切换到按来源绑定", "/admin/gateway/source-policy", "POST", { source_policy: "bound" }); }}>
+              启用按来源绑定</button>}>
+          <div className="gateway-bindings">
+            {[...overview.sources, ...Object.keys(state.bindings).filter((address) => !overview.sources.some((source) => source.address === address))
+              .map((address): Source => ({ address, kind: "workspace", label: state.bindings[address]?.label || "未知来源" }))].map((source) => (
+              <BindingRow key={source.address} source={source} binding={state.bindings[source.address]} nodes={state.nodes}
+                disabled={disabled} bound={state.source_policy === "bound"}
+                onSave={(node, interrupt) => void change(`绑定 ${source.label}`, `/admin/gateway/bindings/${source.address}`, "PUT",
+                  { node, label: source.label.slice(0, 80), interrupt })} />
+            ))}
+          </div>
+          <p className="gateway-hint">工作区容器只运行文件同步，默认不绑定，只能访问直连名单中的开发机；槽位虚拟机需要先绑定节点，才能登录和对话。</p>
+        </Section>
+
+        <Section icon={Route} title="分流规则" description="在默认走 proxy 的基础上追加 sing-box 路由规则。规则只能指向 proxy、某个节点，或 action=reject；直连仅由下方直连名单产生。按来源绑定后，reject 规则对所有来源生效，指向节点的规则只影响网关自身的流量。">
           <JsonEditor value={state.rules} disabled={disabled}
             hint='示例：[{"domain_suffix": ["github.com"], "outbound": "proxy"}, {"domain_keyword": ["ads"], "action": "reject"}]。可用匹配字段：domain、domain_suffix、domain_keyword、domain_regex、ip_cidr、port、port_range、network、protocol。'
             onSave={(rules) => change("修改分流规则", "/admin/gateway/rules", "PUT", { rules })} />

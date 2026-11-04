@@ -47,7 +47,9 @@ TARGETS = {
 }
 CONFIRM_SECONDS = 90
 NODE_TYPES = {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'anytls', 'naive'}
-RESERVED_TAGS = {'proxy', 'direct', 'block', 'dns', 'tun-in'}
+RESERVED_TAGS = {'proxy', 'direct', 'block', 'dns', 'tun-in', 'unbound'}
+# Per-source selectors and DNS servers are named after the source address.
+RESERVED_PREFIXES = ('src-', 'dns-')
 # Dial fields that could make a node leave through something other than its own server.
 FORBIDDEN_NODE_FIELDS = {'detour', 'bind_interface', 'inet4_bind_address', 'inet6_bind_address',
                          'routing_mark', 'netns', 'reuse_addr', 'bind_address_no_port'}
@@ -57,6 +59,7 @@ RULE_MATCH_KEYS = {'domain', 'domain_suffix', 'domain_keyword', 'domain_regex', 
 FQDN = re.compile(r'^(?=.{1,253}$)(?!-)([a-z0-9-]{1,63}(?<!-)\.)+[a-z]{2,63}$')
 TAG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 MAX_NODES, MAX_RULES, MAX_DEV_DIRECT, MAX_FORWARDS, MAX_SITES = 64, 200, 64, 32, 16
+SOURCE_POLICIES = ('shared', 'bound')
 
 
 class GatewayError(Exception):
@@ -140,7 +143,7 @@ def validate_nodes(nodes):
         if not isinstance(node, dict):
             raise GatewayError('节点必须是对象')
         tag, kind = node.get('tag'), node.get('type')
-        if not isinstance(tag, str) or not TAG.match(tag) or tag in RESERVED_TAGS:
+        if not isinstance(tag, str) or not TAG.match(tag) or tag in RESERVED_TAGS or tag.startswith(RESERVED_PREFIXES):
             raise GatewayError(f'节点标签无效或为保留名：{tag!r}')
         if tag in tags:
             raise GatewayError(f'节点标签重复：{tag}')
@@ -226,10 +229,52 @@ def validate_sites(sites):
     return sorted(set(result))
 
 
+def bindable_addresses(infra):
+    """The pool machine and every VM address. Each has a fixed selector, so binding never restarts sing-box."""
+    addresses = [infra['pool_ip']]
+    if infra.get('vm_subnet'):
+        addresses += [str(host) for host in vm_subnet(infra['vm_subnet']).hosts()]
+    return addresses
+
+
+def vm_subnet(value):
+    net = network(value, 'vm_subnet')
+    if net.version != 4 or not net.is_private or not 22 <= net.prefixlen <= 28:
+        raise GatewayError(f'虚拟机网段必须是 /22 到 /28 的 IPv4 内网段：{value}')
+    return net
+
+
+def source_scope(infra):
+    return [infra['lan_subnet'], *([infra['vm_subnet']] if infra.get('vm_subnet') else [])]
+
+
+def validate_bindings(state, infra, tags):
+    policy = state.setdefault('source_policy', 'shared')
+    bindings = state.setdefault('bindings', {})
+    if policy not in SOURCE_POLICIES:
+        raise GatewayError(f'来源策略必须是 {" 或 ".join(SOURCE_POLICIES)}')
+    allowed = set(bindable_addresses(infra))
+    if not isinstance(bindings, dict):
+        raise GatewayError('出口绑定必须是以来源地址为键的对象')
+    for address, binding in bindings.items():
+        if address not in allowed:
+            raise GatewayError(f'{address} 不是可绑定的来源地址（号池机或虚拟机网段内的地址）')
+        if not isinstance(binding, dict) or set(binding) - {'node', 'label'}:
+            raise GatewayError(f'{address} 的绑定只允许 node / label 字段')
+        if binding.get('node') not in tags:
+            raise GatewayError(f'{address} 绑定的节点 {binding.get("node")!r} 不存在')
+        if not isinstance(binding.get('label', ''), str) or len(binding.get('label', '')) > 80:
+            raise GatewayError(f'{address} 的说明过长')
+    if policy == 'bound' and infra['pool_ip'] not in bindings:
+        raise GatewayError('按来源绑定出口时必须为号池机绑定节点，否则 Hub 自身无法联网')
+    state['bindings'] = dict(sorted(bindings.items(), key=lambda item: ipaddress.ip_address(item[0])))
+
+
 def validate_state(state, infra):
     tags = validate_nodes(state['nodes'])
     if state['selected'] not in tags:
         raise GatewayError(f'当前节点 {state["selected"]!r} 不存在')
+    validate_bindings(state, infra, tags)
     validate_rules(state['rules'], tags)
     state['dev_direct'] = validate_dev_direct(state['dev_direct'])
     validate_forwards(state['forwards'], infra)
@@ -246,13 +291,43 @@ def acme_account(infra):
         return None
 
 
+def source_tag(address):
+    return f'src-{address}'
+
+
+def dns_tag(address):
+    return f'dns-{address}'
+
+
 def render_sing_box(state, infra):
     tags = [node['tag'] for node in state['nodes']]
-    dns = dict(infra['dns'], tag='proxy-dns', detour='proxy')
     account = acme_account(infra)
+    bound = state.get('source_policy') == 'bound'
+    addresses = bindable_addresses(infra) if bound else []
+    upstream = infra['dns']
+    rejects = [dict(rule) for rule in state['rules'] if rule.get('action') == 'reject']
+    others = [dict(rule) for rule in state['rules'] if rule.get('action') != 'reject']
+    # DNS from the pool network is answered by sing-box, so it can follow the asking source's egress.
+    route_rules = [{'inbound': 'tun-in', 'action': 'sniff', 'timeout': '1s'},
+                   {'protocol': 'dns', 'action': 'hijack-dns'}, *rejects]
+    dns_servers = [dict(upstream, tag='proxy-dns', detour='proxy')]
+    dns_rules, selectors = [], []
+    for address in addresses:
+        # Selections change at runtime through the control API; the rendered default stays unbound,
+        # so binding a source never changes this file or restarts sing-box.
+        selectors.append({'type': 'selector', 'tag': source_tag(address), 'outbounds': ['unbound', *tags],
+                          'default': 'unbound', 'interrupt_exist_connections': False})
+        dns_servers.append(dict(upstream, tag=dns_tag(address), detour=source_tag(address)))
+        dns_rules.append({'source_ip_cidr': [f'{address}/32'], 'server': dns_tag(address)})
+        route_rules.append({'source_ip_cidr': [f'{address}/32'], 'outbound': source_tag(address)})
+    if bound:
+        # Unbound pool or VM addresses get nothing, not the shared node.
+        dns_rules.append({'source_ip_cidr': source_scope(infra), 'action': 'reject'})
+        route_rules.append({'source_ip_cidr': source_scope(infra), 'action': 'reject'})
     config = {
         'log': {'level': 'info'},
-        'dns': {'servers': [dns], 'final': 'proxy-dns', 'reverse_mapping': True, 'strategy': 'prefer_ipv4'},
+        'dns': {'servers': dns_servers, 'rules': dns_rules, 'final': 'proxy-dns', 'reverse_mapping': True,
+                'strategy': 'prefer_ipv4'},
         'inbounds': [{
             'type': 'tun', 'tag': 'tun-in', 'interface_name': infra['tun_if'], 'address': [infra['tun_address']],
             'auto_route': True, 'strict_route': True,
@@ -261,15 +336,21 @@ def render_sing_box(state, infra):
             **({'exclude_uid': [account.pw_uid]} if account else {}),
         }],
         'outbounds': [
+            # The gateway's own traffic, and all pool traffic under the shared policy.
             {'type': 'selector', 'tag': 'proxy', 'outbounds': tags, 'default': state['selected']},
+            *selectors,
             *state['nodes'],
+            # A dead end for unbound sources: it can only ever reach this gateway's own loopback.
+            {'type': 'socks', 'tag': 'unbound', 'server': '127.0.0.1', 'server_port': 1},
             # Referenced by nothing: excluded addresses never enter tun. Kept for sing-box internals.
             {'type': 'direct', 'tag': 'direct'},
         ],
         'route': {
             'auto_detect_interface': True,
-            'rules': [{'inbound': 'tun-in', 'action': 'sniff', 'timeout': '1s'},
-                      *[dict(rule) for rule in state['rules']]],
+            # Domains the outbounds themselves must resolve; source-specific DNS rules apply to clients only.
+            'default_domain_resolver': 'proxy-dns',
+            # Node rules come after the source rules, so with bound sources they only affect the gateway itself.
+            'rules': [*route_rules, *others],
             'final': 'proxy',
         },
         'experimental': {
@@ -307,7 +388,7 @@ table inet clinavat_guard {{
   }}
   chain postrouting {{
     type nat hook postrouting priority srcnat; policy accept;
-    ip saddr {infra["lan_subnet"]} oifname "{wan_if}" masquerade
+    ip saddr {{ {", ".join(source_scope(infra))} }} oifname "{wan_if}" masquerade
   }}
   # Kill switch: the pool network may reach the WAN interface only for direct-listed
   # destinations or replies to inbound DNAT. Everything else must use the tun device.
@@ -424,23 +505,49 @@ def activate(changed, state, infra):
     if 'sing-box' in changed:
         run(['systemctl', 'restart', 'sing-box'], timeout=60)
     if changed & {'sing-box', 'selector'}:
-        # cache_file restores the last runtime choice on restart, so always pin the state's node.
-        select_runtime(infra, state['selected'])
+        # cache_file restores the last runtime choice on restart, so always pin the state's nodes.
+        pin_selectors(infra, state)
     if changed & {'nginx', 'nginx-map'}:
         run(['nginx', '-t'])
         run(['systemctl', 'reload-or-restart', 'nginx'])
 
 
-def select_runtime(infra, tag, wait=15):
+def pin_selectors(infra, state, wait=15):
+    choices = {'proxy': state['selected']}
+    if state.get('source_policy') == 'bound':
+        bindings = state.get('bindings', {})
+        choices.update({source_tag(address): bindings.get(address, {}).get('node', 'unbound')
+                        for address in bindable_addresses(infra)})
     deadline = time.time() + wait
-    while True:
-        try:
-            clash(infra, 'PUT', '/proxies/proxy', {'name': tag}, timeout=3)
-            return
-        except Exception as error:
-            if time.time() >= deadline:
-                raise GatewayError(f'无法通过 sing-box 控制接口切换到 {tag}：{error}')
-            time.sleep(1)
+    for tag, node in choices.items():
+        while True:
+            try:
+                clash(infra, 'PUT', f'/proxies/{tag}', {'name': node}, timeout=3)
+                break
+            except Exception as error:
+                if time.time() >= deadline:
+                    raise GatewayError(f'无法通过 sing-box 控制接口把 {tag} 切换到 {node}：{error}')
+                time.sleep(1)
+
+
+def binding_drift(state, infra):
+    """Sources whose live selection differs from the state, which would mean traffic leaving the wrong way."""
+    if state.get('source_policy') != 'bound':
+        return []
+    proxies = (clash(infra, 'GET', '/proxies', timeout=5) or {}).get('proxies', {})
+    bindings = state.get('bindings', {})
+    return [address for address in bindable_addresses(infra)
+            if proxies.get(source_tag(address), {}).get('now') != bindings.get(address, {}).get('node', 'unbound')]
+
+
+def close_source_connections(infra, address):
+    data = clash(infra, 'GET', '/connections') or {}
+    closed = 0
+    for item in data.get('connections') or []:
+        if item.get('metadata', {}).get('sourceIP') == address:
+            clash(infra, 'DELETE', f'/connections/{item["id"]}')
+            closed += 1
+    return closed
 
 
 def egress_ip(timeout=8):
@@ -459,6 +566,11 @@ def health(state, infra, wait=20):
             break
         time.sleep(1)
     report['guard'] = run(['nft', 'list', 'table', 'inet', 'clinavat_guard'], check=False).returncode == 0
+    try:
+        report['binding_drift'] = binding_drift(state, infra) if report['sing_box'] else []
+    except Exception as error:
+        report['binding_drift'] = None
+        report['binding_error'] = str(error)[:200]
     if report['tun']:
         for _ in range(3):
             report['egress_ip'] = egress_ip()
@@ -481,6 +593,10 @@ def health(state, infra, wait=20):
         problems.append('sing-box 或 tun 未就绪')
     if not report['guard']:
         problems.append('防泄漏护栏未加载')
+    if report['binding_drift'] is None:
+        problems.append(f'无法核对出口绑定：{report.get("binding_error")}')
+    elif report['binding_drift']:
+        problems.append(f'以下来源的实际出口与绑定不一致：{", ".join(report["binding_drift"][:10])}')
     if not report['egress_ip']:
         problems.append('经代理访问外网失败')
     elif report['egress_ip'] in infra.get('forbidden_egress_ips', []):
@@ -549,7 +665,8 @@ def transact(action, mutate, args, wait_confirm=True, activate_only=None):
     rendered = render_all(candidate, infra)
     check_candidates(rendered)
     changed = {name for name, content in rendered.items() if file_digest(TARGETS[name]) != digest(content)}
-    if candidate['selected'] != state['selected']:
+    if candidate['selected'] != state['selected'] or candidate.get('bindings') != state.get('bindings') \
+            or candidate.get('source_policy') != state.get('source_policy'):
         changed.add('selector')
     if candidate == state and not changed:
         return {'changed': False}
@@ -615,14 +732,16 @@ def op_status(args):
         else:
             certs[domain] = None
     return {'health': report, 'drift': drift(), 'pending': pending, 'certificates': certs,
-            'selected': state['selected'], 'nginx_installed': bool(shutil.which('nginx'))}
+            'selected': state['selected'], 'source_policy': state.get('source_policy', 'shared'),
+            'bindings': state.get('bindings', {}), 'nginx_installed': bool(shutil.which('nginx'))}
 
 
 def op_state_get(args):
     state = read_json(STATE_PATH)
     infra = read_json(INFRA_PATH)
     public_infra = {key: value for key, value in infra.items() if key != 'clash_secret'}
-    return {'state': {**state, 'nodes': mask(state['nodes'])}, 'infra': public_infra}
+    return {'state': {'source_policy': 'shared', 'bindings': {}, **state, 'nodes': mask(state['nodes'])},
+            'infra': {**public_infra, 'bindable': bindable_addresses(infra)}}
 
 
 def merge_secret_fields(new, old):
@@ -660,6 +779,52 @@ def op_selector_select(args):
         return state
     # Switch at runtime instead of restarting; the rendered default matches for the next restart.
     return transact('selector.select', mutate, args, activate_only={'selector'})
+
+
+def op_binding_set(args):
+    """Binds one source to a node, or unbinds it with node=null. Switches at runtime without restarting sing-box."""
+    address, node, interrupt = args.get('address'), args.get('node'), args.get('interrupt') is True
+
+    def mutate(state):
+        bindings = state.setdefault('bindings', {})
+        if node is None:
+            bindings.pop(address, None)
+        else:
+            bindings[address] = {'node': node, 'label': args.get('label', bindings.get(address, {}).get('label', ''))}
+        return state
+    result = transact('binding.set', mutate, args, activate_only={'selector'})
+    if result.get('changed') and interrupt:
+        # Existing connections keep their old node unless the caller asks to cut them.
+        result['closed_connections'] = close_source_connections(read_json(INFRA_PATH), address)
+    return result
+
+
+def op_source_policy_set(args):
+    """Switches between one shared node for everything and per-source bindings. Restarts sing-box."""
+    def mutate(state):
+        state['source_policy'] = args.get('source_policy')
+        return state
+    return transact('source_policy.set', mutate, args)
+
+
+def op_pin(args):
+    """Local only: re-applies the state's node choices after sing-box starts."""
+    pin_selectors(read_json(INFRA_PATH), read_json(STATE_PATH), wait=int(args.get('wait', 30)))
+    return {'pinned': True}
+
+
+def op_vm_subnet_set(args):
+    """Local only: declares the VM network whose addresses reach the gateway unchanged."""
+    infra = read_json(INFRA_PATH)
+    previous = dict(infra)
+    infra['vm_subnet'] = str(vm_subnet(args.get('vm_subnet')))
+    atomic_write(INFRA_PATH, json.dumps(infra, indent=2, ensure_ascii=False) + '\n', 0o600)
+    try:
+        return transact('vm_subnet.set', lambda state: state, {**args, 'overwrite_drift': args.get('overwrite_drift')},
+                        wait_confirm=False)
+    except Exception:
+        atomic_write(INFRA_PATH, json.dumps(previous, indent=2, ensure_ascii=False) + '\n', 0o600)
+        raise
 
 
 def op_rules_put(args):
@@ -878,12 +1043,15 @@ def op_activate(args):
 REMOTE_OPS = {
     'status': op_status, 'state.get': op_state_get, 'nodes.put': op_nodes_put,
     'selector.select': op_selector_select, 'rules.put': op_rules_put, 'dev_direct.put': op_dev_direct_put,
+    'binding.set': op_binding_set, 'source_policy.set': op_source_policy_set,
     'forwards.put': op_forwards_put, 'sites.put': op_sites_put, 'nodes.delay': op_nodes_delay,
     'connections': op_connections, 'cert.issue': op_cert_issue, 'confirm': op_confirm,
     'rollback': op_rollback, 'revisions.list': op_revisions_list, 'audit.tail': op_audit_tail,
 }
-LOCAL_OPS = {**REMOTE_OPS, 'import': op_import, 'render': op_render, 'activate': op_activate, 'certs.sync': op_certs_sync, 'timer-rollback': op_timer_rollback}
-READ_ONLY = {'status', 'state.get', 'nodes.delay', 'connections', 'revisions.list', 'audit.tail', 'render'}
+LOCAL_OPS = {**REMOTE_OPS, 'import': op_import, 'render': op_render, 'activate': op_activate, 'certs.sync': op_certs_sync,
+             'timer-rollback': op_timer_rollback, 'pin': op_pin, 'vm_subnet.set': op_vm_subnet_set}
+# pin runs from sing-box's ExecStartPost, while a change holding the lock may be waiting for that restart.
+READ_ONLY = {'status', 'state.get', 'nodes.delay', 'connections', 'revisions.list', 'audit.tail', 'render', 'pin'}
 
 
 def main():

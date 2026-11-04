@@ -15,6 +15,8 @@ export interface AgentConfig {
   credentials: AccountCredentials;
   execution: ExecutionHost;
   usage?: SlotUsage;
+  /** Refuses a run whose slot has no egress yet, instead of letting the CLI fail on network errors. */
+  egress?: { assertBound(slotId: string): Promise<void> };
 }
 
 export interface AgentContext {
