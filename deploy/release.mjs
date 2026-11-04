@@ -3,14 +3,15 @@ import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, st
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { databasePath, loadEnvironment } from './environment.mjs';
+import { configuredDataDirectory, databasePath, environmentFilePath, installDirectory, loadEnvironment, releaseRoot } from './environment.mjs';
 import { activityCounts, controlService, deploymentStatus, gateCount, hasActivity, hasRuntimeActivity, installGate,
   openDatabase, removeGate, runtimeCounts, services, serviceState } from './release-state.mjs';
 
 const script = fileURLToPath(import.meta.url);
 const projectDirectory = dirname(dirname(script));
-loadEnvironment(join(projectDirectory, '.env'));
-const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+loadEnvironment(environmentFilePath());
+const dataDirectory = configuredDataDirectory(projectDirectory);
+const liveDirectory = installDirectory();
 const command = process.argv[2] ?? 'status';
 const argument = process.argv[3];
 const locked = process.argv.includes('--locked');
@@ -42,7 +43,7 @@ async function buildFiles(directory, prefix = '') {
 }
 
 async function requireMatchingBackend(staged) {
-  const live = join(projectDirectory, 'backend', 'dist');
+  const live = join(liveDirectory, 'backend', 'dist');
   const [stagedFiles, liveFiles] = await Promise.all([buildFiles(staged), buildFiles(live)]);
   if (stagedFiles.length !== liveFiles.length || stagedFiles.some((file, index) => file !== liveFiles[index])) {
     throw new Error('--frontend-only 要求后端暂存构建与在线构建的文件清单完全一致');
@@ -56,11 +57,11 @@ async function requireMatchingBackend(staged) {
 async function prepareRelease(staging) {
   const source = await realpath(resolve(staging));
   const releaseId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
-  const releaseDirectory = join(projectDirectory, '.releases', releaseId);
+  const releaseDirectory = join(releaseRoot(), releaseId);
   const nextDirectory = join(releaseDirectory, 'next');
   const previousDirectory = join(releaseDirectory, 'previous');
   for (const part of ['backend', 'frontend']) {
-    const live = join(projectDirectory, part, 'dist');
+    const live = join(liveDirectory, part, 'dist');
     if (inside(live, source) || inside(source, live) || inside(dataDirectory, source)) throw new Error('暂存目录不能包含在线 dist 或部署数据目录');
     await requireDirectory(live);
     await requireDirectory(join(source, part));
@@ -72,7 +73,7 @@ async function prepareRelease(staging) {
   await mkdir(previousDirectory, { mode: 0o700 });
   const device = (await stat(releaseDirectory)).dev;
   for (const part of releaseParts) {
-    if ((await stat(join(projectDirectory, part))).dev !== device) throw new Error('发布备份与在线 dist 必须位于同一文件系统');
+    if ((await stat(join(liveDirectory, part))).dev !== device) throw new Error('发布备份与在线 dist 必须位于同一文件系统');
     await cp(join(source, part), join(nextDirectory, part), { recursive: true, errorOnExist: true, force: false,
       filter: async file => {
         const metadata = await lstat(file);
@@ -86,7 +87,7 @@ async function prepareRelease(staging) {
 async function verifyService(hub) {
   if (hub.ActiveState !== 'active' || !hub.MainPID || hub.MainPID === '0') throw new Error('Hub 未运行；本命令只负责更新已运行的宿主部署');
   const argumentsList = (await readFile(`/proc/${hub.MainPID}/cmdline`, 'utf8')).split('\0');
-  if (!argumentsList.includes(join(projectDirectory, 'backend', 'dist', 'server.js'))) throw new Error('Hub 服务运行路径与本仓库不一致');
+  if (!argumentsList.includes(join(liveDirectory, 'backend', 'dist', 'server.js'))) throw new Error('Hub 未从安装目录运行，请先执行 host:install');
   const openedDatabasePath = await realpath(databasePath(dataDirectory));
   const descriptors = await readdir(`/proc/${hub.MainPID}/fd`);
   const targets = await Promise.all(descriptors.map(descriptor => readlink(`/proc/${hub.MainPID}/fd/${descriptor}`).catch(() => '')));
@@ -99,7 +100,7 @@ function reachableHost(value) {
 
 async function webCheck() {
   const host = reachableHost(process.env.CLINAVAT_WEB_BIND ?? '127.0.0.1');
-  const expected = await readFile(join(projectDirectory, 'frontend', 'dist', 'index.html'), 'utf8');
+  const expected = await readFile(join(liveDirectory, 'frontend', 'dist', 'index.html'), 'utf8');
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     try {
@@ -182,7 +183,7 @@ async function publish(staging) {
     checkCancelled();
     await record('stopped');
     for (const part of releaseParts) {
-      const live = join(projectDirectory, part, 'dist');
+      const live = join(liveDirectory, part, 'dist');
       await rename(live, join(release.previousDirectory, part));
       moved.push(part);
       await record('switching');
@@ -211,7 +212,7 @@ async function publish(staging) {
           hubStopped = true;
         }
         for (const part of moved.toReversed()) {
-          const live = join(projectDirectory, part, 'dist');
+          const live = join(liveDirectory, part, 'dist');
           await rm(live, { recursive: true, force: true });
           await rename(join(release.previousDirectory, part), live);
         }

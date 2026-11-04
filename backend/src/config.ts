@@ -1,8 +1,16 @@
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 
+// Kept outside the source tree: a local project, including this repository, is mounted into slot machines.
+const home = homedir();
+const dataHome = process.env.XDG_DATA_HOME || join(home, '.local', 'share');
+const configHome = process.env.XDG_CONFIG_HOME || join(home, '.config');
+const stateHome = process.env.XDG_STATE_HOME || join(home, '.local', 'state');
+const environmentFile = process.env.CLINAVAT_ENV_FILE || join(configHome, 'clinavat', 'hub.env');
+
 const environment = z.object({
-  CLINAVAT_DATA_DIR: z.string().default('../data'),
+  CLINAVAT_DATA_DIR: z.string().default(join(dataHome, 'clinavat')),
   CLINAVAT_WORKSPACE_DIR: z.string().default('/var/tmp/clinavat-workspace'),
   CLINAVAT_MASTER_KEY: z.string().regex(/^[a-f\d]{64}$/i, 'CLINAVAT_MASTER_KEY 必须是 32 字节十六进制密钥'),
   CLINAVAT_HOST: z.string().default('127.0.0.1'),
@@ -40,6 +48,8 @@ delete process.env.CLINAVAT_MASTER_KEY;
 export const config = {
   dataDir: resolve(environment.CLINAVAT_DATA_DIR),
   workspaceDir: resolve(environment.CLINAVAT_WORKSPACE_DIR),
+  protectedPaths: [resolve(environment.CLINAVAT_DATA_DIR), resolve(environment.CLINAVAT_WORKSPACE_DIR), dirname(environmentFile),
+    join(stateHome, 'clinavat'), process.env.CLINAVAT_INSTALL_DIR || join(home, '.local', 'lib', 'clinavat'), join(home, '.ssh'), join(home, 'snap'), join(home, '.claude'), join(home, '.codex')],
   encryptionKey: environment.CLINAVAT_MASTER_KEY,
   host: environment.CLINAVAT_HOST,
   port: environment.CLINAVAT_PORT,

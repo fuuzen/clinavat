@@ -4,13 +4,14 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { loadEnvironment as readEnvironment } from './environment.mjs';
+import { configuredDataDirectory, environmentFilePath, installDirectory, loadEnvironment as readEnvironment } from './environment.mjs';
+import { stageInstall, switchInstall } from './install-tree.mjs';
 import { activateServices, ensureInstallIdle } from './service-install.mjs';
 import { services as installedServices } from './release-state.mjs';
 
 const deploymentDirectory = dirname(fileURLToPath(import.meta.url));
 const projectDirectory = dirname(deploymentDirectory);
-const environmentFile = join(projectDirectory, '.env');
+const environmentFile = environmentFilePath();
 const services = ['clinavat-hub.service', 'clinavat-web.service'];
 const command = process.argv[2] ?? 'status';
 
@@ -51,7 +52,7 @@ function loadEnvironment() {
 async function prepareRuntime() {
   loadEnvironment();
   if (!process.env.XDG_RUNTIME_DIR) throw new Error('需要 systemd 用户会话的 XDG_RUNTIME_DIR');
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  const dataDirectory = configuredDataDirectory(projectDirectory);
   const runtimeDirectory = process.env.RUNTIME_DIRECTORY ?? join(process.env.XDG_RUNTIME_DIR, 'clinavat');
   const runtimeLink = join(dataDirectory, 'run');
   await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
@@ -75,7 +76,7 @@ async function resumeSync() {
   loadEnvironment();
   // Guests run their own daemons; the Hub restarts them after it comes up.
   if (process.env.CLINAVAT_EXECUTION_HOST === 'lxd') return;
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  const dataDirectory = configuredDataDirectory(projectDirectory);
   const usersDirectory = join(dataDirectory, 'users');
   const users = await readdir(usersDirectory, { withFileTypes: true }).catch(error => {
     if (error.code !== 'ENOENT') throw error;
@@ -111,7 +112,10 @@ async function install() {
   loadEnvironment();
   if (!/^[a-f\d]{64}$/i.test(process.env.CLINAVAT_MASTER_KEY ?? '')) throw new Error('请先配置有效的 CLINAVAT_MASTER_KEY；已有部署必须保留原密钥');
   if (!process.env.XDG_RUNTIME_DIR) throw new Error('需要 systemd 用户会话');
-  for (const file of ['backend/dist/server.js', 'frontend/dist/index.html']) await access(join(projectDirectory, file));
+  const sourceFlag = process.argv.indexOf('--source');
+  const source = sourceFlag > 0 ? resolve(process.argv[sourceFlag + 1]) : projectDirectory;
+  const live = installDirectory();
+  for (const file of ['backend/dist/server.js', 'frontend/dist/index.html']) await access(join(source, file));
   await import('../backend/dist/config.js');
   const caddy = await executable('caddy');
   for (const name of [process.env.CLINAVAT_MUTAGEN_BIN ?? 'mutagen', process.env.CLINAVAT_CLAUDE_BIN ?? 'claude',
@@ -119,25 +123,27 @@ async function install() {
     process.env.CLINAVAT_SSH_KEYGEN_BIN ?? 'ssh-keygen', 'bash', 'git', 'flock', 'scp', 'rg']) await executable(name);
   const environmentPath = [...new Set([dirname(process.execPath), join(homedir(), '.local/bin'),
     ...(process.env.PATH ?? '').split(':')])].filter(Boolean).join(':');
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  const dataDirectory = configuredDataDirectory(projectDirectory);
   await ensureInstallIdle(dataDirectory);
   const serviceDirectory = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'systemd/user');
   await mkdir(serviceDirectory, { recursive: true });
   const node = executableArgument(process.execPath);
-  const script = executableArgument(fileURLToPath(import.meta.url));
+  const script = executableArgument(join(live, 'deploy', 'host.mjs'));
   const hub = `[Unit]
 Description=Clinavat host backend
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=${unitPath(join(projectDirectory, 'backend'))}
+WorkingDirectory=${unitPath(join(live, 'backend'))}
 Environment=${unitValue(`PATH=${environmentPath}`)}
 Environment=NODE_ENV=production
+Environment=${unitValue(`CLINAVAT_ENV_FILE=${environmentFile}`)}
+Environment=${unitValue(`CLINAVAT_INSTALL_DIR=${live}`)}
 RuntimeDirectory=clinavat
 RuntimeDirectoryMode=0700
 ExecStartPre=${node} ${script} prepare-runtime
-ExecStart=${node} ${executableArgument(`--env-file=${environmentFile}`)} ${executableArgument(join(projectDirectory, 'backend/dist/server.js'))}
+ExecStart=${node} ${executableArgument(`--env-file=${environmentFile}`)} ${executableArgument(join(live, 'backend/dist/server.js'))}
 ExecStartPost=${node} ${script} resume-sync
 Restart=on-failure
 RestartSec=3
@@ -155,9 +161,10 @@ After=clinavat-hub.service
 
 [Service]
 Type=simple
-WorkingDirectory=${unitPath(projectDirectory)}
+WorkingDirectory=${unitPath(live)}
 Environment=${unitValue(`PATH=${environmentPath}`)}
-Environment=${unitValue(`CLINAVAT_FRONTEND_DIR=${join(projectDirectory, 'frontend/dist')}`)}
+Environment=${unitValue(`CLINAVAT_ENV_FILE=${environmentFile}`)}
+Environment=${unitValue(`CLINAVAT_FRONTEND_DIR=${join(live, 'frontend/dist')}`)}
 ExecStart=${node} ${script} run-web ${executableArgument(caddy)}
 Restart=on-failure
 RestartSec=3
@@ -171,6 +178,9 @@ WantedBy=default.target
     if (error.code !== 'ENOENT') throw error;
     return undefined;
   })));
+  // Assembled before anything stops, so a failed dependency install leaves the running deployment untouched.
+  const staged = source === live ? undefined : await stageInstall(source, live);
+  let installation;
   async function restoreUnits() {
     for (const [index, service] of services.entries()) {
       const path = join(serviceDirectory, service);
@@ -180,6 +190,7 @@ WantedBy=default.target
     run('systemctl', ['--user', 'daemon-reload']);
   }
   try {
+    if (staged) installation = await switchInstall(staged, live);
     await writeFile(join(serviceDirectory, services[0]), hub, { mode: 0o600 });
     await writeFile(join(serviceDirectory, services[1]), web, { mode: 0o600 });
     run('systemd-analyze', ['--user', 'verify', ...services.map(service => join(serviceDirectory, service))]);
@@ -187,17 +198,20 @@ WantedBy=default.target
     await activateServices(dataDirectory, restoreUnits);
   } catch (error) {
     await restoreUnits();
+    await installation?.undo();
     throw error;
   }
+  await installation?.finish();
+  console.log(`运行目录：${live}`);
   console.log('Clinavat 宿主服务已安装，旧服务已停用。查看状态：npm run host:status；查看日志：npm run host:logs');
 }
 
 function installWithLock() {
   loadEnvironment();
-  const dataDirectory = resolve(projectDirectory, 'backend', process.env.CLINAVAT_DATA_DIR ?? '../data');
+  const dataDirectory = configuredDataDirectory(projectDirectory);
   return mkdir(dataDirectory, { recursive: true, mode: 0o700 }).then(() => run('flock', [
     '--nonblock', '--no-fork', '--conflict-exit-code', '75', join(dataDirectory, 'release.lock'),
-    process.execPath, fileURLToPath(import.meta.url), 'install', '--locked',
+    process.execPath, fileURLToPath(import.meta.url), 'install', '--locked', ...process.argv.slice(3),
   ]));
 }
 
