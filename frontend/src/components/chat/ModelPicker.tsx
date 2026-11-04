@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronRight, LoaderCircle, RotateCw } from "lucide
 import { api, errorText } from "../../api";
 import type { AgentModel, AgentSelection } from "../../types";
 import SettingsMenu from "./SettingsMenu";
-import ReasoningEffortControl from "./ReasoningEffortControl";
+import ReasoningEffortControl, { effortName } from "./ReasoningEffortControl";
 
 interface Props {
   openRequest?: number;
@@ -20,6 +20,7 @@ interface Props {
 
 function SelectionItem(props: {
   name: string;
+  tag?: string;
   description?: string;
   selected: boolean;
   disabled?: boolean;
@@ -36,7 +37,10 @@ function SelectionItem(props: {
       onClick={props.onSelect}
     >
       <span className="settings-item-copy">
-        <span>{props.name}</span>
+        <span className="settings-item-name">
+          {props.name}
+          {props.tag && <span className="badge">{props.tag}</span>}
+        </span>
         {props.description && <small>{props.description}</small>}
       </span>
       <Check size={14} className="settings-item-check" aria-hidden="true" />
@@ -88,11 +92,8 @@ export default function ModelPicker(props: Props) {
     : models.find((model) => model.isDefault);
   const engineName = props.engine === "claude" ? "Claude Code" : "Codex";
   const modelName = selected?.name || props.value.model || `${engineName} 默认`;
-  const defaultModel = models.find((model) => model.isDefault);
   const efforts = selected?.reasoningEfforts || [];
-  const defaultEffort = efforts.find((effort) => effort.value === selected?.defaultReasoningEffort);
-  const effortName = efforts.find((effort) => effort.value === props.value.reasoningEffort)?.label
-    || props.value.reasoningEffort || defaultEffort?.label || "默认";
+  const currentEffort = effortName(props.value.reasoningEffort || selected?.defaultReasoningEffort);
   const unknownModel = props.value.model && !models.some(
     (model) => model.id === props.value.model,
   );
@@ -105,13 +106,13 @@ export default function ModelPicker(props: Props) {
         role="dialog"
         align="end"
         contentClassName="model-settings-popover"
-        title={`${engineName} · ${modelName} · ${effortName}${error ? " · 模型列表加载失败" : ""}`}
+        title={`${engineName} · ${modelName} · ${currentEffort}${error ? " · 模型列表加载失败" : ""}`}
         className={`model-trigger${error ? " settings-trigger-error" : ""}`}
         disabled={props.disabled}
         trigger={(
           <>
             <span className="settings-trigger-label">{modelName}</span>
-            {(efforts.length > 0 || props.value.reasoningEffort) && <span className="model-trigger-effort">{effortName}</span>}
+            {(efforts.length > 0 || props.value.reasoningEffort) && <span className="model-trigger-effort">{currentEffort}</span>}
             {loading ? <LoaderCircle size={12} className="spin" aria-label="正在加载模型" /> : <ChevronDown size={12} aria-hidden="true" />}
           </>
         )}
@@ -143,16 +144,6 @@ export default function ModelPicker(props: Props) {
                       <span>{engineName}</span>
                     </div>
                     <div role="group" aria-label="可用模型">
-                      <SelectionItem
-                        name="默认"
-                        description={defaultModel?.name}
-                        selected={!props.value.model}
-                        disabled={loading}
-                        onSelect={() => {
-                          props.onChange({ model: null, reasoningEffort: null });
-                          close();
-                        }}
-                      />
                       {!loading && unknownModel && (
                         <SelectionItem
                           name={props.value.model!}
@@ -166,14 +157,27 @@ export default function ModelPicker(props: Props) {
                         <SelectionItem
                           key={model.id}
                           name={model.name}
+                          // Claude's default alias already names itself "Default (recommended)".
+                          tag={model.isDefault && !/^default\b/i.test(model.name) ? "默认" : undefined}
                           description={model.description}
-                          selected={props.value.model === model.id}
+                          selected={props.value.model ? props.value.model === model.id : !!model.isDefault}
                           onSelect={() => {
-                            props.onChange({ model: model.id, reasoningEffort: null });
+                            // Picking the default model follows the CLI default rather than pinning it.
+                            props.onChange({ model: model.isDefault ? null : model.id, reasoningEffort: null });
                             close();
                           }}
                         />
                       ))}
+                      {!loading && !models.length && props.value.model && (
+                        <SelectionItem
+                          name="使用默认模型"
+                          selected={false}
+                          onSelect={() => {
+                            props.onChange({ model: null, reasoningEffort: null });
+                            close();
+                          }}
+                        />
+                      )}
                     </div>
                     {loading && <div className="settings-menu-status" role="status">正在加载模型…</div>}
                     {error && (

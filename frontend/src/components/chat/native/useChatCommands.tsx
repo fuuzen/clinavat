@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { statusLabel } from "../../../api";
 import type { AgentBehavior, AgentSelection, PermissionMode, Session } from "../../../types";
 import { rolePresets } from "./BehaviorPicker";
+import { effortName } from "../ReasoningEffortControl";
 import { parseSlashCommand } from "../composer/commands";
 
 const commonCommands = [
@@ -71,7 +72,7 @@ export function useChatCommands(props: {
       return await (name === "pause" ? props.onPause() : props.onResume()) ? "retained" : "blocked";
     }
     if (name === "status") {
-      props.onNotice(`${props.engine === "claude" ? "Claude Code" : "Codex"} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort || "默认思考强度"} · ${props.permissionMode}${props.engine === "codex" ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
+      props.onNotice(`${props.engine === "claude" ? "Claude Code" : "Codex"} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort ? effortName(props.selection.reasoningEffort) : "默认思考强度"} · ${props.permissionMode}${props.engine === "codex" ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
       return "handled";
     }
     if (name === "diff") { props.onDiff(); return "handled"; }

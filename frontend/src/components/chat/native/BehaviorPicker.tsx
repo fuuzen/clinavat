@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, UserRound } from "lucide-react";
 import type { AgentBehavior, RolePreset } from "../../../types";
+import SettingsHelp from "../SettingsHelp";
 import SettingsMenu from "../SettingsMenu";
 
 export const rolePresets: { value: RolePreset; label: string; description: string }[] = [
@@ -17,9 +18,14 @@ export default function BehaviorPicker(props: {
   onChange: (value: AgentBehavior) => void;
 }) {
   const planning = props.value.agentMode === "plan";
+  const modes = [
+    { value: "normal", label: "Normal", description: "执行任务，操作遵循当前授权模式。" },
+    { value: "plan", label: "Plan", description: "先分析并制定计划，确认后再切换 Normal 实施。" },
+  ] as const;
   const role = rolePresets.find((item) => item.value === props.value.rolePreset) || rolePresets[0];
   return <SettingsMenu
     label="工作模式与角色"
+    width={208}
     className="behavior-trigger"
     title={`${planning ? "Plan · 先规划" : "Normal · 执行任务"}${props.engine === "codex" ? ` · ${role.label}` : ""}`}
     openRequest={props.openRequest}
@@ -32,25 +38,29 @@ export default function BehaviorPicker(props: {
       <ChevronDown className="settings-trigger-chevron" size={12} aria-hidden="true" />
     </>}
   >{(close) => <>
-    <div className="settings-menu-heading">工作模式</div>
-    {([
-      { value: "normal", label: "Normal", description: "执行任务，操作遵循当前授权模式。" },
-      { value: "plan", label: "Plan", description: "先分析并制定计划，确认后再切换 Normal 实施。" },
-    ] as const).map((mode) => <button key={mode.value} className="settings-menu-item" role="menuitemradio" aria-checked={props.value.agentMode === mode.value} tabIndex={-1} type="button" onClick={() => {
-      props.onChange({ ...props.value, agentMode: mode.value }); close();
-    }}>
-      <span className="settings-item-copy"><span>{mode.label}</span><small>{mode.description}</small></span>
-      <Check size={14} className="settings-item-check" />
-    </button>)}
-    {props.engine === "codex" && <>
-      <div className="settings-menu-heading"><UserRound size={13} />角色预设</div>
-      {rolePresets.map((preset) => <button key={preset.value} className="settings-menu-item" role="menuitemradio" aria-checked={role.value === preset.value} tabIndex={-1} type="button" onClick={() => {
-        props.onChange({ ...props.value, rolePreset: preset.value }); close();
+    <div className="settings-menu-heading"><span>工作模式</span><SettingsHelp menuItem text="保存到当前对话，下次发送生效。Shift + Tab 切换工作模式。" /></div>
+    {modes.map((mode) => <div className="settings-menu-entry" key={mode.value}>
+      <button className="settings-menu-item compact" role="menuitemradio" aria-checked={props.value.agentMode === mode.value}
+        aria-description={mode.description} tabIndex={-1} type="button" onClick={() => {
+        props.onChange({ ...props.value, agentMode: mode.value }); close();
       }}>
-        <span className="settings-item-copy"><span>{preset.label}</span><small>{preset.description}</small></span>
+        <span className="settings-item-copy">{mode.label}</span>
         <Check size={14} className="settings-item-check" />
-      </button>)}
-    </>}
-    <div className="settings-menu-footnote">保存到当前对话，下次发送生效。Shift + Tab 切换工作模式。</div>
+      </button>
+      <SettingsHelp text={mode.description} />
+    </div>)}
+    {props.engine === "codex" && <div className="settings-menu-group" role="group" aria-label="角色预设">
+      <div className="settings-menu-heading"><span><UserRound size={13} />角色预设</span></div>
+      {rolePresets.map((preset) => <div className="settings-menu-entry" key={preset.value}>
+        <button className="settings-menu-item compact" role="menuitemradio" aria-checked={role.value === preset.value}
+          aria-description={preset.description} tabIndex={-1} type="button" onClick={() => {
+          props.onChange({ ...props.value, rolePreset: preset.value }); close();
+        }}>
+          <span className="settings-item-copy">{preset.label}</span>
+          <Check size={14} className="settings-item-check" />
+        </button>
+        <SettingsHelp text={preset.description} />
+      </div>)}
+    </div>}
   </>}</SettingsMenu>;
 }

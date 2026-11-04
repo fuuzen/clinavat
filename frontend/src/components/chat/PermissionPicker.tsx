@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Hand, LoaderCircle, LockOpen, PencilLine, ShieldCheck, Zap, type LucideIcon } from "lucide-react";
 import type { PermissionMode } from "../../types";
+import SettingsHelp from "./SettingsHelp";
 import SettingsMenu from "./SettingsMenu";
 import "../../styles/permission-modes.css";
 
@@ -37,31 +38,32 @@ export default function PermissionPicker(props: Props) {
   function item(option: PermissionOption, close: () => void) {
     const OptionIcon = option.icon;
     return (
-      <button
-        key={option.value}
-        className={`settings-menu-item permission-option permission-${option.value}`}
-        type="button"
-        role="menuitemradio"
-        aria-checked={props.value === option.value}
-        tabIndex={-1}
-        onClick={() => {
-          close();
-          if (props.value !== option.value) props.onChange(option.value);
-        }}
-      >
-        <span className="permission-mode-symbol" aria-hidden="true"><OptionIcon size={18} /></span>
-        <span className="settings-item-copy">
-          <span>{option.label}</span>
-          <small>{option.description}</small>
-        </span>
-        <Check size={14} className="settings-item-check" aria-hidden="true" />
-      </button>
+      <div className="settings-menu-entry" key={option.value}>
+        <button
+          className={`settings-menu-item compact permission-option permission-${option.value}`}
+          type="button"
+          role="menuitemradio"
+          aria-checked={props.value === option.value}
+          aria-description={option.description}
+          tabIndex={-1}
+          onClick={() => {
+            close();
+            if (props.value !== option.value) props.onChange(option.value);
+          }}
+        >
+          <span className="permission-mode-symbol" aria-hidden="true"><OptionIcon size={18} /></span>
+          <span className="settings-item-copy">{option.label}</span>
+          <Check size={14} className="settings-item-check" aria-hidden="true" />
+        </button>
+        <SettingsHelp text={option.description} />
+      </div>
     );
   }
   return (
     <SettingsMenu
       openRequest={props.openRequest}
       label="授权模式"
+      width={232}
       title={`授权模式：${selected.label}${props.saving ? " · 正在保存" : ""}`}
       className={`permission-trigger permission-${selected.value}`}
       disabled={props.disabled || props.saving}
@@ -77,16 +79,18 @@ export default function PermissionPicker(props: Props) {
     >
       {(close) => (
         <>
-          <div className="settings-menu-heading"><span>当前权限</span><span>{selected.label}</span></div>
+          <div className="settings-menu-heading">
+            <span>授权模式</span>
+            <SettingsHelp menuItem text="保存到当前对话，下次发送消息时生效。" />
+          </div>
           <div role="group" aria-label="CLI 原生授权">
             <div className="settings-menu-heading"><span>CLI 原生</span><span>{props.engine === "claude" ? "Claude Code" : "Codex"}</span></div>
             {options.map((option) => item(option, close))}
           </div>
-          <div className="permission-system-group" role="group" aria-label="本系统自动审批">
+          <div className="settings-menu-group" role="group" aria-label="本系统自动审批">
             <div className="settings-menu-heading"><span>本系统</span></div>
             {item(yoloOption, close)}
           </div>
-          <div className="settings-menu-footnote">当前会话保存，下次发送消息时生效。</div>
         </>
       )}
     </SettingsMenu>

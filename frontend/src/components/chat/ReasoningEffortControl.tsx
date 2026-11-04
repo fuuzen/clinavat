@@ -10,20 +10,26 @@ interface Props {
   children: ReactNode;
 }
 
+// Effort names are shown in the CLIs' own English terms rather than translated.
+export function effortName(value: string | null | undefined): string {
+  const name = !value ? "default" : value === "xhigh" ? "extra high" : value;
+  return name.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function ReasoningEffortControl(props: Props) {
   const descriptionId = useId();
   const efforts = props.model?.reasoningEfforts || [];
   const defaultIndex = efforts.findIndex((effort) => effort.value === props.model?.defaultReasoningEffort);
   // Some catalogs omit the default effort, so keep an explicit default stop in that case.
   const stops = defaultIndex < 0
-    ? [{ value: null, label: "默认" }, ...efforts]
+    ? [{ value: null as string | null }, ...efforts]
     : efforts;
   const currentIndex = props.value
     ? stops.findIndex((effort) => effort.value === props.value)
     : Math.max(0, defaultIndex);
   const unknownEffort = !!props.value && currentIndex < 0;
   const index = Math.max(0, currentIndex);
-  const label = unknownEffort ? props.value : stops[index]?.label || "默认";
+  const label = effortName(unknownEffort ? props.value : stops[index]?.value);
   const progress = stops.length > 1 ? index / (stops.length - 1) * 100 : 0;
   const adjustable = !props.loading && efforts.length > 0;
 
@@ -70,8 +76,8 @@ export default function ReasoningEffortControl(props: Props) {
             />
           </div>
           <div className="reasoning-effort-scale" aria-hidden="true">
-            <span>{stops[0].label}</span>
-            <span>{stops.at(-1)?.label}</span>
+            <span>{effortName(stops[0].value)}</span>
+            <span>{effortName(stops.at(-1)?.value)}</span>
           </div>
         </div>
       )}

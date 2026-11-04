@@ -9,14 +9,16 @@ interface Props {
   now: number;
   slotLimited?: boolean;
   saving?: boolean;
+  /** Draw only the engine mark, for places that show usage another way. */
+  plain?: boolean;
 }
 
-export default function SlotUsageRing({ engine, usage, now, slotLimited, saving }: Props) {
+export default function SlotUsageRing({ engine, usage, now, slotLimited, saving, plain }: Props) {
   const { rings, limited, description } = slotUsageRings(engine, usage, now, slotLimited);
   const label = `${engine === "claude" ? "Claude Code" : "Codex"}；${description}`;
   return (
     <span className="slot-usage-ring" role="img" aria-label={label} title={label}>
-      <svg className="slot-usage-ring-chart" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
+      {!plain && <svg className="slot-usage-ring-chart" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
         {rings.map(({ position, used, level }) => {
           const radius = position === "outer" ? 14.5 : 11;
           return <g key={position} className={`slot-usage-ring-${position} slot-usage-ring-${level}`}>
@@ -27,7 +29,7 @@ export default function SlotUsageRing({ engine, usage, now, slotLimited, saving 
               strokeDasharray={`${Math.min(100, used)} 100`} transform="rotate(-90 16 16)" />}
           </g>;
         })}
-      </svg>
+      </svg>}
       <span className={`slot-usage-ring-brand engine-symbol engine-${engine}`} aria-hidden="true">
         {saving ? <LoaderCircle size={16} className="spin" /> : <span className={`engine-logo engine-logo-${engine}`} />}
       </span>

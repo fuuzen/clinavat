@@ -6,9 +6,9 @@ import { db } from "../store";
 import { fail, ok, readBody } from "./respond";
 
 const efforts = [
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
 ];
 
 const models: Record<string, AgentModel[]> = {

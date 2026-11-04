@@ -45,7 +45,3 @@
   color: var(--warning);
   fill: var(--panel);
 }
-.settings-menu-item .slot-usage-ring {
-  align-self: flex-start;
-  margin-top: 2px;
-}

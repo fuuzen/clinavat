@@ -24,10 +24,9 @@ export function invalidateUserModels(userId: string): void {
   for (const [key, entry] of cache) if (entry.userId === userId) cache.delete(key);
 }
 
-const effortLabels: Record<string, string> = {
-  none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高', ultra: '极高',
-};
-const effortOption = (value: string) => ({ value, label: effortLabels[value] || value });
+// Effort names stay in the CLIs' own English terms.
+const effortLabels: Record<string, string> = { xhigh: 'Extra High' };
+const effortOption = (value: string) => ({ value, label: effortLabels[value] || value.charAt(0).toUpperCase() + value.slice(1) });
 
 async function codexModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
   const { execution } = config;

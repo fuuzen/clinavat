@@ -42,3 +42,12 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--permission-color) 9%, transparent);
 }
+.permission-option.compact > .permission-mode-symbol {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.permission-option.compact > .permission-mode-symbol > svg {
+  width: 15px;
+  height: 15px;
+}

@@ -21,6 +21,8 @@ interface Props {
   contentClassName?: string;
   role?: "menu" | "dialog";
   align?: "start" | "end";
+  /** Popover width in pixels, for menus whose options are short. */
+  width?: number;
   trigger: ReactNode;
   children: (close: () => void) => ReactNode;
 }
@@ -106,7 +108,7 @@ export default function SettingsMenu(props: Props) {
       const viewportHeight = viewport?.height || window.innerHeight;
       const gutter = 12;
       const gap = 8;
-      const width = Math.max(0, Math.min(320, viewportWidth - gutter * 2));
+      const width = Math.max(0, Math.min(props.width ?? 320, viewportWidth - gutter * 2));
       const above = Math.max(0, anchor.top - viewportTop - gap - gutter);
       const below = Math.max(0, viewportTop + viewportHeight - anchor.bottom - gap - gutter);
       const naturalHeight = menu.scrollHeight + menu.offsetHeight - menu.clientHeight;
@@ -148,7 +150,7 @@ export default function SettingsMenu(props: Props) {
       contentObserver.disconnect();
       menu.removeEventListener("focusin", trackFocus);
     };
-  }, [open, props.disabled, props.align, focusSelection]);
+  }, [open, props.disabled, props.align, props.width, focusSelection]);
 
   const positioned = position !== null;
   useLayoutEffect(() => {
@@ -274,7 +276,7 @@ export default function SettingsMenu(props: Props) {
             zIndex: 100,
             top: position?.top || 0,
             left: position?.left || 0,
-            width: position?.width ?? Math.min(320, window.innerWidth - 24),
+            width: position?.width ?? Math.min(props.width ?? 320, window.innerWidth - 24),
             maxHeight: position?.maxHeight ?? window.innerHeight - 24,
             overflowY: "auto",
             visibility: position ? "visible" : "hidden",

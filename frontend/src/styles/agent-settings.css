@@ -60,12 +60,13 @@
   color: var(--muted);
   font-size: 11px;
 }
-.slot-menu-entry {
+/* An option with its own side buttons, such as refresh or help. */
+.settings-menu-entry {
   display: flex;
   align-items: center;
   gap: 2px;
 }
-.slot-menu-entry > .settings-menu-item {
+.settings-menu-entry > .settings-menu-item {
   flex: 1;
   min-width: 0;
 }
@@ -76,38 +77,77 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.slot-menu-entry .badge {
+.settings-menu-entry .badge {
   flex-shrink: 0;
   font-size: 10px;
   padding: 1px 5px;
 }
-.slot-menu-summary {
+.slot-menu-quota {
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
+  gap: 2px;
+  width: 112px;
+}
+.slot-menu-quota.stale {
+  opacity: 0.55;
+}
+.slot-menu-quota > small,
+.slot-menu-window {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.4;
 }
-.slot-menu-summary.stale {
-  opacity: 0.6;
+.slot-menu-quota > small {
+  text-align: right;
 }
-.slot-menu-refresh,
+.slot-menu-window {
+  display: grid;
+  grid-template-columns: 16px 1fr 38px;
+  align-items: center;
+  gap: 5px;
+}
+.slot-menu-window > .usage-bar {
+  height: 3px;
+}
+.slot-menu-window > span:last-child {
+  text-align: right;
+}
+.slot-menu-refresh {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
 .settings-menu-help {
   flex-shrink: 0;
   width: 24px;
   height: 24px;
   color: var(--muted);
 }
-.settings-menu-help[aria-checked="true"] {
+.settings-menu-heading > .settings-menu-help {
+  margin: -4px -4px -4px auto;
+}
+.settings-menu-help:hover,
+.settings-menu-help[data-shown] {
   color: var(--accent);
 }
-.settings-menu-note {
-  margin: 0 4px 4px;
+.settings-help-tooltip {
+  position: fixed;
+  z-index: 101;
+  width: max-content;
   padding: 7px 9px;
+  border: 1px solid var(--line);
   border-radius: 7px;
-  background: var(--hover);
+  background: var(--panel);
+  box-shadow: 0 6px 20px var(--shadow);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 .model-trigger {
   max-width: 230px;
@@ -121,9 +161,18 @@
   max-width: 140px;
   color: var(--text-secondary);
 }
-.permission-system-group {
+/* Dividers between the menu title and its sections, and between sections. */
+.settings-menu > .settings-menu-heading:first-child {
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-menu-group {
   margin-top: 6px;
   border-top: 1px solid var(--line);
+}
+.settings-menu-heading > span:first-child > svg {
+  margin-right: 5px;
+  vertical-align: -2px;
 }
 .engine-symbol {
   display: inline-flex;
@@ -208,11 +257,27 @@
   gap: 2px;
   overflow-wrap: anywhere;
 }
+.settings-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-item-name > .badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 5px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 .settings-item-copy > small {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.6;
   color: var(--text-secondary);
+}
+.settings-menu-item.compact {
+  min-height: 32px;
+  padding: 5px 10px;
 }
 .settings-item-check {
   color: var(--accent);
@@ -221,8 +286,7 @@
 [aria-checked="true"] > .settings-item-check {
   opacity: 1;
 }
-.settings-menu-status,
-.settings-menu-footnote {
+.settings-menu-status {
   padding: 8px 10px;
   color: var(--text-secondary);
   font-size: 12px;
@@ -231,10 +295,6 @@
 }
 .settings-menu-error {
   color: var(--warning);
-}
-.settings-menu-footnote {
-  margin-top: 5px;
-  border-top: 1px solid var(--line);
 }
 @media (max-width: 700px) {
   .composer-toolbar {
@@ -251,7 +311,8 @@
   .model-trigger {
     max-width: 100%;
   }
-  .settings-menu-item {
+  .settings-menu-item,
+  .settings-menu-item.compact {
     min-height: 42px;
   }
 }

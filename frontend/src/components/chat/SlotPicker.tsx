@@ -1,10 +1,11 @@
-import { Check, ChevronDown, CircleHelp, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
-import { useId, useState } from "react";
+import { Check, ChevronDown, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 import { statusLabel } from "../../api";
-import type { Slot, SlotUsage } from "../../types";
+import type { Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow, useSlotUsage } from "../../useSlotUsage";
 import SlotUsageRing from "../usage/SlotUsageRing";
 import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
+import SettingsHelp from "./SettingsHelp";
 import SettingsMenu from "./SettingsMenu";
 
 interface Props {
@@ -47,14 +48,45 @@ export default function SlotPicker({ slots, slotId, engine, disabled, saving, on
   );
 }
 
-// Remaining share of the windows the ring draws, so the row reads the same as its ring.
-function usageSummary(slot: Slot, usage: SlotUsage | undefined): string {
-  if (!usage || usage.state === "pending") return usage?.refreshing ? "查询中…" : "";
-  if (usage.state !== "ok") return "无额度数据";
+function windowName(window: UsageWindow): string {
+  const minutes = window.windowMinutes;
+  if (!minutes) return window.label;
+  return minutes % 1440 === 0 ? `${minutes / 1440}d` : minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+}
+
+function untilReset(window: UsageWindow, now: number): string {
+  if (!window.resetsAt) return "";
+  const minutes = Math.ceil((Date.parse(window.resetsAt) - now) / 60_000);
+  if (minutes <= 0) return "待刷新";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return days ? `${days}d${hours ? `${hours}h` : ""}` : hours ? `${hours}h${minutes % 60 ? `${minutes % 60}m` : ""}` : `${minutes}m`;
+}
+
+// The same windows the trigger ring draws: the account total first, then the 5-hour window when present.
+function SlotQuota({ slot, usage, now }: { slot: Slot; usage?: SlotUsage; now: number }) {
+  if (!usage || usage.state === "pending") return <span className="slot-menu-quota"><small>{usage?.refreshing ? "查询中…" : "未查询"}</small></span>;
+  if (usage.state !== "ok") return <span className="slot-menu-quota"><small>无额度数据</small></span>;
   const { main, fiveHour } = accountWindows(slot.engine, usage.windows);
-  const parts = ([[fiveHour, "5h"], [main, main?.windowMinutes === 10080 ? "周" : main?.label]] as const)
-    .flatMap(([window, label]) => window && window.usedPercent !== null ? [`${label} ${Math.max(0, 100 - window.usedPercent)}%`] : []);
-  return parts.join(" · ") || "无额度窗口";
+  const windows = [main, fiveHour].filter((window): window is UsageWindow => !!window);
+  if (!windows.length) return <span className="slot-menu-quota"><small>无额度窗口</small></span>;
+  return (
+    <span className={`slot-menu-quota${usage.stale ? " stale" : ""}`}>
+      {windows.map((window) => {
+        const used = window.usedPercent;
+        const level = used === null ? "" : used >= 90 || window.limited ? "critical" : used >= 70 ? "warning" : "";
+        return (
+          <span className="slot-menu-window" key={window.key}>
+            <span>{windowName(window)}</span>
+            <span className={`usage-bar ${level}`}>
+              <span style={{ width: `${Math.min(100, Math.max(0, used ?? 0))}%` }} />
+            </span>
+            <span>{untilReset(window, now)}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 function SlotRefresh({ slot, usage }: { slot: Slot; usage?: SlotUsage }) {
@@ -78,18 +110,12 @@ function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
   available: Slot[]; slotId: string; engine?: "claude" | "codex"; usage: Record<string, SlotUsage>; now: number;
   onChange: (slotId: string) => void; close: () => void;
 }) {
-  const [help, setHelp] = useState(false);
-  const helpId = useId();
   return (
         <>
           <div className="settings-menu-heading">
             <span>当前对话的授权槽位</span>
-            <button type="button" className="icon-button settings-menu-help" role="menuitemcheckbox" tabIndex={-1}
-              aria-checked={help} aria-controls={helpId} aria-label="槽位说明" title="槽位说明" onClick={() => setHelp(!help)}>
-              <CircleHelp size={14} aria-hidden="true" />
-            </button>
+            <SettingsHelp menuItem text={"切换仅影响当前对话，可在多个对话中同时使用不同槽位。\n额度条为已用比例，右侧为距重置的时间；查询失败时显示上次获取的数据。"} />
           </div>
-          {help && <div id={helpId} className="settings-menu-note">切换仅影响当前对话，你可以在多个对话中同时使用不同槽位。额度以账号服务端返回为准，查询失败时显示最近一次获取的数据作为参考。</div>}
           {(["claude", "codex"] as const).map((type) => {
             const matching = available.filter((slot) => slot.engine === type);
             if (!matching.length) return null;
@@ -99,9 +125,8 @@ function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
                 {matching.map((slot) => {
                   const slotUsage = usage[slot.id];
                   const limited = slot.status === "RATE_LIMITED";
-                  const summary = slot.status === "DISABLED" ? "" : usageSummary(slot, slotUsage);
                   return (
-                    <div className="slot-menu-entry" key={slot.id}>
+                    <div className="settings-menu-entry" key={slot.id}>
                       <button
                         type="button"
                         className="settings-menu-item"
@@ -112,10 +137,10 @@ function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
                         title={slotUsageRings(slot.engine, slotUsage, now, limited).description}
                         onClick={() => { onChange(slot.id); close(); }}
                       >
-                        <SlotUsageRing engine={slot.engine} usage={slotUsage} now={now} slotLimited={limited} />
+                        <SlotUsageRing engine={slot.engine} usage={slotUsage} now={now} slotLimited={limited} plain />
                         <span className="slot-menu-label">{slot.label}</span>
                         {slot.status !== "IDLE" && <span className="badge">{statusLabel(slot.status)}</span>}
-                        {summary && <small className={`slot-menu-summary${slotUsage?.stale ? " stale" : ""}`}>{summary}</small>}
+                        {slot.status !== "DISABLED" && <SlotQuota slot={slot} usage={slotUsage} now={now} />}
                         <Check size={14} className="settings-item-check" aria-hidden="true" />
                       </button>
                       {slot.status !== "DISABLED" && <SlotRefresh slot={slot} usage={slotUsage} />}
