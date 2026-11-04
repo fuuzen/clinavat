@@ -34,7 +34,8 @@ function goalContext(context: Context, session: Session): AgentContext {
     project, slot, session };
 }
 
-function requireIdle(context: Context, session: Session): void {
+async function requireIdle(context: Context, session: Session): Promise<void> {
+  await context.agents.reclaim(session.id);
   if (context.agents.isBusy(session.id) || context.config.credentials.isSessionBusy(session.id)
     || ['running', 'waiting', 'pausing', 'paused'].includes(session.status)) {
     throw new HttpError(409, '当前对话仍在运行或回收状态，请稍后重试');
@@ -42,7 +43,7 @@ function requireIdle(context: Context, session: Session): void {
 }
 
 async function accessIdleGoal(context: Context, session: Session, change?: { action: 'pause' | 'edit'; objective?: string }): Promise<CodexGoal | null> {
-  requireIdle(context, session);
+  await requireIdle(context, session);
   if (!session.native_session_id) {
     if (change) throw new HttpError(409, '当前对话尚未设置 Goal');
     return null;
@@ -55,7 +56,7 @@ async function accessIdleGoal(context: Context, session: Session, change?: { act
 
 async function startGoal(context: Context, session: Session, action: Extract<GoalAction, { action: 'create' | 'resume' }>): Promise<CodexGoal | null> {
   const { agents, config, store, events, turns, workspaces } = context;
-  requireIdle(context, session);
+  await requireIdle(context, session);
   const runtime = goalContext(context, session);
   const project = projectFor(context, session.project_id, session.user_id);
   const { slot } = runtime;
@@ -124,6 +125,8 @@ export function sessionGoalRoutes(app: FastifyInstance, context: Context): void 
       return await withResourceLocks(context, [`goal:${id}`], async () => {
         const session = codexSession(context, id, request.user.id);
         let goal: CodexGoal | null;
+        // Starting a goal needs a fresh process that opens the goal's turn; an idle resident one exits first.
+        if (input.action === 'create' || input.action === 'resume') await context.agents.reclaim(id);
         if (context.agents.isBusy(id)) {
           if (input.action === 'create') throw new HttpError(409, '请等待当前执行结束，再设置新目标');
           goal = await context.agents.changeGoal(id, input);

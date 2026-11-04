@@ -36,6 +36,9 @@ export class AccountCredentials {
   private pauses = new Map<string, Promise<void>>();
   private failedReleases = new Set<LeaseRelease>();
 
+  /** Asks idle resident CLIs on a slot to exit so that another user can take it. */
+  reclaimIdle: (slotId: string) => Promise<void> = async () => undefined;
+
   constructor(private dataDir: string, private store: Store, private execution: ExecutionHost,
     private onSlotActivity?: (slotId: string) => void) {}
 
@@ -73,7 +76,7 @@ export class AccountCredentials {
     finally { this.pauses.delete(slotId); resume(); }
   }
 
-  async acquire(context: CredentialContext): Promise<() => Promise<void>> {
+  async acquire(context: CredentialContext, reclaimed = false): Promise<() => Promise<void>> {
     for (let pause = this.pauses.get(context.slot.id); pause; pause = this.pauses.get(context.slot.id)) await pause;
     const journal = this.journalFor(context);
     const current = this.currentSlot(journal, true);
@@ -81,8 +84,12 @@ export class AccountCredentials {
     let lease = this.leases.get(journal.slotId);
     if (lease) {
       this.assertHealthy(lease);
-      if (lease.journal.userId !== journal.userId) throw new HttpError(409, '该授权槽位正由其他用户使用，请稍后重试或切换槽位');
-      if (lease.finishing) { await lease.finishing; return this.acquire(context); }
+      if (lease.journal.userId !== journal.userId) {
+        if (reclaimed) throw new HttpError(409, '该授权槽位正由其他用户使用，请稍后重试或切换槽位');
+        await this.reclaimIdle(journal.slotId);
+        return this.acquire(context, true);
+      }
+      if (lease.finishing) { await lease.finishing; return this.acquire(context, reclaimed); }
     }
     const sessionId = context.runtime_kind === 'probe' ? '' : context.session.id;
     if (sessionId) {

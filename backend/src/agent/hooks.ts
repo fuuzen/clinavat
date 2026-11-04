@@ -51,9 +51,8 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
     if (tool === 'ExitPlanMode') return decision(false, '请在最终回复中展示方案并结束本轮；用户可以通过网页模式菜单切换到 Normal 后请求执行。');
     const cwd = await workspacePath(root, String(input.cwd ?? '.'));
     if (tool === 'Bash') {
-      if (typeof args.command !== 'string' || args.run_in_background) {
-        return decision(false, '仅支持前台命令，后台命令不受支持');
-      }
+      if (typeof args.command !== 'string') return decision(false, '命令无效');
+      const background = args.run_in_background === true;
       await services.verifyShell();
       if (yolo) {
         const approved = await services.approve('Bash', { ...args, cwd });
@@ -66,8 +65,7 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
       const shell = path.join(root, '.bin', 'remote-shell');
       const updatedInput = {
         ...args,
-        run_in_background: false,
-        command: `cd ${quoteShell(cwd)} && ${quoteShell(shell)} -c ${quoteShell(args.command)}`,
+        command: `cd ${quoteShell(cwd)} && ${quoteShell(shell)} ${background ? '--background ' : ''}-c ${quoteShell(args.command)}`,
       };
       return yolo ? decision(true, 'YOLO：本系统自动批准，命令在开发机执行', updatedInput) : nativeDecision(updatedInput);
     }

@@ -5,6 +5,7 @@ import { loadSiteSettings, useSiteSettings } from "./site/store";
 import type {
   AgentSelection,
   AgentBehavior,
+  InputMode,
   Approval,
   DevHost,
   Overview,
@@ -195,6 +196,7 @@ export default function App() {
     permissionMode: PermissionMode,
     slotId: string,
     behavior: AgentBehavior,
+    mode?: InputMode,
   ) {
     if (!project || !overview) return false;
     const pending = beginSend(project.id, selectedSessionRef.current);
@@ -204,8 +206,11 @@ export default function App() {
     const originSessionId = selectedSessionRef.current;
     const originDraftKey = getComposerDraftKey(overview.user.id, originProjectId, originSessionId);
     const submittedDraft = readComposerDraft(originDraftKey);
-    setStreaming("");
-    setTools([]);
+    // Messages for a running reply keep its live output on screen.
+    if (!mode) {
+      setStreaming("");
+      setTools([]);
+    }
     try {
       let target = session;
       if (!target) {
@@ -237,7 +242,7 @@ export default function App() {
           setSessionId(target.id);
         }
       }
-      await post(`/sessions/${target.id}/messages`, { content, ...selection, permissionMode, slotId, ...behavior });
+      await post(`/sessions/${target.id}/messages`, { content, ...selection, permissionMode, slotId, ...behavior, ...(mode ? { mode } : {}) });
       clearComposerDraft(originDraftKey, submittedDraft);
       clearComposerDraft(getComposerDraftKey(overview.user.id, originProjectId, target.id), submittedDraft);
       await Promise.all([refresh(), reloadMessages(target.id)]);

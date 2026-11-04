@@ -44,7 +44,15 @@ export class ClaudeControl {
         this.close(error instanceof Error ? error : new Error('Claude CLI 初始化失败'));
       }
     });
-    this.write({ type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt } });
+    this.sendUser(prompt);
+  }
+
+  sendUser(content: string, options: { uuid?: string; priority?: 'next' } = {}): void {
+    this.write({ type: 'user', session_id: '', parent_tool_use_id: null, ...options, message: { role: 'user', content } });
+  }
+
+  sendControl(request: Record<string, unknown>): void {
+    this.write({ type: 'control_request', request_id: randomUUID(), request });
   }
 
   handle(event: Record<string, any>): boolean {

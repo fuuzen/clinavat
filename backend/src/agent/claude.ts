@@ -6,8 +6,9 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
-import type { AgentRun, RunServices } from './types.js';
+import type { AgentRun, RunServices, RunTask } from './types.js';
 
+// How long a CLI told to finish may take, including stopping its background tasks.
 const EXIT_GRACE_MS = 10_000;
 
 async function transcriptPath(home: string, nativeId: string): Promise<string | undefined> {
@@ -50,11 +51,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope: agentScope(services.context), cwd: services.context.project.local_path, env: {
-      ...agentEnvironment(execution, services.context),
-      // A task finishing after the result would start an unattended turn that nobody can approve or see.
-      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
-    },
+    scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
   });
   services.control.track(child);
   const closed = observeProcessClose(child);
@@ -68,16 +65,61 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const messageGroups = new Map<string, string>();
   let stopped = false;
   let nativeSessionReceived = false;
-  let resultReceived = false;
-  let exitGraceExpired = false;
+  let turnActive = true;
+  let interruptRequested = false;
+  let closing = false;
   let exitGrace: NodeJS.Timeout | undefined;
+  let lastTaskSummary = '';
+  let tasks: RunTask[] = [];
+  // Steering sent while a turn was ending starts its own turn; its message already exists.
+  const pendingSteers = new Map<string, string>();
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
   const control = new ClaudeControl(child, services, inputError);
   const stop = () => { stopped = true; control.close(new Error('会话已停止')); terminateProcess(child); };
   child.stdin.on('error', (error) => { if (!control.closed) inputError(error); });
+  const endTurn = () => {
+    if (!turnActive) return;
+    turnActive = false;
+    const failure = resultError;
+    const wasInterrupted = interruptRequested;
+    const finalGroup = !failure ? messageGroups.get([...messages.keys()].at(-1) || '') : undefined;
+    const finalIds = finalGroup ? [...messages.keys()].filter(id => messageGroups.get(id) === finalGroup) : [];
+    const finalTexts = finalIds.map(id => ({ id, text: messages.get(id) || '' }));
+    // The next turn may begin immediately, so its text must never mix with this one's.
+    resultError = '';
+    interruptRequested = false;
+    messageId = '';
+    activeTextIndex = undefined;
+    textSize = 0;
+    messages.clear();
+    messageGroups.clear();
+    thinkingBlocks.clear();
+    for (const { id, text } of finalTexts) services.event('activity', { id, kind: 'text', text, final: true });
+    const output = finalTexts.map(item => item.text).join('\n\n').trim()
+      || (services.context.session.command === 'compact' && !failure ? '原生上下文已压缩。网页中的历史消息仍会保留。' : '');
+    services.turnEnded(wasInterrupted ? { status: 'interrupted', output } : failure ? { status: 'error', error: failure, output } : { status: 'completed', output });
+    if (nativeSessionReceived) void transcriptPath(services.context.runtime_home, nativeId)
+      .then(transcript => transcript ? services.update({ jsonl_file_path: transcript }) : undefined).catch(() => undefined);
+  };
   const lines = readJsonLines(child.stdout, (event) => {
     if (control.handle(event)) return;
-    if (resultReceived) return;
+    if (event.type === 'command_lifecycle' && event.state === 'started' && !turnActive && pendingSteers.has(event.command_uuid)) {
+      turnActive = true;
+      services.automaticTurn({ messageId: pendingSteers.get(event.command_uuid)! });
+    }
+    if (event.type === 'command_lifecycle' && ['started', 'completed', 'cancelled'].includes(event.state)) pendingSteers.delete(event.command_uuid);
+    if (event.type === 'system' && event.subtype === 'background_tasks_changed' && Array.isArray(event.tasks)) {
+      tasks = event.tasks.map((task: Record<string, unknown>) => ({
+        id: String(task.task_id), description: String(task.description ?? ''), type: String(task.task_type ?? ''),
+      }));
+      services.activityChanged();
+    }
+    if (event.type === 'system' && event.subtype === 'task_notification') lastTaskSummary = String(event.summary ?? '');
+    // After a background task the CLI may emit an empty init/result pair first; only a model request is a real turn.
+    if (event.type === 'system' && event.subtype === 'status' && event.status === 'requesting' && !turnActive) {
+      turnActive = true;
+      services.automaticTurn({ summary: lastTaskSummary });
+    }
     if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event', event.rate_limit_info);
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
       nativeSessionReceived = true;
@@ -155,13 +197,6 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       }
     }
     if (event.type === 'result') {
-      // The turn is terminal; a late pause must not freeze the CLI while it drains and exits.
-      services.control.close();
-      control.close();
-      resultReceived = true;
-      // The CLI waits for leftover tasks instead of exiting, which would hold the slot with nothing left to do.
-      exitGrace = setTimeout(() => { exitGraceExpired = true; terminateProcess(child); }, EXIT_GRACE_MS);
-      exitGrace.unref();
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
         resultError = Array.isArray(event.errors) ? event.errors.join('\n') : String(event.result ?? event.subtype);
       } else if (!messages.size && event.result) {
@@ -172,42 +207,21 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         messageGroups.set(id, id);
         services.event('activity', { id, kind: 'text', text });
       }
+      endTurn();
     }
   }, inputError);
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { diagnostics = (diagnostics + chunk.toString()).slice(-16 * 1024); });
   const completion = new Promise<void>((resolve, reject) => {
     child.once('error', error => { resultError = error.message; });
-    child.once('close', (exitCode, exitSignal) => {
+    child.once('close', (code, exitSignal) => {
       clearTimeout(exitGrace);
-      const code = exitGraceExpired ? 0 : exitCode;
       control.close(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
-      void (async () => {
-        let failure: unknown;
-        try {
-          const finalGroup = !stopped && code === 0 && !resultError ? messageGroups.get([...messages.keys()].at(-1) || '') : undefined;
-          const finalIds = finalGroup ? [...messages.keys()].filter(id => messageGroups.get(id) === finalGroup) : [];
-          const output = finalIds.map(id => messages.get(id)).join('\n\n');
-          if (output.trim()) {
-            for (const id of finalIds) services.event('activity', { id, kind: 'text', text: messages.get(id) || '', final: true });
-            await services.output(output.trim());
-          } else if (services.context.session.command === 'compact' && !stopped && code === 0 && !resultError) {
-            await services.output('原生上下文已压缩。网页中的历史消息仍会保留。');
-          }
-          if (nativeSessionReceived) {
-            const transcript = await transcriptPath(services.context.runtime_home, nativeId);
-            if (transcript) await services.update({ jsonl_file_path: transcript });
-          }
-          if (!stopped && (code !== 0 || resultError)) {
-            throw new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`);
-          }
-        } catch (error) { failure = error; }
-        finally {
-          signal?.removeEventListener('abort', stop);
-          lines.close();
-        }
-        if (failure) reject(failure); else resolve();
-      })();
+      signal?.removeEventListener('abort', stop);
+      lines.close();
+      // Exiting between turns needs no report: every finished turn already recorded its own outcome.
+      if (turnActive && !stopped) reject(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
+      else resolve();
     });
   }).finally(() => closed);
   // Attach the rejection handler before awaiting spawn: an unavailable binary can fail immediately.
@@ -225,5 +239,34 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     await completion.catch(() => undefined);
     throw error;
   }
-  return { process: child, completion, stop };
+  return {
+    process: child, completion, stop,
+    startTurn: async (text) => {
+      if (closing) throw new Error('Claude CLI 正在退出');
+      turnActive = true;
+      control.sendUser(text);
+    },
+    steer: async (text, id) => {
+      if (!turnActive) return false;
+      const uuid = randomUUID();
+      pendingSteers.set(uuid, id);
+      control.sendUser(text, { uuid, priority: 'next' });
+      return true;
+    },
+    interruptTurn: async () => {
+      if (!turnActive) return;
+      interruptRequested = true;
+      control.sendControl({ subtype: 'interrupt' });
+    },
+    isIdle: () => !turnActive && !tasks.length && !pendingSteers.size,
+    close: () => {
+      if (closing) return;
+      closing = true;
+      control.close();
+      exitGrace = setTimeout(() => terminateProcess(child), EXIT_GRACE_MS);
+      exitGrace.unref();
+    },
+    tasks: () => tasks,
+    stopTask: async (taskId) => { control.sendControl({ subtype: 'stop_task', task_id: taskId }); },
+  };
 }

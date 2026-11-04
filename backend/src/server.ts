@@ -77,7 +77,7 @@ for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_stat
     app.log.error({ err: error, projectId: project.id }, '无法刷新项目远程执行器');
   }
 }
-const agents = new AgentManager(agentConfig, {
+const agents: AgentManager = new AgentManager(agentConfig, {
   event(event) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', event.sessionId);
     if (session) {
@@ -88,6 +88,7 @@ const agents = new AgentManager(agentConfig, {
         } else turns.finish(event.sessionId, payload.status, payload.turnId);
         return;
       }
+      if (event.type === 'runtime') { events.broadcast(session.user_id, event); return; }
       if (event.type === 'tool' || event.type === 'activity') {
         if (!turns.record(event.sessionId, event.type, event.payload)) events.broadcast(session.user_id, event);
         return;
@@ -121,6 +122,28 @@ const agents = new AgentManager(agentConfig, {
     }
     events.emit(session.user_id, { type: 'session', sessionId, payload: store.get('SELECT * FROM sessions WHERE id=?', sessionId) });
   },
+  saveUserMessage(sessionId, content) {
+    const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
+    if (!session) throw new Error('会话不存在');
+    const id = randomUUID();
+    store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'user',?)", id, sessionId, content);
+    events.emit(session.user_id, { type: 'message', sessionId, payload: store.get('SELECT * FROM messages WHERE id=?', id) });
+    return id;
+  },
+  beginTurn(sessionId, origin, authorization) {
+    const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
+    if (!session) throw new Error('会话不存在');
+    let messageId: string;
+    if ('messageId' in origin) messageId = origin.messageId;
+    else {
+      // A turn the CLI began after a background task has no user message; a system note anchors it.
+      messageId = randomUUID();
+      store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, sessionId,
+        origin.summary ? `后台任务结束：${origin.summary.slice(0, 2000)}` : '后台任务结束，智能体继续处理');
+      events.emit(session.user_id, { type: 'message', sessionId, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
+    }
+    return turns.start(sessionId, messageId, authorization, randomUUID()).id;
+  },
   approval(request) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', request.sessionId);
     if (!session) return Promise.resolve({ decision: 'deny', reason: '会话不存在' });
@@ -138,6 +161,7 @@ const agents = new AgentManager(agentConfig, {
     }
   },
 });
+credentials.reclaimIdle = slotId => agents.reclaimWhere({ slotId });
 
 await app.register(cookie);
 await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute' });

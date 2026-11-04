@@ -200,3 +200,14 @@ export interface GitState {
   status: string;
   diff: string;
 }
+
+/** How a message sent during a running reply is handled. */
+export type InputMode = "steer" | "queue" | "interrupt";
+export interface RuntimeTask { id: string; description: string; type: string }
+/** The conversation's resident CLI process, as reported by the Hub. */
+export interface SessionRuntime {
+  resident: boolean;
+  turnActive: boolean;
+  queue: { id: string; content: string; queuedAt: string }[];
+  tasks: RuntimeTask[];
+}

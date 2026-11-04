@@ -13,9 +13,15 @@ import { AlertCircle, ArrowDown, ArrowUp, LoaderCircle, MessageSquare, Minus, Pa
 import CompletionMenu from "./composer/CompletionMenu";
 import { useComposerCompletion } from "./composer/useComposerCompletion";
 import type { ComposerCommand } from "./composer/commands";
+import type { InputMode } from "../../types";
 import "../../styles/completions.css";
 
 const noCommands: ComposerCommand[] = [];
+const sendModes: Record<InputMode, { label: string; title: string; next: InputMode }> = {
+  steer: { label: "引导", title: "引导：把消息加入当前回复，智能体在下一步看到它", next: "queue" },
+  queue: { label: "排队", title: "排队：当前回复结束后再发送", next: "interrupt" },
+  interrupt: { label: "打断", title: "打断并发送：结束当前回复，立即处理这条消息", next: "steer" },
+};
 
 export interface ComposerHandle {
   focus: () => void;
@@ -28,6 +34,11 @@ interface Props {
   draft: string;
   onDraftChange: (value: string) => void;
   onSend: () => void;
+  /** How a message sent during a running reply is handled. */
+  sendMode: InputMode;
+  onSendModeChange: (mode: InputMode) => void;
+  /** Queued messages and background tasks, shown above the input. */
+  status?: ReactNode;
   onStop: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -156,6 +167,18 @@ export default function ChatComposer(props: Props) {
       <span className="send-button-symbol">{resumable ? <Play size={15} fill="currentColor" aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}</span>
     </button>
   );
+  const mode = sendModes[props.sendMode];
+  const runningSend = (
+    <>
+      <button className="send-mode-button" type="button" onClick={() => props.onSendModeChange(mode.next)}
+        title={`${mode.title}。点击切换`} aria-label={`发送方式：${mode.title}。点击切换`}>
+        {mode.label}
+      </button>
+      <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title={mode.title} aria-label={mode.title}>
+        <span className="send-button-symbol"><ArrowUp size={18} aria-hidden="true" /></span>
+      </button>
+    </>
+  );
   const latestButton = (
     <button className="scroll-bottom" type="button" onClick={props.onScrollToBottom} aria-label="最新消息" title="最新消息">
       <ArrowDown size={15} aria-hidden="true" />
@@ -175,6 +198,7 @@ export default function ChatComposer(props: Props) {
       >
         {props.showScrollToBottom && !minimized && latestButton}
         {props.warning && <div className="composer-warning"><ShieldCheck size={14} aria-hidden="true" />{props.warning}</div>}
+        {props.status}
         <div className={`composer${props.active ? " composer-active" : ""}`}>
           <div id={contentId} className="composer-body">
             {completion.open && <CompletionMenu
@@ -212,13 +236,13 @@ export default function ChatComposer(props: Props) {
               onCompositionStart={() => completion.setComposing(true)}
               onCompositionEnd={(event) => { completion.setComposing(false); completion.updateCursor(event.currentTarget); }}
               onKeyDown={keydown}
-              placeholder={props.available ? "描述任务… 输入 / 查看指令，@ 引用文件" : "等待可用账号…"}
+              placeholder={!props.available ? "等待可用账号…" : props.active ? "补充说明，或为下一轮排队…" : "描述任务… 输入 / 查看指令，@ 引用文件"}
               disabled={!props.available}
               readOnly={props.locked}
               aria-busy={props.locked || undefined}
               rows={1}
               aria-label="对话消息"
-              aria-description="Enter 发送，Shift + Enter 换行；/ 查看指令，@ 引用文件，Tab 补全"
+              aria-description={props.active ? `Enter 以「${mode.label}」方式发送，Shift + Enter 换行` : "Enter 发送，Shift + Enter 换行；/ 查看指令，@ 引用文件，Tab 补全"}
               aria-autocomplete="list"
               aria-controls={completion.open ? completion.listId : undefined}
               aria-haspopup="listbox"
@@ -226,7 +250,7 @@ export default function ChatComposer(props: Props) {
             />
             <div className="composer-toolbar">
               {props.children}
-              {props.active ? <>{pauseButton}{stopButton}</> : (
+              {props.active ? <>{hasDraft && runningSend}{pauseButton}{stopButton}</> : (
                 <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title="发送消息" aria-label="发送消息">
                   <span className="send-button-symbol"><ArrowUp size={18} aria-hidden="true" /></span>
                 </button>

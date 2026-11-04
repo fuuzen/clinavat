@@ -89,7 +89,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         store.run('UPDATE dev_hosts SET name=? WHERE id=?', host.name, id);
         return hostFor(context, id, request.user.id);
       }
-      for (const project of projects) assertProjectIdle(context, project.id);
+      for (const project of projects) await assertProjectIdle(context, project.id);
       await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
       try {
         for (const project of projects) {

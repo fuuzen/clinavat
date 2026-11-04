@@ -59,7 +59,8 @@ export function sessionFor(context: Context, id: string, userId: string): Sessio
   projectFor(context, session.project_id, userId);
   return session;
 }
-export function assertProjectIdle(context: Context, projectId: string) {
+export async function assertProjectIdle(context: Context, projectId: string) {
+  await context.agents.reclaimWhere({ projectId });
   if (context.agents.isProjectBusy(projectId) || context.config.credentials.isProjectBusy(projectId)
     || context.store.get("SELECT id FROM sessions WHERE project_id=? AND status IN ('running','waiting','pausing','paused')", projectId)) {
     throw new HttpError(409, '项目中的会话正在运行，请先停止会话');

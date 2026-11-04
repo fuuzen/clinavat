@@ -28,6 +28,10 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   let diagnostics = '';
   let finished = false;
   let stopped = false;
+  let turnActive = true;
+  let interruptRequested = false;
+  // Commands may outlive the turn that started them; the process must stay until they end.
+  const runningCommands = new Set<string>();
   let nativePaused = false;
   let resumeGoal = false;
   let turnAbort = new AbortController();
@@ -47,36 +51,56 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   const completion = new Promise<void>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; })
     .finally(() => closed);
   void completion.catch(() => undefined);
+  const finalAnswer = (failed: boolean) => {
+    const explicitFinal = [...currentAnswerIds].filter(id => phases.get(id) === 'final_answer');
+    const unclassified = [...currentAnswerIds].filter(id => !phases.has(id));
+    const finalIds = explicitFinal.length ? explicitFinal : !failed && !stopped ? unclassified.slice(-1) : [];
+    for (const id of finalIds) services.event('activity', { id, kind: 'text', text: messages.get(id) || '', final: true });
+    const text = finalIds.map(id => messages.get(id)).join('\n\n').trim();
+    return text || (services.context.session.command === 'compact' && !failed && !stopped ? '原生上下文已压缩。网页中的历史消息仍会保留。' : '');
+  };
+  const endTurn = (error?: Error) => {
+    if (!turnActive || finished) return;
+    turnActive = false;
+    const wasInterrupted = interruptRequested;
+    interruptRequested = false;
+    turnAbort.abort();
+    requests.close();
+    const output = finalAnswer(!!error);
+    messages.clear();
+    phases.clear();
+    currentAnswerIds.clear();
+    textSize = 0;
+    services.turnEnded(wasInterrupted ? { status: 'interrupted', output } : error ? { status: 'error', error: error.message, output } : { status: 'completed', output });
+  };
+  // Ends the process. A turn still running is left for the manager to record from the rejection.
   const finish = async (error?: Error) => {
     if (finished) return;
+    const unfinishedTurn = turnActive;
+    if (turnActive && !error && !stopped) endTurn();
     finished = true;
     pauseWaiter?.reject(error ?? new Error('当前执行已结束'));
     pauseWaiter = undefined;
     turnAbort.abort();
     requests.close();
     signal.removeEventListener('abort', abort);
-    try {
-      const explicitFinal = [...currentAnswerIds].filter(id => phases.get(id) === 'final_answer');
-      const unclassified = [...currentAnswerIds].filter(id => !phases.has(id));
-      const finalIds = explicitFinal.length ? explicitFinal : !error && !stopped ? unclassified.slice(-1) : [];
-      for (const id of finalIds) services.event('activity', { id, kind: 'text', text: messages.get(id) || '', final: true });
-      const text = finalIds.map(id => messages.get(id)).join('\n\n');
-      if (text.trim()) await services.output(text.trim());
-      else if (services.context.session.command === 'compact' && !error && !stopped) {
-        await services.output('原生上下文已压缩。网页中的历史消息仍会保留。');
-      }
-      if (error && !stopped) rejectCompletion(error);
-      else resolveCompletion();
-    } catch (failure) { rejectCompletion(failure instanceof Error ? failure : new Error('会话持久化失败')); }
-    finally {
-      rpc.close();
-      child.stdin.end();
-      terminateProcess(child);
+    if (unfinishedTurn && turnActive) {
+      const output = finalAnswer(true);
+      if (output) services.event('activity', { id: 'codex-partial-answer', kind: 'text', text: output, final: true });
     }
+    rpc.close();
+    child.stdin.end();
+    terminateProcess(child);
+    if (error && !stopped && turnActive) rejectCompletion(error);
+    else resolveCompletion();
   };
   const onMessage = async (message: RpcMessage) => {
     const params = message.params ?? {};
     if (goals.observe(message)) return;
+    if (message.method === 'item/started' && params.item?.type === 'commandExecution') runningCommands.add(String(params.item.id));
+    if (message.method === 'item/completed' && params.item?.type === 'commandExecution' && runningCommands.delete(String(params.item.id))) {
+      services.activityChanged();
+    }
     if (params.turnId && turnId && params.turnId !== turnId && message.method !== 'turn/started') return;
     if (message.id !== undefined && message.method) {
       if (await requests.handle(message)) return;
@@ -177,6 +201,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       if (turn.status === 'completed' && !stopped) {
         try {
           const goal = await goals.get();
+          // An active goal continues in a new native turn; the Hub keeps it as one turn.
           if (finished || activeTurnId || goal?.status === 'active'
             && services.context.session.agent_mode !== 'plan' && !services.context.session.command) return;
         } catch (error) {
@@ -184,8 +209,9 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
           return;
         }
       }
-      await finish(turn.status === 'failed' ? new Error(String(turn.error?.message ?? 'Codex 会话失败'))
-        : turn.status === 'interrupted' && !stopped ? new Error('Codex 执行已中断') : undefined);
+      if (stopped) return;
+      endTurn(turn.status === 'failed' ? new Error(String(turn.error?.message ?? 'Codex 会话失败'))
+        : turn.status === 'interrupted' && !interruptRequested ? new Error('Codex 执行已中断') : undefined);
     }
   };
   const rpc = new RpcClient(child, onMessage, (error) => { void finish(error); }, services.control);
@@ -193,6 +219,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   const makeRequests = () => createCodexRequests(services, AbortSignal.any([signal, turnAbort.signal]),
     message => rpc.send(message), () => !finished && !stopped);
   let requests = makeRequests();
+  let requestTurn: (input: { type: 'text'; text: string }[]) => Promise<any> = async () => { throw new Error('Codex 尚未就绪'); };
   const abort = () => {
     stopped = true;
     turnAbort.abort();
@@ -206,7 +233,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   child.stderr.on('data', (chunk) => { diagnostics = (diagnostics + chunk.toString()).slice(-16 * 1024); });
   child.once('error', (error) => { void finish(error); });
   child.once('close', (code, exitSignal) => {
-    if (!finished) void finish(stopped ? undefined : new Error(diagnostics.trim() || `Codex app-server 已退出（${code ?? exitSignal}）`));
+    if (!finished) void finish(stopped || !turnActive ? undefined : new Error(diagnostics.trim() || `Codex app-server 已退出（${code ?? exitSignal}）`));
   });
   try {
     if (signal.aborted) { abort(); throw new Error('会话已停止'); }
@@ -246,7 +273,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
         settings: { model, reasoning_effort: effort ?? null, developer_instructions: null },
       } } : {}),
     };
-    const startTurn = (input: { type: 'text'; text: string }[]) => rpc.request('turn/start', {
+    requestTurn = (input: { type: 'text'; text: string }[]) => rpc.request('turn/start', {
       ...turnSettings, input,
     }, 120000, false);
     if (!finished && services.context.session.command !== 'compact') services.control.setNative({
@@ -285,7 +312,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
           // An empty input continues the native context without adding a user message or synthetic prompt.
           if (resumeGoal) await goals.set({ action: 'resume' });
           else {
-            const next = await startTurn([]);
+            const next = await requestTurn([]);
             turnId = String(next?.turn?.id ?? turnId);
           }
           nativePaused = false;
@@ -307,7 +334,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     } else {
       const turn = selection.command === 'compact'
         ? await rpc.request('thread/compact/start', { threadId })
-        : await startTurn([{ type: 'text', text: prompt }]);
+        : await requestTurn([{ type: 'text', text: prompt }]);
       turnId = String(turn?.turn?.id ?? turnId);
     }
     if (typeof result.thread.path === 'string') await services.update({ jsonl_file_path: result.thread.path });
@@ -320,7 +347,46 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     await completion.catch(() => undefined);
     throw new Error(`Codex 启动失败：${error instanceof Error ? error.message : '协议不兼容'}`);
   }
-  return { process: child, completion, stop: abort, goal: {
+  return {
+    process: child, completion, stop: abort,
+    startTurn: (text) => mutate(async () => {
+      if (finished || stopped) throw new Error('当前执行已结束');
+      turnActive = true;
+      interruptRequested = false;
+      turnAbort = new AbortController();
+      requests = makeRequests();
+      try {
+        await services.verifyShell();
+        const turn = await requestTurn([{ type: 'text', text }]);
+        turnId = String(turn?.turn?.id ?? turnId);
+      } catch (error) {
+        endTurn(error instanceof Error ? error : new Error('Codex 无法开始新一轮'));
+      }
+    }),
+    steer: async (text) => {
+      const expectedTurnId = activeTurnId;
+      if (!turnActive || !expectedTurnId || nativePaused || finished) return false;
+      try {
+        await rpc.request('turn/steer', { threadId, expectedTurnId, input: [{ type: 'text', text }] }, 30000, false);
+        return true;
+      } catch (error) {
+        // The turn ended between the check and the request; the caller starts a new turn instead.
+        if (activeTurnId !== expectedTurnId) return false;
+        throw error;
+      }
+    },
+    interruptTurn: () => mutate(async () => {
+      if (!turnActive || finished) return;
+      interruptRequested = true;
+      if ((await goals.get())?.status === 'active') await goals.set({ action: 'pause' });
+      if (activeTurnId) await rpc.request('turn/interrupt', { threadId, turnId: activeTurnId }, 10000);
+      else endTurn();
+    }),
+    isIdle: () => !turnActive && !runningCommands.size,
+    close: () => { void finish(); },
+    tasks: () => [],
+    stopTask: async () => { throw new Error('Codex 不提供后台任务控制'); },
+    goal: {
     get: () => goals.get(),
     set: (input: CodexGoalChange) => mutate(async () => {
       if (finished || stopped) throw new Error('当前执行已结束');
@@ -328,7 +394,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       if (input.action === 'resume' && services.context.session.agent_mode === 'plan') throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
       const goal = await goals.set(input);
       if (input.action === 'pause') resumeGoal = false;
-      if (!activeTurnId && !nativePaused && services.control.state === 'running' && goal?.status !== 'active') await finish();
+      if (turnActive && !activeTurnId && !nativePaused && services.control.state === 'running' && goal?.status !== 'active') endTurn();
       return goal;
     }),
   } };

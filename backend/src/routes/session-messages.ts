@@ -22,14 +22,13 @@ export function sessionMessageRoutes(app: FastifyInstance, context: Context) {
   const { store, events, agents, workspaces, turns, config } = context;
   app.post('/api/sessions/:id/messages', async request => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const input = z.object({ content: z.string().trim().min(1).max(100000), slotId: selectedSlotId.optional(), ...selectionFields }).parse(request.body);
+    const input = z.object({ content: z.string().trim().min(1).max(100000), slotId: selectedSlotId.optional(),
+      // How a message sent during a running reply is handled; ignored when the conversation is idle.
+      mode: z.enum(['steer', 'queue', 'interrupt']).default('steer'), ...selectionFields }).parse(request.body);
     const original = sessionFor(context, id, request.user.id);
     return withResourceLocks(context, [`session:${id}`], async () => {
       const session = sessionFor(context, id, request.user.id);
       const project = projectFor(context, session.project_id, request.user.id);
-      if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(session.status) || config.credentials.isSessionBusy(id)) {
-        throw new HttpError(409, '当前对话仍在运行或回收状态，请等待结束或先停止');
-      }
       const slotId = input.slotId ?? session.slot_id;
       if (!slotId) throw new HttpError(409, '请先为当前对话选择授权槽位');
       const slot = slotForUser(store, slotId, request.user.id, session.engine);
@@ -58,6 +57,24 @@ export function sessionMessageRoutes(app: FastifyInstance, context: Context) {
         session: { ...session, slot_id: slot.id, model, reasoning_effort: reasoningEffort, permission_mode: permissionMode,
           agent_mode: agentMode, role_preset: rolePreset, ...(compact ? { command: 'compact' as const } : {}) },
       };
+      const runtime = agents.view(id);
+      if (runtime.resident && (runtime.turnActive || agents.accepts(id, runContext))) {
+        // The resident process keeps the settings it started with; the composer locks them while a reply runs.
+        if (compact) throw new HttpError(409, '请等待当前回复结束后再压缩上下文');
+        try { await workspaces.flush(project); }
+        catch (error) {
+          store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", project.id);
+          events.emit(request.user.id, { type: 'project', payload: { id: project.id, sync_status: 'ERROR' } });
+          throw error;
+        }
+        const prompt = await expandProjectReferences(workspaces, project, input.content);
+        return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt) };
+      }
+      // Different settings or a command need a new process; an idle one exits first.
+      await agents.reclaim(id);
+      if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(session.status) || config.credentials.isSessionBusy(id)) {
+        throw new HttpError(409, agents.isBusy(id) ? '后台任务仍在运行，请先停止后台任务再更换设置' : '当前对话仍在运行或回收状态，请等待结束或先停止');
+      }
       // Reserve before persisting a turn, including model validation and workspace preparation.
       const release = await config.credentials.acquire(runContext);
       try {

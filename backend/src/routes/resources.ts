@@ -64,7 +64,7 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`project:${id}`], async () => {
       const project = projectFor(context, id, request.user.id);
-      assertProjectIdle(context, id);
+      await assertProjectIdle(context, id);
       try {
         await workspaces.create(request.user.id, hostFor(context, project.dev_host_id, request.user.id), project);
         await workspaces.flush(project);
@@ -84,7 +84,7 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`project:${id}`], async () => {
       const project = projectFor(context, id, request.user.id);
       if (project.execution_mode === 'local') throw new HttpError(400, '本机项目直接使用实际目录，无需配置路径映射');
-      assertProjectIdle(context, id);
+      await assertProjectIdle(context, id);
       await workspaces.pause(project);
       context.connections.revokeResource(`project:${id}`);
       project.path_mode = pathMode;
@@ -107,7 +107,7 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`project:${id}`], async () => {
       const project = projectFor(context, id, request.user.id);
-      assertProjectIdle(context, id);
+      await assertProjectIdle(context, id);
       await workspaces.remove(project);
       store.run('DELETE FROM projects WHERE id=?', id);
       context.connections.revokeResource(`project:${id}`);

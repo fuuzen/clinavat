@@ -19,6 +19,8 @@ import { useConversationSlot } from "./chat/useConversationSlot";
 import PermissionPicker from "./chat/PermissionPicker";
 import WorkspaceHeader from "./chat/WorkspaceHeader";
 import ChatComposer, { type ComposerHandle } from "./chat/ChatComposer";
+import RuntimeStrip from "./chat/RuntimeStrip";
+import { useSessionRuntime } from "./chat/useSessionRuntime";
 import { clearComposerDraft } from "./chat/composer/draftStorage";
 import { useComposerDraft } from "./chat/composer/useComposerDraft";
 import ConversationOutline from "./chat/ConversationOutline";
@@ -32,6 +34,7 @@ import type {
   Approval,
   AgentSelection,
   AgentBehavior,
+  InputMode,
   Message,
   Overview,
   PermissionMode,
@@ -61,7 +64,7 @@ interface Props {
   onNewProject: () => void;
   onSelectProject: (project: Project) => void;
   onProjectRefresh: () => Promise<void>;
-  onSend: (content: string, engine: "claude" | "codex", selection: AgentSelection, permissionMode: PermissionMode, slotId: string, behavior: AgentBehavior) => Promise<boolean>;
+  onSend: (content: string, engine: "claude" | "codex", selection: AgentSelection, permissionMode: PermissionMode, slotId: string, behavior: AgentBehavior, mode?: InputMode) => Promise<boolean>;
   onBehaviorChange: (sessionId: string, value: AgentBehavior) => Promise<void>;
   onNotice: (message: string, kind?: "error" | "success") => void;
   onDiff: () => void;
@@ -99,9 +102,11 @@ export default function Chat(props: Props) {
   const runStatus = isActive(session?.status) ? session!.status : currentTurn?.status;
   const active = props.sending || isActive(session?.status) ||
     !!currentTurn;
+  const [sendMode, setSendMode] = useState<InputMode>("steer");
   // Locks the input from the moment a message is submitted until the server accepts it.
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const sessionRuntime = useSessionRuntime(session?.id, props.streamConnected, props.onNotice);
   const { slot, slotId, slotSaving, changeSlot } = useConversationSlot(overview, project?.id, session, props.onSlotChange);
   const syncReady = project?.sync_status === "WATCHING" || project?.sync_status === "LOCAL";
   const host = overview.hosts.find(
@@ -186,9 +191,11 @@ export default function Chat(props: Props) {
       return;
     }
     if (version !== draftVersion.current.revision) return;
+    // A running reply accepts messages too; the send mode decides how it takes them.
+    const running = active && !!session && !props.sending;
     if (
       !draft.trim() ||
-      active ||
+      (active && !running) ||
       permissionSaving ||
       behaviorSaving ||
       slotSaving ||
@@ -199,7 +206,7 @@ export default function Chat(props: Props) {
       return;
     const content = draft;
     try {
-      const stillSelected = await props.onSend(content, currentEngine, selection, permissionMode, slotId, behavior);
+      const stillSelected = await props.onSend(content, currentEngine, selection, permissionMode, slotId, behavior, running ? sendMode : undefined);
       if (stillSelected) setStickToBottom(true);
     } catch {
       // The send handler reports failures and only clears drafts after server acceptance.
@@ -377,6 +384,10 @@ export default function Chat(props: Props) {
           draft={draft}
           onDraftChange={setDraft}
           onSend={() => void send()}
+          sendMode={sendMode}
+          onSendModeChange={setSendMode}
+          status={<RuntimeStrip runtime={sessionRuntime.runtime}
+            onCancelQueued={(id) => void sessionRuntime.cancelQueued(id)} onStopTask={(id) => void sessionRuntime.stopTask(id)} />}
           onStop={props.onStop}
           onPause={() => void props.onPause()}
           onResume={() => void props.onResume()}

@@ -92,3 +92,64 @@
     background: transparent;
   }
 }
+.runtime-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+.runtime-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.runtime-item-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.runtime-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.runtime-item > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+.runtime-item > button:hover {
+  background: var(--hover);
+}
+.send-mode-button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 10px;
+  margin-left: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 15px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.send-mode-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.send-mode-button + .send-button {
+  margin-left: 0;
+}

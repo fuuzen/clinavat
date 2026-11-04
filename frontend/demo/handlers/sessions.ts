@@ -17,6 +17,7 @@ interface SessionInput {
   rolePreset?: Session["role_preset"];
   title?: string;
   content?: string;
+  mode?: "steer" | "queue" | "interrupt";
 }
 
 const goals = new Map<string, CodexGoal>();
@@ -71,6 +72,8 @@ export const sessionHandlers = [
   }),
   http.get("/api/sessions/:id/messages", ({ params }) =>
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
+  http.get("/api/sessions/:id/runtime", () =>
+    HttpResponse.json({ resident: false, turnActive: false, queue: [], tasks: [] })),
   http.get("/api/sessions/:id/turns", ({ params }) =>
     HttpResponse.json(db.turns.filter((turn) => turn.session_id === params.id))),
   http.post("/api/sessions/:id/messages", async ({ params, request }) => {
@@ -78,7 +81,14 @@ export const sessionHandlers = [
     if (!session) return fail(404, "对话不存在");
     const input = await readBody<SessionInput>(request);
     if (!input.content?.trim()) return fail(400, "请输入消息内容");
-    if (isRunning(session.id)) return fail(409, "对话仍在运行，请等待结束或先停止。");
+    if (isRunning(session.id)) {
+      // The demo agent follows a script, so it only records guidance sent during a reply.
+      if (input.mode && input.mode !== "steer") return fail(409, "演示环境仅支持以「引导」方式在运行中发送。");
+      const message = { id: crypto.randomUUID(), session_id: session.id, role: "user" as const, content: input.content.trim(), created_at: timestamp() };
+      db.messages.push(message);
+      emit({ type: "message", sessionId: session.id, payload: message });
+      return HttpResponse.json({ sessionId: session.id, status: "steered" });
+    }
     Object.assign(session, {
       model: input.model ?? session.model, reasoning_effort: input.reasoningEffort ?? session.reasoning_effort,
       permission_mode: input.permissionMode ?? session.permission_mode,

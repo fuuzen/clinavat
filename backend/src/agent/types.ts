@@ -11,6 +11,7 @@ export interface AgentConfig {
   claudeBinary: string;
   codexBinary: string;
   approvalTimeoutMs: number;
+  runtimeIdleMs: number;
   credentials: AccountCredentials;
   execution: ExecutionHost;
   usage?: SlotUsage;
@@ -70,12 +71,37 @@ export interface AgentCallbacks {
   }): void | Promise<void>;
   approval(request: ApprovalRequest): Promise<ApprovalDecision>;
   flushWorkspace(sessionId: string): Promise<void>;
+  /** Persists a user message and returns its ID. */
+  saveUserMessage(sessionId: string, content: string): string;
+  /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */
+  beginTurn(sessionId: string, origin: TurnOrigin, authorization: TurnAuthorization): string;
 }
 
+export type TurnOrigin = { messageId: string } | { summary: string };
+
+export interface TurnAuthorization { slotId: string; credentialRevision: number }
+export type InputMode = 'steer' | 'queue' | 'interrupt';
+export interface QueuedInput { id: string; content: string; prompt: string; queuedAt: string; messageId?: string }
+/** A background task of the running CLI. */
+export interface RunTask { id: string; description: string; type: string }
+export interface TurnOutcome { status: 'completed' | 'interrupted' | 'error'; error?: string; output?: string }
+
+/** One resident CLI process; a conversation runs any number of turns in it. */
 export interface AgentRun {
   process: ChildProcessWithoutNullStreams;
+  /** Settles when the process has ended. */
   completion: Promise<void>;
   stop(): void;
+  startTurn(prompt: string): Promise<void>;
+  /** Adds input to the active turn; false when there is none to join. `messageId` names the persisted message. */
+  steer(text: string, messageId: string): Promise<boolean>;
+  interruptTurn(): Promise<void>;
+  /** No turn, task or goal needs this process any more. */
+  isIdle(): boolean;
+  /** Lets the process finish on its own; ends it after a short grace period. */
+  close(): void;
+  tasks(): RunTask[];
+  stopTask(taskId: string): Promise<void>;
   goal?: {
     get(): Promise<CodexGoal | null>;
     set(change: CodexGoalChange): Promise<CodexGoal | null>;
@@ -87,9 +113,14 @@ export interface RunServices {
   context: AgentContext;
   control: RunControl;
   event(type: string, payload: unknown): void;
-  output(content: string): Promise<void>;
   update(fields: Parameters<AgentCallbacks['updateSession']>[1]): Promise<void>;
   approve(tool: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<ApprovalDecision>;
   ask(questions: UserInputQuestion[], signal?: AbortSignal): Promise<UserInputAnswers | null>;
   verifyShell(): Promise<void>;
+  /** Must be called synchronously with the end of the turn's output, before any event of a later turn. */
+  turnEnded(outcome: TurnOutcome): void;
+  /** The CLI began a turn by itself. */
+  automaticTurn(origin: TurnOrigin): void;
+  /** Something changed that can make the process idle or keep it from being idle. */
+  activityChanged(): void;
 }

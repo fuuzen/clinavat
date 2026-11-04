@@ -15,8 +15,10 @@ ${Object.entries(variables).map(([key, value]) => `readonly ${key}=${shellQuote(
 export MUTAGEN_DATA_DIRECTORY MUTAGEN_SSH_PATH
 
 command_mode=false
+background=false
 while (($#)); do
   case "$1" in
+    --background) background=true; shift ;;
     -c|-lc|-cl) command_mode=true; shift; break ;;
     -l|--login|--noprofile|--norc) shift ;;
     *) printf '%s\\n' 'remote-shell: unsupported shell arguments' >&2; exit 64 ;;

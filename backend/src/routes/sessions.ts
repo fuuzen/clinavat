@@ -61,13 +61,14 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
       message: '请提供要修改的对话设置',
     }).parse(request.body);
-    return withResourceLocks(context, [`session:${id}`], () => {
+    return withResourceLocks(context, [`session:${id}`], async () => {
       const current = sessionFor(context, id, request.user.id);
       const permissionMode = validatePermissionMode(current.engine, input.permissionMode ?? current.permission_mode);
       const { agentMode, rolePreset } = validateSessionSettings(current.engine,
         input.agentMode ?? current.agent_mode, input.rolePreset ?? current.role_preset);
       const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
       if (changedSlot || permissionMode !== current.permission_mode || agentMode !== current.agent_mode || rolePreset !== current.role_preset) {
+        await agents.reclaim(id);
         if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)
           || context.config.credentials.isSessionBusy(id)) {
           throw new HttpError(409, '对话仍在运行或回收状态，请等待结束或先停止后修改');
@@ -87,6 +88,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const session = sessionFor(context, id, request.user.id);
     return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
       const current = sessionFor(context, id, request.user.id);
+      await agents.reclaim(id);
       if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)) {
         throw new HttpError(409, '请等待会话结束并完成状态回收，或先停止会话');
       }
@@ -105,6 +107,23 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);
     return turns.list(id);
+  });
+  app.get('/api/sessions/:id/runtime', async request => {
+    const { id } = identifier.parse(request.params);
+    sessionFor(context, id, request.user.id);
+    return agents.view(id);
+  });
+  app.delete('/api/sessions/:id/queue/:inputId', async request => {
+    const { id, inputId } = z.object({ id: z.uuid(), inputId: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    agents.cancelQueued(id, inputId);
+    return { ok: true };
+  });
+  app.post('/api/sessions/:id/tasks/:taskId/stop', async request => {
+    const { id, taskId } = z.object({ id: z.uuid(), taskId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    await agents.stopTask(id, taskId);
+    return { ok: true };
   });
   sessionMessageRoutes(app, context);
   sessionGoalRoutes(app, context);

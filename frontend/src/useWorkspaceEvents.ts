@@ -73,6 +73,8 @@ export function useWorkspaceEvents({
       const current = data.sessionId === selectedSessionRef.current;
       if (data.type === "goal" || /^nativeGoal(?:\/|Updated$|Sampling$|$)/.test(data.type))
         window.dispatchEvent(new CustomEvent("clinavat:goal", { detail: { sessionId: data.sessionId, ...object } }));
+      if (data.type === "runtime")
+        window.dispatchEvent(new CustomEvent("clinavat:runtime", { detail: { sessionId: data.sessionId, runtime: payload } }));
       if (data.type === "user-input" || (data.type === "done" && current))
         window.dispatchEvent(new Event("clinavat:user-input"));
       if (

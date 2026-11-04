@@ -12,7 +12,9 @@ interface SlotUpdate {
 
 export async function updateSlot(context: Context, slotId: string, input: SlotUpdate): Promise<Slot> {
   const { store, config, events } = context;
-  return withResourceLocks(context, [`slot-config:${slotId}`], () => {
+  return withResourceLocks(context, [`slot-config:${slotId}`], async () => {
+    // Idle resident CLIs give the slot back; ones still working keep it and block the change.
+    await context.agents.reclaimWhere({ slotId });
     const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', slotId);
     if (!slot) throw new HttpError(404, '槽位不存在');
     if (input.expectedRevision !== undefined && input.expectedRevision !== slot.credential_revision) {
