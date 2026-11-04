@@ -9,7 +9,10 @@ export type ExecutionBinary = 'claude' | 'codex' | 'mutagen' | 'ssh';
  * guest, so database records and native transcripts keep the same paths in both modes.
  */
 export interface ExecutionScope {
+  /** Whose files and keys the process uses; empty for slot-only work such as usage probes. */
   userId: string;
+  /** CLI processes run in the slot's own machine, so an account always appears from one machine and one egress. */
+  slotId?: string;
   paths: string[];
   /** Files the Hub writes and reads back; a guest must not be able to replace them. */
   readOnlyPaths?: string[];
@@ -53,6 +56,11 @@ export interface ExecutionHost {
   run(binary: string, args: string[], options: ExecutionRunOptions): Promise<CommandResult>;
   /** Fails while any process still uses the slot home; with a session, only that session's processes count. */
   assertReleased(home: string, sessionId?: string): Promise<void>;
+  /**
+   * An interactive command for the administrator to run as the Hub's system user, so a slot logs in where its
+   * conversations run. `env` holds the slot's home directories.
+   */
+  loginCommand(slotId: string, home: string, argv: string[], env: Record<string, string>): Promise<string>;
   /** Revokes a user's access to paths that can be handed to another user or moved, such as slot homes. */
   revoke(userId: string, paths: string[]): Promise<void>;
   health(): Promise<ExecutionHealth>;

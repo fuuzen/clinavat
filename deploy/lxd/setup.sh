@@ -7,8 +7,11 @@
 #
 # --storage   lvm:<vg>/<existing thin pool> or dir:<directory> for the LXD storage pool
 # --allow     private development-host endpoints the VMs may reach (public addresses are always allowed)
-# --max-vms   project quota for user VMs, default 8. Memory and CPU quotas are sized from it and from this
+# --max-vms   project quota for slot VMs, default 8. Memory and CPU quotas are sized from it and from this
 #             machine: 75% of RAM, and two vCPUs per VM since vCPUs can be shared.
+# --max-users project quota for workspace containers (one per user with projects), default 32
+# --local-root directory the administrator's local projects live in; repeatable. It is mounted whole into slot
+#             machines, so it must not contain the data directory, the environment file or LXD's client key.
 #
 # The script locks the LXD socket to root, then creates a storage pool, an isolated bridge, an
 # egress ACL, a restricted project and a restricted client token for the Hub.
@@ -23,7 +26,7 @@ BRIDGE_SUBNET=24
 ADMIN_GROUP=lxd-admin
 LISTEN=127.0.0.1:8443
 
-storage="" hub_user="" data_dir="" workspace_dir="" allows=() max_vms=8
+storage="" hub_user="" data_dir="" workspace_dir="" allows=() max_vms=8 max_users=32 local_roots=()
 while (($#)); do
   case "$1" in
     --storage) storage="$2"; shift 2 ;;
@@ -32,6 +35,8 @@ while (($#)); do
     --workspace-dir) workspace_dir="$2"; shift 2 ;;
     --allow) allows+=("$2"); shift 2 ;;
     --max-vms) max_vms="$2"; shift 2 ;;
+    --max-users) max_users="$2"; shift 2 ;;
+    --local-root) local_roots+=("$2"); shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -44,6 +49,7 @@ done
 hub_uid="$(id -u "$hub_user")"
 hub_gid="$(id -g "$hub_user")"
 runtime_keys="/run/user/$hub_uid/clinavat/keys"
+usage_probes="/run/user/$hub_uid/clinavat/usage-probes"
 lxc() { /snap/bin/lxc "$@"; }
 exists() { lxc "$@" >/dev/null 2>&1; }
 
@@ -79,6 +85,7 @@ if ! exists storage show "$POOL"; then
 fi
 
 echo "== Bridge $NETWORK"
+# Translated until the gateway knows this network; deploy/lxd/egress-bindings.sh then hands VM addresses through.
 exists network show "$NETWORK" || lxc network create "$NETWORK" \
   ipv4.address="$BRIDGE_ADDRESS/$BRIDGE_SUBNET" ipv4.nat=true ipv6.address=none dns.mode=managed
 
@@ -122,7 +129,7 @@ lxc project set "$PROJECT" \
   restricted.networks.access="$NETWORK" \
   restricted.devices.nic=managed \
   restricted.devices.disk=allow \
-  restricted.devices.disk.paths="$data_dir/users,$data_dir/slots,$workspace_dir,$runtime_keys" \
+  restricted.devices.disk.paths="$(IFS=,; echo "$data_dir/users,$data_dir/slots,$workspace_dir,$runtime_keys,$usage_probes${local_roots[*]:+,${local_roots[*]}}")" \
   restricted.idmap.uid="$hub_uid" \
   restricted.idmap.gid="$hub_gid" \
   restricted.devices.proxy=block \
@@ -136,7 +143,8 @@ lxc project set "$PROJECT" \
   restricted.virtual-machines.lowlevel=block \
   restricted.snapshots=block \
   restricted.backups=block \
-  limits.containers=0 \
+  restricted.containers.privilege=isolated \
+  limits.containers="$max_users" \
   limits.virtual-machines="$max_vms" \
   limits.cpu="$((max_vms * 2))" \
   limits.memory="$(awk '/^MemTotal:/ { print int($2 * 3 / 4 / 1024) }' /proc/meminfo)MiB"
@@ -145,6 +153,14 @@ exists profile device get default root pool --project "$PROJECT" || \
   lxc profile device add default root disk --project "$PROJECT" pool="$POOL" path=/ size=8GiB
 exists profile device get default eth0 network --project "$PROJECT" || \
   lxc profile device add default eth0 nic --project "$PROJECT" network="$NETWORK" name=eth0 \
+    security.port_isolation=true security.mac_filtering=true security.ipv4_filtering=true
+# Workspace containers only synchronize; the default profile's bus ports apply to VMs only.
+exists profile show workspace --project "$PROJECT" || lxc profile create workspace --project "$PROJECT"
+lxc profile set workspace --project "$PROJECT" limits.cpu=1 limits.memory=512MiB limits.processes=2000 security.idmap.isolated=true
+exists profile device get workspace root pool --project "$PROJECT" || \
+  lxc profile device add workspace root disk --project "$PROJECT" pool="$POOL" path=/ size=4GiB
+exists profile device get workspace eth0 network --project "$PROJECT" || \
+  lxc profile device add workspace eth0 nic --project "$PROJECT" network="$NETWORK" name=eth0 \
     security.port_isolation=true security.mac_filtering=true security.ipv4_filtering=true
 
 echo "== Hub client"

@@ -38,6 +38,10 @@ export const adminHandlers = [
     db.slots.push(slot);
     return HttpResponse.json(slot, { status: 201 });
   }),
+  http.post("/api/admin/slots/:id/login-command", ({ params }) => HttpResponse.json({
+    runsIn: "vm",
+    command: `lxc exec clinavat-host:s-demo --project clinavat -t -- setpriv --reuid=1000 --regid=1000 --clear-groups -- claude auth login  # ${String(params.id)}`,
+  })),
   http.patch("/api/admin/slots/:id", async ({ params, request }) => {
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");

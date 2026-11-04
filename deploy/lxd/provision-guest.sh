@@ -1,20 +1,28 @@
 #!/bin/bash
-# Runs inside the image builder VM as root, fed over stdin by build-image.sh.
+# Runs inside the image builder as root, fed over stdin by build-image.sh. IMAGE_KIND is agent for the slot VM
+# image with the CLIs, or workspace for the container that only synchronizes.
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 # Exit status 2 means "finished with warnings"; the units cloud-init configures are removed below anyway.
-cloud-init status --wait >/dev/null || [[ $? -eq 2 ]]
+if command -v cloud-init >/dev/null; then cloud-init status --wait >/dev/null || [[ $? -eq 2 ]]; fi
 
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends bash bubblewrap ca-certificates curl git iproute2 less \
-  openssh-client procps python3 ripgrep util-linux xz-utils >/dev/null
+if [[ "$IMAGE_KIND" == workspace ]]; then
+  # git serves the changes panel for local projects, so a repository's own configuration never runs on the host.
+  apt-get install -y -qq --no-install-recommends bash ca-certificates curl git iproute2 openssh-client procps python3 \
+    tzdata util-linux >/dev/null
+else
+  apt-get install -y -qq --no-install-recommends bash bubblewrap ca-certificates curl git iproute2 less \
+    openssh-client procps python3 ripgrep tzdata util-linux xz-utils >/dev/null
+fi
 
 architecture="$(dpkg --print-architecture)"
 case "$architecture" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) exit 1 ;; esac
 
 work="$(mktemp -d)"
 cd "$work"
+if [[ "$IMAGE_KIND" != workspace ]]; then
 asset="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"
 base="https://nodejs.org/dist/v${NODE_VERSION}"
 curl -fsSLO "$base/$asset"
@@ -24,6 +32,7 @@ tar -xJf "$asset" -C /usr/local --strip-components=1 --no-same-owner
 
 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" >/dev/null
 npm cache clean --force >/dev/null 2>&1
+fi
 
 asset="mutagen_linux_${architecture}_v${MUTAGEN_VERSION}.tar.gz"
 base="https://github.com/mutagen-io/mutagen/releases/download/v${MUTAGEN_VERSION}"
@@ -38,7 +47,7 @@ rm -rf "$work"
 if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu 2>/dev/null || userdel ubuntu; fi
 groupdel ubuntu 2>/dev/null || true
 groupadd -g "$HUB_GID" clinavat
-# The same uid as the Hub is the only identity virtiofs maps to the host.
+# The same uid as the Hub is the identity a VM's virtiofs and a container's idmapped mounts write as on the host.
 useradd -u "$HUB_UID" -g "$HUB_GID" -m -s /bin/bash clinavat
 passwd -l root >/dev/null
 
@@ -49,10 +58,10 @@ done
 apt-get autoremove -y -qq --purge
 rm -rf /etc/cloud /var/lib/cloud /etc/sudoers.d /etc/netplan /run/systemd/network/*netplan* /var/lib/snapd /snap
 
-# Instances have new MAC addresses, so match by interface name.
+# Instances have new MAC addresses, so match by interface name: en* in a VM, eth* in a container.
 cat >/etc/systemd/network/10-clinavat.network <<'NETWORK'
 [Match]
-Name=en*
+Name=en* eth*
 
 [Network]
 DHCP=ipv4
@@ -66,7 +75,10 @@ systemctl enable --quiet systemd-networkd.service systemd-resolved.service
 find / -xdev -type f -perm /6000 -exec chmod ug-s {} +
 
 # Codex sandboxes commands with bubblewrap; the VM, not this restriction, is the isolation boundary.
-printf 'kernel.apparmor_restrict_unprivileged_userns = 0\n' >/etc/sysctl.d/90-clinavat.conf
+# A container shares the host kernel and has no Codex, so it keeps the host's setting.
+if [[ "$IMAGE_KIND" != workspace ]]; then
+  printf 'kernel.apparmor_restrict_unprivileged_userns = 0\n' >/etc/sysctl.d/90-clinavat.conf
+fi
 
 # Faster boots: nothing here waits for the network or does background maintenance.
 systemctl mask --quiet systemd-networkd-wait-online.service apt-daily.timer apt-daily-upgrade.timer \
@@ -78,4 +90,4 @@ apt-get clean
 rm -rf /var/lib/apt/lists/* /var/log/journal/* /root/.npm /root/.cache /tmp/* /var/tmp/*
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id
-fstrim -a >/dev/null 2>&1 || true
+if [[ "$IMAGE_KIND" != workspace ]]; then fstrim -a >/dev/null 2>&1 || true; fi

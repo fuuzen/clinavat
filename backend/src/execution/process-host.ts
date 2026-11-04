@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { findExecutable } from '../agent/environment.js';
 import { assertSlotProcessesStopped } from '../accounts/slot-runtime/processes.js';
 import { childEnvironment, runCommand } from '../runtime/process.js';
+import { shellQuote } from '../runtime/types.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionSpawnOptions } from './types.js';
 
 const inheritedVariables = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
@@ -39,6 +40,10 @@ export class ProcessExecutionHost implements ExecutionHost {
   }
 
   assertReleased(home: string, sessionId?: string): Promise<void> { return assertSlotProcessesStopped(home, sessionId); }
+
+  async loginCommand(_slotId: string, _home: string, argv: string[], env: Record<string, string>): Promise<string> {
+    return [...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`), ...argv.map(shellQuote)].join(' ');
+  }
 
   async revoke(): Promise<void> { /* Host processes already share one filesystem view. */ }
 

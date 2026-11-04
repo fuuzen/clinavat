@@ -1,13 +1,13 @@
-import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { findExecutable, observeProcessClose, terminateProcess } from '../agent/environment.js';
+import { observeProcessClose, terminateProcess } from '../agent/environment.js';
 import { readJsonLines } from '../agent/ndjson.js';
 import { RpcClient } from '../agent/rpc.js';
 import type { AccountCredentials } from './credentials.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from './credential-files.js';
-import { credentialPath, type AccountEngine } from './paths.js';
+import { accountIdentifier, credentialPath, type AccountEngine } from './paths.js';
+import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 
 export interface UsageWindow {
   key: string;
@@ -224,21 +224,19 @@ async function inspectCredential(home: string, engine: AccountEngine): Promise<C
   return { kind: 'oauth', fresh: expires > deadline && Date.now() - refreshed < CODEX_REFRESH_AGE };
 }
 
-function probeEnvironment(home: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR']) {
-    if (process.env[name]) environment[name] = process.env[name];
-  }
-  return { ...environment, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
+interface Probe { execution: ExecutionHost; scope: ExecutionScope; binary: string; home: string }
+
+function probeEnvironment({ execution, scope, home }: Probe): NodeJS.ProcessEnv {
+  return { ...execution.baseEnvironment(scope), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
     CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), SHELL: '/bin/bash' };
 }
 
-async function claudeProbe(binary: string, home: string): Promise<UsageUpdate> {
-  const child = spawn(binary, [
+async function claudeProbe(probe: Probe): Promise<UsageUpdate> {
+  const child = await probe.execution.spawn(probe.binary, [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--restricted', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--tools', '', '--disable-slash-commands', '--no-session-persistence',
-  ], { cwd: home, env: probeEnvironment(home), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+  ], { scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe) });
   const closed = observeProcessClose(child);
   child.stderr.resume();
   let closeLines: (() => void) | undefined;
@@ -271,9 +269,9 @@ async function claudeProbe(binary: string, home: string): Promise<UsageUpdate> {
   }
 }
 
-async function codexProbe(binary: string, home: string): Promise<UsageUpdate> {
-  const child = spawn(binary, ['-c', 'cli_auth_credentials_store="file"', 'app-server'], {
-    cwd: home, env: probeEnvironment(home), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+async function codexProbe(probe: Probe): Promise<UsageUpdate> {
+  const child = await probe.execution.spawn(probe.binary, ['-c', 'cli_auth_credentials_store="file"', 'app-server'], {
+    scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();
@@ -303,15 +301,20 @@ export class SlotUsage {
   private saveTimer?: NodeJS.Timeout;
   private saving = Promise.resolve();
 
-  constructor(private config: { dataDir: string; claudeBinary: string; codexBinary: string },
+  constructor(private config: { dataDir: string; execution: ExecutionHost },
     private credentials: AccountCredentials, private notify: (slotId: string) => void) {
     this.root = join(config.dataDir, 'run', 'usage-probes');
     this.cacheFile = join(config.dataDir, 'cache', 'slot-usage.json');
   }
 
-  // Probe homes hold credential copies; remove any left by an interrupted process.
+  // Probe homes hold credential copies; remove any left by an interrupted process. Each slot's directory
+  // itself stays, since a slot machine may still have it mounted.
   async init(): Promise<void> {
-    await rm(this.root, { recursive: true, force: true });
+    await privateDirectory(this.root);
+    for (const slot of await readdir(this.root, { withFileTypes: true })) {
+      if (!slot.isDirectory()) { await rm(join(this.root, slot.name), { force: true }); continue; }
+      for (const entry of await readdir(join(this.root, slot.name))) await rm(join(this.root, slot.name, entry), { recursive: true, force: true });
+    }
     await this.load();
   }
 
@@ -465,13 +468,18 @@ export class SlotUsage {
     const source = credentialPath(slot.home_dir, slot.engine);
     const original = await readPrivateJson(source, slot.home_dir);
     if (original === undefined) throw new Error('槽位尚未完成登录');
-    const home = join(this.root, `${slot.id}-${randomBytes(6).toString('hex')}`);
+    // Probes run where the slot's conversations run, so the account sees the same machine and egress.
+    const directory = join(this.root, accountIdentifier(slot.id));
+    const home = join(directory, randomBytes(6).toString('hex'));
     const copy = credentialPath(home, slot.engine);
+    const { execution } = this.config;
+    const scope: ExecutionScope = { userId: '', slotId: slot.id, paths: [directory] };
     try {
+      await privateDirectory(directory);
       await privateDirectory(dirname(copy));
       await writePrivateJson(copy, original);
-      const binary = await findExecutable(slot.engine === 'claude' ? this.config.claudeBinary : this.config.codexBinary);
-      const update = await (slot.engine === 'claude' ? claudeProbe(binary, home) : codexProbe(binary, home));
+      const probe = { execution, scope, home, binary: await execution.binary(scope, slot.engine) };
+      const update = await (slot.engine === 'claude' ? claudeProbe(probe) : codexProbe(probe));
       const after = await readFile(copy, 'utf8').catch(() => original);
       // Keep a rotated refresh token only if nobody changed the slot credential meanwhile.
       if (after !== original && await readPrivateJson(source, slot.home_dir) === original) await writePrivateJson(source, after);

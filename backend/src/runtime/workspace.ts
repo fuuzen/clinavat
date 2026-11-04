@@ -72,7 +72,7 @@ export class WorkspaceManager {
     await atomicWrite(join(binDirectory, 'remote-shell'), renderRemoteShell({
       ssh: await this.execution.binary(this.scope(project), 'ssh'), mutagen: await this.execution.binary(this.scope(project), 'mutagen'),
     }, project,
-      this.ssh.configPath(project.user_id), this.ssh.alias(host), environment), 0o500);
+      this.ssh.configPath(project.user_id), this.ssh.alias(host), environment, this.execution.kind === 'vm' ? 'relay' : 'local'), 0o500);
   }
 
   private missingSession(error: unknown, project: WorkspaceProject): boolean {

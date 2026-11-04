@@ -86,6 +86,19 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
       return reply.code(201).send(serializeAdminSlot(context, created));
     });
   });
+  app.post('/api/admin/slots/:id/login-command', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+    requireAdmin(request);
+    const { id } = z.object({ id: slotId }).parse(request.params);
+    const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', id);
+    if (!slot) throw new HttpError(404, '槽位不存在');
+    // Logging in where conversations run keeps the account on one machine and one egress from the start.
+    const home = slot.home_dir;
+    const command = slot.engine === 'claude'
+      ? await config.execution.loginCommand(slot.id, home, ['claude', 'auth', 'login'], { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') })
+      : await config.execution.loginCommand(slot.id, home, ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
+        { HOME: home, CODEX_HOME: join(home, '.codex') });
+    return { command, runsIn: config.execution.kind };
+  });
   app.patch('/api/admin/slots/:id', async request => {
     requireAdmin(request);
     const { id } = z.object({ id: slotId }).parse(request.params);

@@ -31,6 +31,7 @@ import { AccountCredentials } from './accounts/credentials.js';
 import { SlotUsage } from './accounts/usage.js';
 import { LxdExecutionHost } from './execution/lxd-host.js';
 import { ProcessExecutionHost } from './execution/process-host.js';
+import { MachinePlan } from './execution/machine-plan.js';
 
 const app = Fastify({
   logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
@@ -40,7 +41,15 @@ const store = new Store(config.dataDir);
 const siteAccess = new SiteAccess(store, config);
 let onSlotActivity: (slotId: string) => void = () => undefined;
 const localExecution = new ProcessExecutionHost(config);
-const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, localExecution) : localExecution;
+const machines = new MachinePlan(store, config.vmAddresses);
+// Assigned once the SSH manager exists; the VM host only calls it when serving a sync barrier.
+let mutagenEnvironment: (userId: string) => Promise<NodeJS.ProcessEnv> = async () => { throw new Error('同步服务尚未就绪'); };
+const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, localExecution, {
+  plan: machines,
+  syncProject: (userId, syncName) => store.get<{ local_path: string }>(
+    "SELECT local_path FROM projects WHERE user_id=? AND sync_name=? AND execution_mode IS NOT 'local'", userId, syncName)?.local_path,
+  mutagenEnvironment: userId => mutagenEnvironment(userId),
+}) : localExecution;
 for (const slot of store.all<{ home_dir: string }>('SELECT home_dir FROM account_slots')) await execution.assertReleased(slot.home_dir);
 const credentials = new AccountCredentials(config.dataDir, store, execution, slotId => onSlotActivity(slotId));
 await credentials.recover();
@@ -48,7 +57,7 @@ const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
 const slotRecipients = (slotId: string) => store.all<{ user_id: string }>(`SELECT user_id FROM slot_user_access WHERE slot_id=?
     UNION SELECT id AS user_id FROM users WHERE role='admin'`, slotId).map(row => row.user_id);
-const usage = new SlotUsage(config, credentials, slotId => {
+const usage = new SlotUsage({ dataDir: config.dataDir, execution }, credentials, slotId => {
   const payload = { slotId, usage: usage.view(slotId) };
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot-usage', payload });
 });
@@ -62,6 +71,7 @@ const turns = new ConversationStore(store, turn => {
   if (session) events.broadcast(session.user_id, { type: 'turn', sessionId: turn.session_id, payload: turn });
 });
 const ssh = new SshManager(config);
+mutagenEnvironment = userId => ssh.mutagenEnvironment(userId);
 const workspaces = new WorkspaceManager(config, ssh, execution);
 for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
   if (host.kind === 'local') continue;

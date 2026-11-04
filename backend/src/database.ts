@@ -94,6 +94,11 @@ export class Store {
         action TEXT NOT NULL, revision INTEGER, status TEXT NOT NULL, detail TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS execution_machines (
+        name TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('workspace','slot')), owner_id TEXT NOT NULL,
+        address TEXT NOT NULL UNIQUE, hostname TEXT, machine_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(kind, owner_id)
+      );
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id,created_at);
       CREATE INDEX IF NOT EXISTS turns_session ON session_turns(session_id,started_at);
