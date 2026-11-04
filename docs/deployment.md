@@ -16,12 +16,12 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 
 ## 配置项
 
-复制 `.env.example` 为 `.env` 后修改。常用配置：
+宿主机部署的环境文件默认是 `~/.config/clinavat/hub.env`（可用 `CLINAVAT_ENV_FILE` 修改），从 `.env.example` 复制后修改；Compose 部署使用 `compose.yaml` 旁边的 `.env`。不要把环境文件放在会作为本机项目打开的目录里。常用配置：
 
 | 变量 | 说明 |
 | --- | --- |
 | `CLINAVAT_MASTER_KEY` | **必填**。64 位十六进制主密钥，用 `openssl rand -hex 32` 生成。用于加密保存 SSH 私钥，丢失后已保存的私钥无法解密，必须长期保留 |
-| `CLINAVAT_DATA_DIR` | 数据目录（数据库、密钥、槽位授权等），默认项目根目录下的 `data/`；相对路径以 `backend/` 为基准 |
+| `CLINAVAT_DATA_DIR` | 数据目录（数据库、密钥、槽位授权等），默认 `~/.local/share/clinavat`；相对路径相对于 `backend/` |
 | `CLINAVAT_WORKSPACE_DIR` | 项目镜像目录，默认 `/var/tmp/clinavat-workspace` |
 | `CLINAVAT_HOST` / `CLINAVAT_PORT` | Hub 监听地址，默认 `127.0.0.1:3001` |
 | `CLINAVAT_WEB_BIND` / `CLINAVAT_WEB_PORT` | Web 入口监听地址，默认 `127.0.0.1:8080` |
@@ -30,9 +30,11 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 | `CLINAVAT_ORIGIN` | 首次启动时导入的公开访问地址（宿主机部署），见下文 |
 | `CLINAVAT_PUBLIC_ORIGIN` | 同上，供 Compose 部署使用 |
 | `CLINAVAT_APPROVAL_TIMEOUT_MS` | 网页审批的等待时间，默认 5 分钟 |
+| `CLINAVAT_RUNTIME_IDLE_MS` | 回复结束后 CLI 进程常驻的空闲时间，默认 5 分钟，见[常驻进程](agents.md#常驻进程与空闲回收) |
 | `CLINAVAT_EXECUTION_HOST` | `process`（默认）或 `lxd`，见[虚拟机隔离](vm-isolation.md) |
 | `CLINAVAT_LXD_REMOTE` / `_PROJECT` / `_IMAGE`、`CLINAVAT_LXC_BIN` | LXD 模式的连接配置，默认 `clinavat-host`、`clinavat`、`clinavat-agent`、`lxc` |
 | `CLINAVAT_VM_START_TIMEOUT_MS` / `CLINAVAT_VM_BUS_PORTS` | 虚拟机开机等待上限和设备端口数，见[容量与默认值](vm-isolation.md#容量与默认值) |
+| `CLINAVAT_VM_ADDRESSES`、`CLINAVAT_WORKSPACE_MEMORY`、`CLINAVAT_LXD_WORKSPACE_IMAGE`、`CLINAVAT_IMAGE_BUILDER_ADDRESS` | 固定地址范围、工作区容器内存与镜像、镜像构建地址，见[容量与默认值](vm-isolation.md#容量与默认值) |
 | `CLINAVAT_GATEWAY_HOST` / `_PORT` / `_USER` | [上游网关](../deploy/gateway/README.md)的 SSH 地址；留空则管理面板不连接网关 |
 | `CLINAVAT_*_BIN` | `claude`、`codex`、`mutagen`、`ssh`、`ssh-keygen` 的可执行文件路径 |
 
@@ -41,7 +43,8 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 使用当前用户的两个 systemd 服务：`clinavat-hub.service` 运行后端，`clinavat-web.service` 用 Caddy 托管前端并代理 `/api/`（包括 SSE 和 WebSocket）。
 
 ```bash
-cp .env.example .env   # 填写 CLINAVAT_MASTER_KEY 等配置
+install -d -m 700 ~/.config/clinavat
+install -m 600 .env.example ~/.config/clinavat/hub.env   # 填写 CLINAVAT_MASTER_KEY 等配置
 npm ci
 npm run check
 npm run build
@@ -55,14 +58,14 @@ npm run host:status
 npm run host:logs
 npm run host:stop
 npm run host:start
-# 更新代码或 .env 后，重新构建并重装服务：
-npm run build
-npm run host:install
+# 修改环境文件后，重启服务生效；更新代码见下文「不中断任务的发布」
 ```
+
+`host:install` 把构建产物、部署脚本和运行依赖（按 lockfile 重新安装，不含开发依赖）组装到运行目录 `~/.local/lib/clinavat`（可用 `CLINAVAT_INSTALL_DIR` 修改），服务从那里启动。之后的构建不影响线上服务。
 
 需要在退出登录后保持运行、并随系统启动时，执行 `loginctl enable-linger "$USER"`（是否有权限取决于系统策略）。
 
-有正在运行的对话时，直接 `npm run build` 会覆盖线上的前端文件，应改用下文的[不中断任务的发布](#不中断任务的发布)。
+在项目目录里运行 `npm run build` 不会影响线上服务。
 
 ### 运行时文件
 
@@ -127,7 +130,7 @@ CLINAVAT_COOKIE_SECURE=true
 一种常见的入口是：浏览器 HTTPS → 上层反向代理（终止 TLS）→ 网关内网端口 → 号池机 Web 入口。此时：
 
 1. 上层代理用 HTTP 访问网关的 `8080` 端口，网关再转发到号池机的同一端口。
-2. 号池机 `.env` 中把 `CLINAVAT_WEB_BIND` 设为网关能访问到的内网地址，并设 `CLINAVAT_COOKIE_SECURE=true`。
+2. 号池机环境文件中把 `CLINAVAT_WEB_BIND` 设为网关能访问到的内网地址，并设 `CLINAVAT_COOKIE_SECURE=true`。
 3. 在管理面板添加浏览器实际访问的 HTTPS 地址。
 
 每一层代理都需要：
@@ -144,7 +147,7 @@ CLINAVAT_COOKIE_SECURE=true
 
 - `CLINAVAT_DATA_DIR`（Compose 为 `data` 卷）：SQLite 数据库、加密的 SSH 私钥、槽位授权、用户会话数据；
 - `CLINAVAT_WORKSPACE_DIR`（Compose 为 `workspaces` 卷）：项目镜像；
-- `.env` 中的 `CLINAVAT_MASTER_KEY`。
+- 环境文件中的 `CLINAVAT_MASTER_KEY`。
 
 备份前先停止 Hub。不要只复制正在运行的 SQLite 主文件，否则会漏掉 WAL 中的数据。在新机器恢复时，必须同时恢复数据和原主密钥。
 
@@ -154,32 +157,33 @@ CLINAVAT_COOKIE_SECURE=true
 
 ### 从 Compose 迁移到宿主机部署
 
-1. 停止 Hub，完整备份持久卷和原 `.env`。
+1. 停止 Hub，完整备份持久卷和原环境文件。
 2. 把卷中的数据恢复到宿主机的数据目录，修正文件所有者。
 3. 按上文完成宿主机部署并验证。
 4. 用 `podman compose down`（不加 `-v`）停用容器，保留旧卷和备份。
 
 ## 不中断任务的发布
 
-宿主机部署的线上文件位于 `backend/dist` 和 `frontend/dist`。有对话正在运行时，先构建到单独的目录，再用发布脚本在系统空闲时切换：
+宿主机部署的线上文件位于运行目录（默认 `~/.local/lib/clinavat`）的 `backend/dist` 和 `frontend/dist`。发布只接受已提交的版本：脚本在全新的克隆里安装依赖、检查和构建，工作区里的未提交修改、`node_modules` 和 Git hooks 都不会参与。
 
 ```bash
-npm run check
-node node_modules/typescript/bin/tsc -p backend/tsconfig.json --outDir .releases/staging/backend
-npm exec -w frontend -- vite build --outDir ../.releases/staging/frontend --emptyOutDir
-node --no-warnings deploy/release.mjs status
-node --no-warnings deploy/release.mjs publish .releases/staging
+scripts=~/.local/lib/clinavat/deploy
+node $scripts/build-release.mjs --repo <项目目录> <提交>       # 输出下面用到的路径
+node --no-warnings $scripts/release.mjs status
+node --no-warnings $scripts/release.mjs publish <暂存目录>
+# 依赖或部署脚本也有变化时，改用完整安装（会重启服务）：
+node $scripts/host.mjs install --source <源码目录>
 ```
 
 发布脚本的行为：
 
 - **只在空闲时发布**：有任何运行中的对话、待处理的审批或账号切换进程时，脚本不做任何改动，返回退出码 `75`，稍后重试即可。
 - **防止发布途中有新任务**：空闲时先在数据库中设置发布锁，阻止新任务启动，再更新并重启服务。
-- **自动验证和回滚**：发布后检查后端健康接口和前端页面；失败时自动恢复旧版本。旧版本保存在 `.releases/<发布编号>/previous`，需要手动回滚时把这个目录传给同一个 `publish` 命令。
+- **自动验证和回滚**：发布后检查后端健康接口和前端页面；失败时自动恢复旧版本。旧版本保存在 `~/.local/state/clinavat/releases/<发布编号>/previous`，需要手动回滚时把这个目录传给同一个 `publish` 命令。
 
 只更新前端时，在 `publish` 命令后加 `--frontend-only`：只重启 Web 入口，Hub 和正在进行的额度查询不受影响。此时暂存目录中的 `backend/` 必须与线上 `backend/dist/` 完全一致（可以直接复制线上文件）。这种发布的 `previous/` 只包含前端；回滚时把旧 `frontend/` 和当前线上后端复制到新的暂存目录，再用同样的选项发布。
 
-如果发布进程被意外终止，发布锁会保留，以免不完整的版本接收任务。按 `.releases/<发布编号>/release.json` 恢复前后端构建并确认服务正常后，执行 `node deploy/release.mjs unblock` 解除。
+如果发布进程被意外终止，发布锁会保留，以免不完整的版本接收任务。按 `~/.local/state/clinavat/releases/<发布编号>/release.json` 恢复前后端构建并确认服务正常后，执行 `node deploy/release.mjs unblock` 解除。
 
 ## 重置管理员密码
 
@@ -191,11 +195,11 @@ node --no-warnings deploy/release.mjs publish .releases/staging
 npm run build -w backend   # 更新源码后先构建
 npm run admin:reset-password -- --username '管理员用户名'
 npm run admin:reset-password -- --list    # 忘记用户名时，列出所有管理员
-# 数据目录与当前 .env 不同时，用绝对路径指定：
+# 数据目录与当前环境文件不同时，用绝对路径指定：
 npm run admin:reset-password -- --username '管理员用户名' --data-dir '/实际数据目录'
 ```
 
-命令读取项目根目录的 `.env` 来确定数据目录，不需要主密钥，也不会初始化空数据库。请用运行 Hub 的系统用户执行。
+命令读取环境文件（默认 `~/.config/clinavat/hub.env`）来确定数据目录，不需要主密钥，也不会初始化空数据库。请用运行 Hub 的系统用户执行。
 
 Docker / Podman 部署（镜像需包含最新构建）：
 

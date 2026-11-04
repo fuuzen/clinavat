@@ -10,6 +10,12 @@ nft 表 `inet clinavat_guard` 负责 DNAT 和地址转换。号池网段（`eth1
 
 sing-box 默认出站、DNS 出站固定为节点选择器 `proxy`；`direct` 只用于直连名单，任何请求都不能把规则、默认出站或节点 `detour` 指向直连，也不能新增入站。开发机 SSH 通过直连名单绕过 tun，其他 SSH 目标（如 GitHub）经代理。
 
+## 按来源绑定出口
+
+`source_policy` 为 `shared`（默认）时，所有来源经共享选择器 `proxy` 出站。改为 `bound` 后，号池机和 `infra.json` 中 `vm_subnet` 的每个地址各有一个选择器 `src-<地址>`，按 `state.json` 的 `bindings` 指向节点。未绑定的地址指向只能连到网关回环地址的死路出口 `unbound`，路由和 DNS 末尾再拒绝号池网段与虚拟机网段的其余来源。网关自身的流量仍经 `proxy`。
+
+经过 tun 的 DNS 请求由 sing-box 回答，并按来源地址经该来源的选择器解析。绑定只在运行时切换选择器（`binding.set`），不重启 sing-box；sing-box 启动后由 `ExecStartPost=gwctl.py pin` 按状态恢复全部选择。`pin` 不取 gwctl 的锁，因为持锁的变更可能正在等待这次重启完成。`vm_subnet.set` 只能在网关本机执行，用于声明虚拟机网段，并同时把该网段加入 masquerade。迁移见 [按来源绑定出口](../../docs/vm-isolation.md#按来源绑定出口)。
+
 ## 安装
 
 在网关上以 root 执行，按提示审阅差异后确认：
@@ -36,6 +42,9 @@ $gwctl status
 $gwctl state.get
 $gwctl selector.select '{"tag": "home-proxy"}'
 $gwctl dev_direct.put '{"dev_direct": ["203.0.113.7/32", "198.51.100.0/24"]}'
+$gwctl binding.set '{"address": "10.31.0.130", "node": "home-proxy", "label": "槽位 A", "interrupt": false}'
+$gwctl binding.set '{"address": "10.31.0.130", "node": null}'      # 解除绑定：该来源断网
+$gwctl source_policy.set '{"source_policy": "bound"}'               # 需先绑定号池机地址
 $gwctl confirm 7
 $gwctl rollback 7          # 恢复到版本 7 生效之前
 $gwctl audit.tail

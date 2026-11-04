@@ -51,8 +51,8 @@
 需要 Linux、Node.js 22.13+，以及[部署文档](docs/deployment.md#环境要求)列出的系统工具和官方 CLI。
 
 ```bash
-cp .env.example .env
-openssl rand -hex 32        # 把输出填入 .env 的 CLINAVAT_MASTER_KEY，并妥善保存
+install -d -m 700 ~/.config/clinavat && install -m 600 .env.example ~/.config/clinavat/hub.env
+openssl rand -hex 32        # 把输出填入 hub.env 的 CLINAVAT_MASTER_KEY，并妥善保存
 npm ci
 npm run dev
 ```

@@ -7,8 +7,8 @@
 先安装[部署文档](deployment.md#环境要求)中列出的系统工具和官方 CLI（只做构建和类型检查时不需要）。
 
 ```bash
-cp .env.example .env
-openssl rand -hex 32        # 填入 .env 的 CLINAVAT_MASTER_KEY
+install -d -m 700 ~/.config/clinavat && install -m 600 .env.example ~/.config/clinavat/hub.env
+openssl rand -hex 32        # 填入 hub.env 的 CLINAVAT_MASTER_KEY
 npm ci
 npm run dev                 # 同时启动后端和前端
 ```
@@ -17,11 +17,11 @@ npm run dev                 # 同时启动后端和前端
 
 ```bash
 npm run check   # 前后端类型检查
-npm run build   # 构建 backend/dist 和 frontend/dist
+npm run build   # 构建项目目录内的 backend/dist 和 frontend/dist，不影响运行目录中的线上服务
 npm start       # 只启动后端；生产环境的前端由 Web 入口托管
 ```
 
-数据库默认位于项目根目录的 `data/clinavat.sqlite`，可用 `CLINAVAT_DATA_DIR` 修改。构建和类型检查不需要官方账号或开发机。
+数据库默认位于 `~/.local/share/clinavat/clinavat.sqlite`，可用 `CLINAVAT_DATA_DIR` 修改。Vite 的开发设置（`VITE_*`）写在项目根目录的 `.env.local`，其中不要放密钥。构建和类型检查不需要官方账号或开发机。
 
 ## 在线预览
 
