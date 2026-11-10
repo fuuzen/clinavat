@@ -7,11 +7,13 @@ import { getPermissionMode } from './permissions.js';
 import { UserInputRequests } from './user-input.js';
 import { RunControl } from './run-control.js';
 import { HttpError } from '../models.js';
+import { readResidentUsage } from './resident-usage.js';
+import type { UsageSlot } from '../accounts/usage.js';
 import type { AgentCallbacks, AgentConfig, AgentContext, AgentRun, ApprovalDecision, InputMode, QueuedInput, RunServices, RunTask,
   TurnOrigin, TurnOutcome } from './types.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
 
-interface ActiveRun {
+export interface ActiveRun {
   userId: string;
   projectId: string;
   slotId: string;
@@ -22,6 +24,7 @@ interface ActiveRun {
   control: RunControl;
   finishing?: boolean;
   closing?: boolean;
+  cliStarting?: boolean;
   run?: AgentRun;
   completion?: Promise<void>;
   credentialError?: Error;
@@ -61,6 +64,7 @@ export class AgentManager {
 
   /** A CLI process exists for the conversation, even if it is only waiting for the next message. */
   isBusy(sessionId: string): boolean { return this.active.has(sessionId); }
+  readUsage(slot: UsageSlot) { return readResidentUsage(this.active, this.config, slot); }
   isProjectBusy(projectId: string): boolean { return [...this.active.values()].some(state => state.projectId === projectId); }
   isUserBusy(userId: string): boolean { return [...this.active.values()].some(state => state.userId === userId); }
 
@@ -156,7 +160,9 @@ export class AgentManager {
         automaticTurn: origin => this.automaticTurn(state, origin),
         activityChanged: () => { this.publish(state); this.scheduleIdle(state); },
       };
+      context.account_identity = await this.config.usage?.captureIdentity(context.slot) ?? null;
       await this.callbacks.updateSession(sessionId, { status: 'running' });
+      state.cliStarting = true;
       state.run = context.session.engine === 'claude'
         ? await startClaude(services, prompt, state.abort.signal)
         : await startCodex(services, prompt, state.abort.signal);

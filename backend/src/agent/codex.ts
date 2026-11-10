@@ -6,6 +6,7 @@ import { projectInstructions } from './project-instructions.js';
 import { roleInstructions } from './session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './codex-goal.js';
 import type { AgentRun, RunServices } from './types.js';
+import { parseCodexRead } from '../accounts/usage.js';
 
 export async function startCodex(services: RunServices, prompt: string, signal: AbortSignal): Promise<AgentRun> {
   if (services.context.session.goal && services.context.session.agent_mode === 'plan') {
@@ -108,7 +109,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       return;
     }
     if (message.method === 'serverRequest/resolved') requests.resolved(params.requestId);
-    if (message.method === 'account/rateLimits/updated') services.config.usage?.observe(services.context.slot, 'codex-event', params);
+    if (message.method === 'account/rateLimits/updated') services.config.usage?.observe(services.context.slot, 'codex-event',
+      params, services.context.account_identity);
     if (message.method === 'item/commandExecution/outputDelta') {
       services.event('tool', { id: params.itemId, tool: 'commandExecution', output: String(params.delta ?? '').slice(0, 128 * 1024), status: 'running', append: true });
     }
@@ -240,7 +242,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     await initializeCodexServer(rpc);
     // A full snapshot at run start; later notifications only carry changed values.
     if (services.config.usage) void rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true }, 15000)
-      .then(result => services.config.usage?.observe(services.context.slot, 'codex-read', result)).catch(() => undefined);
+      .then(result => services.config.usage?.observe(services.context.slot, 'codex-read', result,
+        services.context.account_identity)).catch(() => undefined);
     const selection = services.context.session;
     const models = await loadAgentModels(services.config, services.context);
     const model = selection.model || models.find(item => item.isDefault)?.id;
@@ -349,6 +352,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   }
   return {
     process: child, completion, stop: abort,
+    readUsage: async () => parseCodexRead(await rpc.request('account/rateLimits/read',
+      { excludeResetCreditDetails: true }, 30000, false)),
     startTurn: (text) => mutate(async () => {
       if (finished || stopped) throw new Error('当前执行已结束');
       turnActive = true;

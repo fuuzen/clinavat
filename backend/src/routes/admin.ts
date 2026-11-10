@@ -8,6 +8,7 @@ import { createUser, credentials } from '../users.js';
 import { updateSlot } from '../accounts/assignments.js';
 import { availableSlots, serializeAdminSlot, serializeUserSlot } from '../accounts/access.js';
 import { privateDirectory } from '../accounts/credential-files.js';
+import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export function adminRoutes(app: FastifyInstance, context: Context) {
@@ -91,13 +92,22 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     const { id } = z.object({ id: slotId }).parse(request.params);
     const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', id);
     if (!slot) throw new HttpError(404, '槽位不存在');
-    // Logging in where conversations run keeps the account on one machine and one egress from the start.
-    const home = slot.home_dir;
-    const command = slot.engine === 'claude'
-      ? await config.execution.loginCommand(slot.id, home, ['claude', 'auth', 'login'], { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') })
-      : await config.execution.loginCommand(slot.id, home, ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
-        { HOME: home, CODEX_HOME: join(home, '.codex') });
-    return { command, runsIn: config.execution.kind };
+    return withResourceLocks(context, [`slot-config:${id}`], async () => {
+      await context.agents.reclaimWhere({ slotId: id });
+      const prepared = await config.credentials.whileIdle(id, async () => {
+        const home = slot.home_dir;
+        await config.execution.assertReleased(home);
+        await initializeSlotProfile(config.dataDir, id, home, slot.engine);
+        // Prepare the same installation identity before an operator starts login in the slot VM.
+        const command = slot.engine === 'claude'
+          ? await config.execution.loginCommand(id, home, ['claude', 'auth', 'login'], { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') })
+          : await config.execution.loginCommand(id, home, ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
+            { HOME: home, CODEX_HOME: join(home, '.codex') });
+        return { command, runsIn: config.execution.kind };
+      });
+      if (!prepared) throw new HttpError(409, '该槽位正在使用或查询额度，请结束后再生成登录命令');
+      return prepared.value;
+    });
   });
   app.patch('/api/admin/slots/:id', async request => {
     requireAdmin(request);

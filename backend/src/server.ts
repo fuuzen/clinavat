@@ -28,6 +28,7 @@ import { SiteAccess } from './site-access.js';
 import { SiteSettingsService } from './site-settings.js';
 import type { Host, Project, Session } from './models.js';
 import { AccountCredentials } from './accounts/credentials.js';
+import { ensureClaudeSlotIdentity } from './accounts/claude-identity.js';
 import { SlotUsage } from './accounts/usage.js';
 import { LxdExecutionHost } from './execution/lxd-host.js';
 import { ProcessExecutionHost } from './execution/process-host.js';
@@ -50,7 +51,10 @@ const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, 
     "SELECT local_path FROM projects WHERE user_id=? AND sync_name=? AND execution_mode IS NOT 'local'", userId, syncName)?.local_path,
   mutagenEnvironment: userId => mutagenEnvironment(userId),
 }) : localExecution;
-for (const slot of store.all<{ home_dir: string }>('SELECT home_dir FROM account_slots')) await execution.assertReleased(slot.home_dir);
+for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('SELECT id,home_dir,engine FROM account_slots')) {
+  await execution.assertReleased(slot.home_dir);
+  if (slot.engine === 'claude') await ensureClaudeSlotIdentity(config.dataDir, slot.id, slot.home_dir);
+}
 const credentials = new AccountCredentials(config.dataDir, store, execution, slotId => onSlotActivity(slotId));
 await credentials.recover();
 const connections = new ConnectionRegistry(store);
@@ -176,6 +180,7 @@ const agents: AgentManager = new AgentManager(agentConfig, {
   },
 });
 credentials.reclaimIdle = slotId => agents.reclaimWhere({ slotId });
+usage.readResident = slot => agents.readUsage(slot);
 
 await app.register(cookie);
 await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute' });

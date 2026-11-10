@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { AccountCredentials } from '../accounts/credentials.js';
-import type { SlotUsage } from '../accounts/usage.js';
+import type { SlotUsage, UsageUpdate } from '../accounts/usage.js';
 import type { UserInputAnswers, UserInputQuestion } from './user-input.js';
 import type { RunControl } from './run-control.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
@@ -21,6 +21,7 @@ export interface AgentConfig {
 
 export interface AgentContext {
   user: { id: string };
+  account_identity?: string | null;
   runtime_home: string;
   runtime_kind?: 'conversation' | 'probe';
   slot: { id: string; home_dir: string; engine: 'claude' | 'codex'; credential_revision: number; updated_at?: string };
@@ -95,6 +96,8 @@ export interface AgentRun {
   completion: Promise<void>;
   stop(): void;
   startTurn(prompt: string): Promise<void>;
+  /** Reads the server's quota snapshot through this CLI without starting a conversation turn. */
+  readUsage(): Promise<UsageUpdate>;
   /** Adds input to the active turn; false when there is none to join. `messageId` names the persisted message. */
   steer(text: string, messageId: string): Promise<boolean>;
   interruptTurn(): Promise<void>;

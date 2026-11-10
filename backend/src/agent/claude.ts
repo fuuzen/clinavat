@@ -6,6 +6,7 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
+import { parseClaudeUsage } from '../accounts/usage.js';
 import type { AgentRun, RunServices, RunTask } from './types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
@@ -120,7 +121,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       turnActive = true;
       services.automaticTurn({ summary: lastTaskSummary });
     }
-    if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event', event.rate_limit_info);
+    if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event',
+      event.rate_limit_info, services.context.account_identity);
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
       nativeSessionReceived = true;
       void services.update({ native_session_id: String(event.session_id) }).catch((error: unknown) => {
@@ -241,6 +243,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   }
   return {
     process: child, completion, stop,
+    readUsage: async () => parseClaudeUsage(await control.request({ subtype: 'get_usage', skip_behaviors: true }, 30_000)),
     startTurn: async (text) => {
       if (closing) throw new Error('Claude CLI 正在退出');
       turnActive = true;

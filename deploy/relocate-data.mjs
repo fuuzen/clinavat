@@ -59,7 +59,9 @@ async function listFiles(directory) {
 }
 
 async function rewriteConfiguration(dataDirectory, from, to) {
-  const files = [...await listFiles(join(dataDirectory, 'accounts', 'slot-profiles-v3')), join(dataDirectory, 'accounts', 'single-engine-slots.json')];
+  const files = [...await listFiles(join(dataDirectory, 'accounts', 'slot-profiles-v3')),
+    ...await listFiles(join(dataDirectory, 'accounts', 'slot-cli-identities')),
+    join(dataDirectory, 'accounts', 'single-engine-slots.json')];
   const users = await readdir(join(dataDirectory, 'users')).catch(() => []);
   for (const user of users) {
     const home = join(dataDirectory, 'users', user);

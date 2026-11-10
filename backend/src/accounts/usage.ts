@@ -8,6 +8,11 @@ import type { AccountCredentials } from './credentials.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from './credential-files.js';
 import { accountIdentifier, credentialPath, type AccountEngine } from './paths.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
+import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
+import { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
+
+export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
+export type { UsageUpdate } from './usage-parsers.js';
 
 export interface UsageWindow {
   key: string;
@@ -16,6 +21,7 @@ export interface UsageWindow {
   resetsAt: string | null;
   windowMinutes: number | null;
   limited?: boolean;
+  observedAt?: string;
 }
 
 export interface SlotUsageView {
@@ -35,14 +41,8 @@ export interface SlotUsageView {
 }
 
 export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string }
+export interface ResidentUsage { update: UsageUpdate; identity: string | null }
 
-interface UsageUpdate {
-  plan?: string | null;
-  windows: UsageWindow[];
-  credits?: SlotUsageView['credits'];
-  limited?: boolean | null;
-  unavailable?: string;
-}
 
 interface Snapshot {
   accountKey: string | null;
@@ -55,7 +55,7 @@ interface Snapshot {
   unavailable?: string;
 }
 
-interface SlotState { snapshot?: Snapshot; checkedAt?: number; error?: string; inflight?: Promise<void> }
+interface SlotState { snapshot?: Snapshot; checkedAt?: number; error?: string; failures?: number; inflight?: Promise<void> }
 
 const AUTO_INTERVAL = 60_000;
 const FORCE_INTERVAL = 15_000;
@@ -67,114 +67,7 @@ const TOKEN_MARGIN = 15 * 60_000;
 const CODEX_REFRESH_AGE = 7 * 24 * 3600_000;
 const SAVE_DELAY = 2_000;
 
-const claudeWindows: [string, string, number | null][] = [
-  ['five_hour', '5 小时', 300], ['seven_day', '每周', 10080], ['seven_day_opus', '每周 · Opus', 10080],
-  ['seven_day_sonnet', '每周 · Sonnet', 10080], ['seven_day_oauth_apps', '每周 · 第三方应用', 10080],
-  ['seven_day_overage_included', '每周 · 含超额模型', 10080], ['overage', '额外用量', null],
-];
-
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex').slice(0, 24); }
-
-function percent(value: unknown, scale = 1): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * scale * 10) / 10 : null;
-}
-
-function timestamp(value: unknown): string | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value < 1e12 ? value * 1000 : value).toISOString();
-  if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
-  return null;
-}
-
-function durationLabel(minutes: number | null): string {
-  if (minutes === 300) return '5 小时';
-  if (minutes === 10080) return '每周';
-  if (!minutes) return '额度窗口';
-  if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
-  if (minutes % 60 === 0) return `${minutes / 60} 小时`;
-  return `${minutes} 分钟`;
-}
-
-export function parseClaudeUsage(response: any): UsageUpdate {
-  const limits = response?.rate_limits;
-  if (response?.rate_limits_available === false || !limits || typeof limits !== 'object') {
-    return { windows: [], plan: response?.subscription_type ?? null, unavailable: '该账号没有 Claude 订阅额度数据（API key 或缺少 profile 授权）' };
-  }
-  const windows: UsageWindow[] = [];
-  for (const [key, label, windowMinutes] of claudeWindows) {
-    const window = limits[key];
-    if (!window || typeof window !== 'object') continue;
-    windows.push({ key, label, windowMinutes, usedPercent: percent(window.utilization), resetsAt: timestamp(window.resets_at) });
-  }
-  for (const model of Array.isArray(limits.model_scoped) ? limits.model_scoped : []) {
-    if (typeof model?.display_name !== 'string') continue;
-    windows.push({ key: `model:${model.display_name}`, label: `每周 · ${model.display_name}`, windowMinutes: 10080,
-      usedPercent: percent(model.utilization), resetsAt: timestamp(model.resets_at) });
-  }
-  if (limits.extra_usage?.is_enabled === true) {
-    windows.push({ key: 'extra_usage', label: '额外用量（本月）', windowMinutes: null,
-      usedPercent: percent(limits.extra_usage.utilization), resetsAt: null });
-  }
-  return { windows, plan: typeof response.subscription_type === 'string' ? response.subscription_type : null };
-}
-
-// rate_limit_event reports utilization as a 0-1 fraction and reset times as epoch seconds.
-export function parseClaudeEvent(info: any): UsageUpdate {
-  const windows: UsageWindow[] = [];
-  const labels = new Map(claudeWindows.map(([key, label, minutes]) => [key, { label, minutes }]));
-  const add = (key: string, window: any) => {
-    const known = labels.get(key);
-    if (!known) return;
-    windows.push({ key, label: known.label, windowMinutes: known.minutes, usedPercent: percent(window.utilization, 100),
-      resetsAt: timestamp(window.resetsAt), ...(typeof window.status === 'string' ? { limited: window.status === 'rejected' } : {}) });
-  };
-  if (info?.unifiedWindows && typeof info.unifiedWindows === 'object') {
-    for (const [key, window] of Object.entries(info.unifiedWindows)) if (window && typeof window === 'object') add(key, window);
-  }
-  if (typeof info?.rateLimitType === 'string' && !windows.some(window => window.key === info.rateLimitType)) add(info.rateLimitType, info);
-  return { windows, limited: info?.status === 'rejected' ? true : typeof info?.status === 'string' ? false : undefined };
-}
-
-function codexBucket(snapshot: any, prefix: boolean): UsageWindow[] {
-  const id = typeof snapshot?.limitId === 'string' ? snapshot.limitId : 'codex';
-  const name = typeof snapshot?.limitName === 'string' ? snapshot.limitName : id;
-  return (['primary', 'secondary'] as const).flatMap(slot => {
-    const window = snapshot?.[slot];
-    if (!window || typeof window !== 'object') return [];
-    const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : null;
-    return [{ key: `${id}:${slot}`, label: `${prefix ? `${name} · ` : ''}${durationLabel(minutes)}`, windowMinutes: minutes,
-      usedPercent: percent(window.usedPercent), resetsAt: timestamp(window.resetsAt) }];
-  });
-}
-
-function codexCredits(snapshot: any): SlotUsageView['credits'] | undefined {
-  const credits = snapshot?.credits;
-  if (!credits || typeof credits !== 'object' || credits.hasCredits === false) return undefined;
-  return { balance: typeof credits.balance === 'string' ? credits.balance : null, unlimited: credits.unlimited === true };
-}
-
-export function parseCodexRead(response: any): UsageUpdate {
-  const buckets = Object.values(response?.rateLimitsByLimitId ?? {}).filter(Boolean);
-  const list = buckets.length ? buckets : response?.rateLimits ? [response.rateLimits] : [];
-  const primary = response?.rateLimits ?? list[0];
-  const reached = list.some((bucket: any) => typeof bucket?.rateLimitReachedType === 'string');
-  return {
-    windows: list.flatMap((bucket: any) => codexBucket(bucket, list.length > 1 && bucket?.limitId !== 'codex')),
-    plan: typeof primary?.planType === 'string' ? primary.planType : null,
-    credits: codexCredits(primary) ?? null,
-    limited: response?.ordinaryUsageAllowed === false || reached ? true : response?.ordinaryUsageAllowed === true ? false : null,
-  };
-}
-
-// account/rateLimits/updated is sparse: absent values keep what was observed before.
-export function parseCodexEvent(params: any): UsageUpdate {
-  const snapshot = params?.rateLimits;
-  return {
-    windows: codexBucket(snapshot, typeof snapshot?.limitId === 'string' && snapshot.limitId !== 'codex'),
-    ...(typeof snapshot?.planType === 'string' ? { plan: snapshot.planType } : {}),
-    ...(codexCredits(snapshot) ? { credits: codexCredits(snapshot) } : {}),
-    ...(typeof snapshot?.rateLimitReachedType === 'string' ? { limited: true } : {}),
-  };
-}
 
 async function readJson(file: string, home: string): Promise<any> {
   const content = await readPrivateJson(file, home);
@@ -213,7 +106,10 @@ async function inspectCredential(home: string, engine: AccountEngine): Promise<C
   if (engine === 'claude') {
     const oauth = document?.claudeAiOauth;
     if (typeof oauth?.accessToken !== 'string') return { kind: 'none' };
-    return { kind: 'oauth', fresh: typeof oauth.expiresAt === 'number' && oauth.expiresAt > deadline };
+    const hasAccess = oauth.accessToken.length > 0;
+    const hasRefresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken.length > 0;
+    if (!hasAccess && !hasRefresh) return { kind: 'none' };
+    return { kind: 'oauth', fresh: hasAccess && typeof oauth.expiresAt === 'number' && oauth.expiresAt > deadline };
   }
   const token = document?.tokens?.access_token;
   if (typeof token !== 'string') return typeof document?.OPENAI_API_KEY === 'string' ? { kind: 'apikey' } : { kind: 'none' };
@@ -293,6 +189,7 @@ async function codexProbe(probe: Probe): Promise<UsageUpdate> {
 }
 
 export class SlotUsage {
+  readResident: (slot: UsageSlot) => Promise<ResidentUsage | undefined> = async () => undefined;
   private states = new Map<string, SlotState>();
   private running = 0;
   private queue: (() => void)[] = [];
@@ -348,6 +245,10 @@ export class SlotUsage {
     return state;
   }
 
+  captureIdentity(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>): Promise<string | null> {
+    return accountKey(slot.home_dir, slot.engine);
+  }
+
   async views(slots: UsageSlot[], refresh = false): Promise<Record<string, SlotUsageView>> {
     const result: Record<string, SlotUsageView> = {};
     for (const slot of slots) {
@@ -357,7 +258,9 @@ export class SlotUsage {
         state.checkedAt = undefined;
         this.scheduleSave();
       }
-      if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - (state.checkedAt ?? 0) >= AUTO_INTERVAL) {
+      const interval = Math.min(AUTO_INTERVAL * 2 ** (state.failures ?? 0), STALE_AFTER);
+      const lastUpdate = Math.max(state.checkedAt ?? 0, state.snapshot?.observedAt ?? 0);
+      if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - lastUpdate >= interval) {
         void this.query(slot);
       }
       result[slot.id] = this.view(slot.id);
@@ -394,17 +297,20 @@ export class SlotUsage {
   }
 
   // Live events from running conversations; failures must never affect the conversation itself.
-  observe(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, kind: 'codex-read' | 'codex-event' | 'claude-event', payload: unknown): void {
+  observe(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, kind: 'codex-read' | 'codex-event' | 'claude-event', payload: unknown,
+    identity?: string | null): void {
     void (async () => {
       const update = kind === 'codex-read' ? parseCodexRead(payload) : kind === 'codex-event' ? parseCodexEvent(payload) : parseClaudeEvent(payload);
       if (!update.windows.length && update.limited === undefined && kind !== 'codex-read') return;
-      await this.apply(slot, update, kind === 'codex-read' ? 'replace' : 'merge', kind === 'codex-read' ? 'query' : 'event');
+      await this.apply(slot, update, kind === 'codex-read' ? 'replace' : 'merge', kind === 'codex-read' ? 'query' : 'event', identity);
     })().catch(() => undefined);
   }
 
-  private async apply(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, update: UsageUpdate, mode: 'replace' | 'merge', source: Snapshot['source']) {
+  private async apply(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, update: UsageUpdate, mode: 'replace' | 'merge',
+    source: Snapshot['source'], identity?: string | null) {
     const state = this.state(slot.id);
     const key = await accountKey(slot.home_dir, slot.engine);
+    if (identity !== undefined && (!identity || identity !== key)) throw new Error('读取额度期间账号已变化，已丢弃结果');
     let snapshot = state.snapshot;
     if (snapshot && !sameAccount(snapshot.accountKey, key)) snapshot = undefined;
     if (!snapshot || mode === 'replace' || snapshot.unavailable) {
@@ -412,9 +318,10 @@ export class SlotUsage {
     }
     for (const window of update.windows) {
       const previous = snapshot.windows.get(window.key);
+      const observed = { ...window, ...(window.usedPercent !== null ? { observedAt: new Date().toISOString() } : {}) };
       snapshot.windows.set(window.key, previous ? {
-        ...previous, ...Object.fromEntries(Object.entries(window).filter(([, value]) => value !== null && value !== undefined)),
-      } : window);
+        ...previous, ...Object.fromEntries(Object.entries(observed).filter(([, value]) => value !== null && value !== undefined)),
+      } : observed);
     }
     if (update.plan !== undefined) snapshot.plan = update.plan ?? snapshot.plan;
     if (update.credits !== undefined) snapshot.credits = update.credits;
@@ -424,6 +331,7 @@ export class SlotUsage {
     snapshot.source = source;
     snapshot.accountKey = key ?? snapshot.accountKey;
     state.snapshot = snapshot;
+    state.failures = 0;
     if (mode === 'replace') state.error = undefined;
     this.scheduleSave();
     this.notify(slot.id);
@@ -434,9 +342,12 @@ export class SlotUsage {
     state.inflight ??= (async () => {
       this.notify(slot.id);
       try {
-        await this.apply(slot, await this.limited(() => this.probe(slot)), 'replace', 'query');
+        const result = await this.limited(async () => await this.readResident(slot)
+          ?? { update: await this.probe(slot), identity: undefined });
+        await this.apply(slot, result.update, 'replace', 'query', result.identity);
       } catch (error) {
         state.error = error instanceof Error ? error.message.slice(0, 300) : '额度查询失败';
+        state.failures = (state.failures ?? 0) + 1;
       } finally {
         state.checkedAt = Date.now();
         state.inflight = undefined;
@@ -458,7 +369,10 @@ export class SlotUsage {
     if (credential.kind === 'none') throw new Error('槽位尚未完成登录');
     if (credential.kind === 'apikey') return { windows: [], unavailable: 'API key 账号没有订阅额度窗口' };
     // Idle slots are paused for the probe, so a token refresh can be written back safely.
-    const idle = await this.credentials.whileIdle(slot.id, () => this.isolatedProbe(slot));
+    const idle = await this.credentials.whileIdle(slot.id, async () => {
+      if (slot.engine === 'claude') await ensureClaudeSlotIdentity(this.config.dataDir, slot.id, slot.home_dir);
+      return this.isolatedProbe(slot);
+    });
     if (idle) return idle.value;
     if (!credential.fresh) throw new Error('槽位正在使用且访问令牌临近刷新，等待对话中的额度事件更新');
     return this.isolatedProbe(slot);
@@ -478,14 +392,28 @@ export class SlotUsage {
       await privateDirectory(directory);
       await privateDirectory(dirname(copy));
       await writePrivateJson(copy, original);
+      if (slot.engine === 'claude') {
+        const installation = await readClaudeSlotIdentity(this.config.dataDir, slot.id, slot.home_dir);
+        // Share the slot's CLI identity without importing its projects, plugins, or user caches.
+        const configurations = await Promise.all(['.claude.json', join('.claude', '.claude.json')]
+          .map(file => readJson(join(slot.home_dir, file), slot.home_dir)));
+        const identity = Object.assign({}, ...configurations.map(account => Object.fromEntries(
+          ['userID', 'oauthAccount', 'hasCompletedOnboarding', 'lastOnboardingVersion']
+            .filter(key => account?.[key] !== undefined).map(key => [key, account[key]]))));
+        await writePrivateJson(join(home, '.claude', '.claude.json'), JSON.stringify({ ...identity, ...installation }));
+      }
       const probe = { execution, scope, home, binary: await execution.binary(scope, slot.engine) };
       const update = await (slot.engine === 'claude' ? claudeProbe(probe) : codexProbe(probe));
-      const after = await readFile(copy, 'utf8').catch(() => original);
-      // Keep a rotated refresh token only if nobody changed the slot credential meanwhile.
-      if (after !== original && await readPrivateJson(source, slot.home_dir) === original) await writePrivateJson(source, after);
+      if (await readPrivateJson(source, slot.home_dir) !== original) {
+        throw new Error('额度查询期间登录凭据已变化，已丢弃原账号的额度结果');
+      }
       return update;
     } finally {
-      await rm(home, { recursive: true, force: true });
+      try {
+        const after = await readFile(copy, 'utf8').catch(() => original);
+        // A failed usage request can still rotate tokens; preserve them unless the slot changed meanwhile.
+        if (after !== original && await readPrivateJson(source, slot.home_dir) === original) await writePrivateJson(source, after);
+      } finally { await rm(home, { recursive: true, force: true }); }
     }
   }
 }

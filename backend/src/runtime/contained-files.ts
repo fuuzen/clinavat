@@ -1,5 +1,6 @@
+import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, readlink, realpath, type FileHandle } from 'node:fs/promises';
+import { copyFile, link, mkdir, open, readlink, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export interface ContainedFile {
@@ -37,4 +38,39 @@ export async function openContained(root: string, path: string, options: { direc
 /** Directory entries of an open directory; going through the descriptor keeps the path from being swapped. */
 export function descriptorPath(handle: FileHandle): string {
   return join('/proc/self/fd', String(handle.fd));
+}
+
+/**
+ * Opens a directory below root one component at a time, creating missing ones when asked. Each component is made
+ * through its parent's descriptor and reopened with the symlink check, so a link planted mid-way is rejected, never followed.
+ */
+export async function openContainedDirectory(root: string, segments: string[], create: boolean): Promise<ContainedFile> {
+  let directory = await openContained(root, '.', { directory: true });
+  for (let depth = 1; depth <= segments.length; depth++) {
+    try {
+      if (create) {
+        await mkdir(join(descriptorPath(directory.handle), segments[depth - 1]!)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'EEXIST') throw error;
+        });
+      }
+    } finally { await directory.handle.close(); }
+    directory = await openContained(root, segments.slice(0, depth).join('/'), { directory: true });
+  }
+  return directory;
+}
+
+/**
+ * Moves a finished file into an open directory. Without `replace`, link() refuses an existing entry instead of
+ * overwriting it. A source on another filesystem is copied next to the target first, so the target never appears half-written.
+ */
+export async function placeFile(directory: FileHandle, name: string, source: string, replace: boolean): Promise<void> {
+  const target = join(descriptorPath(directory), name);
+  const move = (from: string) => replace ? rename(from, target) : link(from, target);
+  try { return await move(source); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error; }
+  const nearby = join(descriptorPath(directory), `.clinavat-${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    await copyFile(source, nearby, constants.COPYFILE_EXCL);
+    await move(nearby);
+  } finally { await rm(nearby, { force: true }); }
 }

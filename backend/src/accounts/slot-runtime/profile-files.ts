@@ -1,9 +1,10 @@
-import { lstat, readdir, readlink, rename, rm, symlink } from 'node:fs/promises';
+import { lstat, readdir, readlink, rename, rm, rmdir, symlink } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import type { AccountEngine } from '../paths.js';
 import { sessionStateDirectories, sessionStateFiles } from '../session-state/index.js';
+import { claudeInstallationKeys } from '../claude-identity.js';
 
 type Document = Record<string, unknown>;
 type Transfer = 'archive' | 'save' | 'restore';
@@ -31,8 +32,12 @@ export async function relocateHomeLinks(directory: string, staging: string, oldH
 
 const claudeIdentityKeys = [
   'oauthAccount', 'primaryApiKey', 'customApiKeyResponses', 'userID',
-  'hasCompletedOnboarding', 'lastOnboardingVersion',
+  'hasCompletedOnboarding', 'lastOnboardingVersion', ...claudeInstallationKeys,
 ];
+const claudeBootstrapKeys = new Set([
+  'migrationVersion', 'hasResetAutoModeOptInForDefaultOffer', 'opusProMigrationComplete',
+  'opusProMigrationTimestamp', 'sonnet1m45MigrationComplete', 'seenNotifications',
+]);
 const mixedFiles = [
   { path: '.claude.json', keys: claudeIdentityKeys },
   { path: join('.claude', '.claude.json'), keys: claudeIdentityKeys },
@@ -57,17 +62,38 @@ function separate(document: Document, keys: string[]): { account: Document; user
   return { account, user };
 }
 
+function mergeClaudeBootstrap(bootstrap: Document, runtime: Document): Document | undefined {
+  for (const [key, value] of Object.entries(bootstrap)) {
+    if (!claudeBootstrapKeys.has(key)) return undefined;
+    if (key === 'seenNotifications') {
+      const empty = value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length;
+      if (!empty && !isDeepStrictEqual(value, runtime[key])) return undefined;
+    } else if (key === 'migrationVersion') {
+      if (!Number.isSafeInteger(value) || (value as number) < 0) return undefined;
+    } else if (key === 'opusProMigrationTimestamp') {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+    } else if (typeof value !== 'boolean') return undefined;
+  }
+  // Login/status can create newer migration defaults without seeing the user's parked runtime.
+  // Restore the historical migration state so the CLI can migrate the complete user configuration.
+  return { ...bootstrap, ...runtime };
+}
+
 async function transferMixed(source: string, target: string, keys: string[], direction: Transfer): Promise<void> {
   const from = separate(await documentAt(source), keys);
   const to = separate(await documentAt(target), keys);
   const profile = direction === 'restore' ? from : to;
   if (Object.keys(profile.account).length) throw new Error('用户槽位配置中包含账号身份字段，已阻止覆盖');
   if (!Object.keys(from.user).length) return;
+  let runtime = from.user;
   if (Object.keys(to.user).length && !isDeepStrictEqual(from.user, to.user)) {
-    throw new Error('用户槽位配置存在未完成的不同版本，已保留两份数据');
+    const merged = keys === claudeIdentityKeys ? (direction === 'restore'
+      ? mergeClaudeBootstrap(to.user, from.user) : mergeClaudeBootstrap(from.user, to.user)) : undefined;
+    if (!merged) throw new Error('用户槽位配置存在未完成的不同版本，已保留两份数据');
+    runtime = merged;
   }
   // Save the user fragment before removing it from its former location, so a retry can finish safely.
-  await saveDocument(target, { ...to.account, ...from.user });
+  await saveDocument(target, { ...to.account, ...runtime });
   await saveDocument(source, from.account);
 }
 
@@ -80,7 +106,14 @@ function protectedEngineEntry(name: string, engine: AccountEngine): boolean {
 }
 
 async function moveEntry(source: string, target: string): Promise<void> {
-  if (await pathExists(target)) throw new Error(`槽位配置迁移目标已存在，拒绝覆盖：${target}`);
+  if (await pathExists(target)) {
+    const [from, to] = await Promise.all([lstat(source), lstat(target)]);
+    if (from.isDirectory() && to.isDirectory()) {
+      if (!(await readdir(source)).length) { await rmdir(source); return; }
+      if (!(await readdir(target)).length) { await rmdir(target); await rename(source, target); return; }
+    }
+    throw new Error(`槽位配置迁移目标已存在，拒绝覆盖：${target}`);
+  }
   await privateDirectory(dirname(target));
   await rename(source, target);
 }

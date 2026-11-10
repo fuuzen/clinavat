@@ -13,9 +13,16 @@ interface Initialization {
   reject(error: Error): void;
 }
 
+interface PendingRequest {
+  timer: NodeJS.Timeout;
+  resolve(value: any): void;
+  reject(error: Error): void;
+}
+
 export class ClaudeControl {
   private initialization?: Initialization;
   private requests = new Map<string, AbortController>();
+  private pending = new Map<string, PendingRequest>();
   private checkedToolUses = new Set<string>();
   closed = false;
 
@@ -55,9 +62,36 @@ export class ClaudeControl {
     this.write({ type: 'control_request', request_id: randomUUID(), request });
   }
 
+  request(request: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+    if (this.closed) return Promise.reject(new Error('Claude CLI 控制通道已关闭'));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Claude ${String(request.subtype ?? '控制')} 请求超时`));
+      }, timeoutMs);
+      this.pending.set(id, { timer, resolve, reject });
+      try { this.write({ type: 'control_request', request_id: id, request }); }
+      catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error('Claude CLI 控制请求失败'));
+      }
+    });
+  }
+
   handle(event: Record<string, any>): boolean {
     if (event.type === 'control_response') {
       const response = event.response;
+      const pending = this.pending.get(response?.request_id);
+      if (pending) {
+        this.pending.delete(response.request_id);
+        clearTimeout(pending.timer);
+        if (response.subtype !== 'success' || response.error) {
+          pending.reject(new Error(String(response.error || 'Claude CLI 控制请求失败')));
+        } else pending.resolve(response.response);
+        return true;
+      }
       if (this.initialization && response?.request_id === this.initialization.id) {
         const initialization = this.initialization;
         this.initialization = undefined;
@@ -100,6 +134,11 @@ export class ClaudeControl {
     this.closed = true;
     for (const request of this.requests.values()) request.abort();
     this.requests.clear();
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
     if (this.initialization) {
       this.initialization.cancelTimeout();
       this.initialization.reject(error);

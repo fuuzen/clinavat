@@ -3,6 +3,7 @@ import { privateDirectory, readPrivateJson, writePrivateJson } from '../credenti
 import { accountIdentifier, type AccountEngine } from '../paths.js';
 import { moveSlotProfile, pathExists } from './profile-files.js';
 import { archiveAccountArtifacts, assertNoAccountArtifacts } from './profile-artifacts.js';
+import { ensureClaudeSlotIdentity } from '../claude-identity.js';
 
 interface Initialization { version: 1; slotId: string; home: string; engine: AccountEngine; phase: 'prepared' | 'complete' }
 interface ProfileMarker { version: 1; userId: string; slotId: string; engine: AccountEngine }
@@ -17,6 +18,7 @@ function profileHome(dataDir: string, userId: string, slotId: string): string {
 
 export async function initializeSlotProfile(dataDir: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
   slotHome(dataDir, slotId, home);
+  if (engine === 'claude') await ensureClaudeSlotIdentity(dataDir, slotId, home);
   const markerFile = join(dataDir, 'accounts', 'slot-profiles-v3', `${slotId}.json`);
   const archive = join(dataDir, 'backups', 'slot-runtime-v3', slotId, 'runtime');
   const content = await readPrivateJson(markerFile);
@@ -56,6 +58,7 @@ async function ensureProfile(dataDir: string, userId: string, slotId: string, en
 export async function restoreSlotProfile(dataDir: string, userId: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
   slotHome(dataDir, slotId, home);
   const profile = await ensureProfile(dataDir, userId, slotId, engine);
+  if (engine === 'claude') await ensureClaudeSlotIdentity(dataDir, slotId, home, profile);
   await assertNoAccountArtifacts(profile, engine);
   await archiveAccountArtifacts(dataDir, slotId, home, engine);
   await moveSlotProfile(profile, home, engine, 'restore');
@@ -64,6 +67,7 @@ export async function restoreSlotProfile(dataDir: string, userId: string, slotId
 export async function saveSlotProfile(dataDir: string, userId: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
   slotHome(dataDir, slotId, home);
   const profile = await ensureProfile(dataDir, userId, slotId, engine);
+  if (engine === 'claude') await ensureClaudeSlotIdentity(dataDir, slotId, home, profile);
   await archiveAccountArtifacts(dataDir, slotId, home, engine);
   await moveSlotProfile(home, profile, engine, 'save');
 }
