@@ -44,7 +44,7 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginCh
         <SlotUserPicker key={`${slot.id}:${slot.credential_revision}:${assignmentVersion}`} slot={slot} users={users}
           disabled={busy || running} onSave={(userId) => onUpdate(slot, { allowedUserIds: userId ? [userId] : [] })} />
         {assignmentError && <p className="slot-user-error">{assignmentError}</p>}
-        {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} usage={usage} refreshable={slot.auth_method !== "token"} />}
+        {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={usage} refreshable={slot.auth_method !== "token"} />}
         {slot.home_dir && <SlotLogin slot={slot} disabled={busy || running} onChanged={onLoginChanged} />}
       </MobileCardDetails>
     </article>

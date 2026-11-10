@@ -99,6 +99,19 @@ API 中 `slot_mode` 表示选择方式，`slot_id` 表示实际账号。创建�
 
 **数据有效期**：最后一次额度快照保存在 Hub 数据目录中，重启后保留。临时查询失败（包括额度接口限流）会保留之前的额度并显示错误，不会判为账号缺少授权。超过 15 分钟没有更新或最近一次查询失败时显示“数据已过期”。数据按账号标识绑定，槽位改登录其他账号后旧数据会被清除。倒计时归零只表示“已到重置时间，待刷新确认”，不代表额度已经恢复。
 
+### 订阅信息
+
+槽位卡片（管理员）和「工作台设置 → 我的账号」（成员）会显示订阅档位和期限，只读取槽位中官方 CLI 保存的登录信息，不额外请求服务端：
+
+| | 档位 | 开始时间 | 到期时间 |
+| --- | --- | --- | --- |
+| Codex | ID Token 中的 `chatgpt_plan_type`，如 Plus、Pro | `chatgpt_subscription_active_start` | `chatgpt_subscription_active_until`，剩余 7 天内以警告色显示 |
+| Claude Code | `.credentials.json` 中的 `subscriptionType`，结合 `rateLimitTier` 区分 Max 5x / 20x | `oauthAccount.subscriptionCreatedAt` | Claude Code 不提供 |
+
+- Codex 的订阅信息是 ID Token 签发时的快照，令牌刷新（约每周一次）后才更新；悬停可以看到服务端最近一次核实的时间。续费后到期时间要等下次刷新才会变化。
+- 使用长期令牌的 Claude 槽位没有账号资料，不显示订阅信息。
+- 这些信息来自槽位目录，使用该槽位的智能体可以修改，只用于展示。
+
 ## 用量统计
 
 Hub 记录每一轮对话消耗的 Token，按用户、槽位和模型汇总：

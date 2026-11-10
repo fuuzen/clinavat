@@ -38,9 +38,18 @@ const models: Record<string, AgentModel[]> = {
 function usage(slotId: string): SlotUsage {
   const now = new Date().toISOString();
   const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+  const slot = db.slots.find((item) => item.id === slotId);
+  if (slot?.auth_method === "token") {
+    return { slotId, state: "unavailable", plan: null, credits: null, limited: null, observedAt: now, checkedAt: null,
+      source: "query", stale: false, refreshing: false, windows: [], subscription: null,
+      error: "长期令牌（setup-token）没有额度查询权限，额度只在对话运行时更新" };
+  }
   return {
     slotId, state: "ok", plan: "Max", credits: null, limited: false, observedAt: now, checkedAt: now,
     source: "query", stale: false, refreshing: false, error: null,
+    subscription: slot?.engine === "codex"
+      ? { plan: "pro", tier: null, startedAt: inHours(-24 * 340), expiresAt: inHours(24 * 25), verifiedAt: inHours(-30) }
+      : { plan: "max", tier: "default_claude_max_20x", startedAt: inHours(-24 * 200), expiresAt: null, verifiedAt: null },
     windows: [
       { key: "five_hour", label: "5 小时", usedPercent: 37, resetsAt: inHours(3), windowMinutes: 300 },
       { key: "seven_day", label: "7 天", usedPercent: 62, resetsAt: inHours(80), windowMinutes: 10_080 },

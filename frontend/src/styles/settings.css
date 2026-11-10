@@ -358,6 +358,12 @@
 .usage-meter-status {
   justify-content: space-between;
 }
+small.usage-subscription.warning {
+  color: var(--warning);
+}
+small.usage-subscription.critical {
+  color: var(--danger);
+}
 .usage-meter-status .icon-button {
   width: 22px;
   height: 22px;

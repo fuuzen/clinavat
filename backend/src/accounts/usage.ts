@@ -9,6 +9,7 @@ import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 import { claudeProbe, codexProbe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
+import { readSubscription, type SlotSubscription } from './subscription.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
 
@@ -38,6 +39,7 @@ export interface SlotUsageView {
   stale: boolean;
   refreshing: boolean;
   error: string | null;
+  subscription: SlotSubscription | null;
 }
 
 export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string; auth_method?: SlotAuthMethod }
@@ -56,7 +58,10 @@ interface Snapshot {
   unavailable?: string;
 }
 
-interface SlotState { snapshot?: Snapshot; checkedAt?: number; error?: string; failures?: number; inflight?: Promise<void> }
+interface SlotState {
+  snapshot?: Snapshot; checkedAt?: number; error?: string; failures?: number; inflight?: Promise<void>;
+  subscription?: SlotSubscription | null;
+}
 
 const AUTO_INTERVAL = 60_000;
 const FORCE_INTERVAL = 15_000;
@@ -226,6 +231,8 @@ export class SlotUsage {
       const state = this.state(slot.id);
       const identity = await this.identity(slot);
       this.bindIdentity(slot.id, identity);
+      // A long-lived token has no account details; any login files left in the slot are not its account.
+      state.subscription = slot.auth_method === 'token' ? null : await readSubscription(slot.home_dir, slot.engine);
       if (slot.auth_method === 'token') {
         // Only live rate-limit events carry this account's windows; there is nothing to query.
         if (!state.snapshot || state.snapshot.unavailable) state.snapshot = { accountKey: identity, plan: null, windows: new Map(),
@@ -274,6 +281,7 @@ export class SlotUsage {
       stale: !!snapshot && (Date.now() - snapshot.observedAt > STALE_AFTER || failedLater),
       refreshing: !!state.inflight,
       error: failedLater || !snapshot ? state.error ?? null : snapshot.unavailable ?? null,
+      subscription: state.subscription ?? null,
     };
   }
 

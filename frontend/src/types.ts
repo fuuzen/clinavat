@@ -201,6 +201,16 @@ export interface SlotUsage {
   stale: boolean;
   refreshing: boolean;
   error: string | null;
+  subscription: SlotSubscription | null;
+}
+
+/** Read from the slot's login files: Codex states when the paid period ends, Claude only when it began. */
+export interface SlotSubscription {
+  plan: string | null;
+  tier: string | null;
+  startedAt: string | null;
+  expiresAt: string | null;
+  verifiedAt: string | null;
 }
 
 export interface SyncScanEntry {

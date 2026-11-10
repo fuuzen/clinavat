@@ -1,11 +1,13 @@
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { errorText } from "../../api";
-import type { SlotUsage, UsageWindow } from "../../types";
+import type { Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow } from "../../useSlotUsage";
+import { subscriptionLabel, subscriptionStatus } from "./subscription";
 
 interface Props {
   slotId: string;
+  engine: Slot["engine"];
   usage?: SlotUsage;
   compact?: boolean;
   refreshable?: boolean;
@@ -50,9 +52,11 @@ function statusText(usage: SlotUsage | undefined, now: number): string {
   return parts.join(" · ");
 }
 
-export default function SlotUsageMeter({ slotId, usage, compact = false, refreshable = false,
+export default function SlotUsageMeter({ slotId, engine, usage, compact = false, refreshable = false,
   refreshRole, refreshLabel = "刷新额度" }: Props) {
   const now = useNow();
+  const plan = subscriptionLabel(engine, usage?.subscription ?? null) ?? planLabel(usage?.plan ?? null);
+  const subscription = subscriptionStatus(usage?.subscription ?? null, now);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const windows = usage?.state === "ok" ? usage.windows : [];
@@ -74,10 +78,16 @@ export default function SlotUsageMeter({ slotId, usage, compact = false, refresh
       {!compact && (
         <span className="usage-meter-heading">
           <span>额度</span>
-          {planLabel(usage?.plan ?? null) && <small>{planLabel(usage?.plan ?? null)}</small>}
+          {plan && <small>{plan}</small>}
           {usage?.limited && <span className="badge badge-amber">服务端报告额度受限</span>}
           {usage?.stale && <span className="badge">数据已过期</span>}
         </span>
+      )}
+      {!compact && subscription && (
+        <small className={`usage-subscription ${subscription.level}`}
+          title={usage?.subscription?.verifiedAt ? `订阅状态核实于 ${new Date(usage.subscription.verifiedAt).toLocaleString("zh-CN")}` : undefined}>
+          {subscription.text}
+        </small>
       )}
       {windows.map((window) => {
         const used = window.usedPercent;

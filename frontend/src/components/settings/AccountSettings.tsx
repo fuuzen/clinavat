@@ -5,13 +5,17 @@ import {
 } from "lucide-react";
 import { statusLabel } from "../../api";
 import type { Overview } from "../../types";
+import { useNow, useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
+import { subscriptionLabel, subscriptionStatus } from "../usage/subscription";
 
 export default function AccountSettings({
   overview,
 }: {
   overview: Overview;
 }) {
+  const usage = useSlotUsage(overview.slots.length > 0);
+  const now = useNow();
   return (
     <>
       <div className="settings-section-heading">
@@ -32,18 +36,24 @@ export default function AccountSettings({
         <ShieldCheck size={17} />
         <h3>获授权的账号槽位</h3>
       </div>
-      {overview.slots.length ? overview.slots.map((slot) => (
-        <div className="settings-detail-card" key={slot.id}>
-          <div>
-            <strong>{slot.label}</strong>
-            <span className={`badge ${slot.status === "IDLE" ? "badge-green" : ""}`}>
-              {slot.status === "IDLE" ? slot.in_use ? slot.in_use_by_you ? "你正在使用" : "其他用户使用中" : "可用" : statusLabel(slot.status)}
-            </span>
+      {overview.slots.length ? overview.slots.map((slot) => {
+        const subscription = usage[slot.id]?.subscription ?? null;
+        const plan = subscriptionLabel(slot.engine, subscription);
+        const status = subscriptionStatus(subscription, now);
+        return (
+          <div className="settings-detail-card" key={slot.id}>
+            <div>
+              <strong>{slot.label}</strong>
+              <span className={`badge ${slot.status === "IDLE" ? "badge-green" : ""}`}>
+                {slot.status === "IDLE" ? slot.in_use ? slot.in_use_by_you ? "你正在使用" : "其他用户使用中" : "可用" : statusLabel(slot.status)}
+              </span>
+            </div>
+            <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}{plan && ` · ${plan}`}</p>
+            {status && <small className={`usage-subscription ${status.level}`}>{status.text}</small>}
+            <small>不同对话可同时使用不同槽位，切换仅影响当前对话；此槽位同时限 1 位用户。</small>
           </div>
-          <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}</p>
-          <small>不同对话可同时使用不同槽位，切换仅影响当前对话；此槽位同时限 1 位用户。</small>
-        </div>
-      )) : (
+        );
+      }) : (
         <div className="settings-detail-card">
           <strong>尚无账号授权</strong>
           <p>联系管理员开放槽位访问权限后，即可在对话中选择账号。</p>
