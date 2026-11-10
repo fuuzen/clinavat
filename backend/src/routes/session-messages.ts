@@ -35,6 +35,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
   const original = sessionFor(context, id, user.id);
   return withResourceLocks(context, [`session:${id}`], async () => {
     const session = sessionFor(context, id, user.id);
+    if (session.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再继续');
     const project = projectFor(context, session.project_id, user.id);
     if (session.slot_mode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '当前对话自动选择账号，请勿指定固定账号');
     const currentRuntime = agents.view(id);

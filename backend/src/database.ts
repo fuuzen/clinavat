@@ -136,6 +136,7 @@ export class Store {
     this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
     // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
     this.addColumn('sessions', 'token_usage_cursor', 'TEXT');
+    this.addColumn('sessions', 'archived_at', 'TEXT');
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {

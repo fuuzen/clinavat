@@ -6,12 +6,9 @@ import {
   Folder,
   FolderPlus,
   LogOut,
-  MessageCircleQuestion,
-  MessageSquare,
   Monitor,
   MoreHorizontal,
   Network,
-  Pause,
   Pencil,
   Plus,
   Search,
@@ -23,8 +20,10 @@ import {
   X,
 } from "lucide-react";
 import Brand from "./Brand";
+import ArchivedSessions from "./sidebar/ArchivedSessions";
+import SessionRow from "./sidebar/SessionRow";
 import ClientHubSwitch from "./ClientHubSwitch";
-import { isActive, statusLabel } from "../api";
+import { statusLabel } from "../api";
 import type { DevHost, Overview, Project, Session } from "../types";
 
 interface Props {
@@ -44,6 +43,7 @@ interface Props {
     name: string,
   ) => void;
   onRename: (session: Session) => void;
+  onArchive: (session: Session, archived: boolean) => void;
   onSettings: () => void;
   adminOpen: boolean;
   onAdmin: () => void;
@@ -56,6 +56,7 @@ export default function Sidebar(props: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState("");
   const waiting = new Set(overview.deferredQuestions.map((item) => item.session_id));
+  const activeSessions = overview.sessions.filter((session) => !session.archived_at);
   function toggle(id: string) {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -127,7 +128,7 @@ export default function Sidebar(props: Props) {
               !projects.some(
                 (project) =>
                   matches(project.name) ||
-                  overview.sessions.some(
+                  activeSessions.some(
                     (session) =>
                       session.project_id === project.id &&
                       matches(session.title),
@@ -213,7 +214,7 @@ export default function Sidebar(props: Props) {
                 {!collapsed.has(host.id) && (
                   <div className="host-projects">
                     {projects.map((project) => {
-                      const sessions = overview.sessions.filter(
+                      const sessions = activeSessions.filter(
                         (session) => session.project_id === project.id,
                       );
                       if (
@@ -293,70 +294,30 @@ export default function Sidebar(props: Props) {
                                     matches(host.name),
                                 )
                                 .map((session) => (
-                                  <div
+                                  <SessionRow
                                     key={session.id}
-                                    className={`session-row ${selectedSession?.id === session.id ? "selected" : ""}`}
-                                  >
-                                    <button
-                                      className="tree-row"
-                                      onClick={() => {
-                                        props.onSelect(project, session);
-                                        props.onClose();
-                                      }}
-                                    >
-                                      {session.status === "paused" ? (
-                                        <Pause size={13} aria-label="已暂停" />
-                                      ) : isActive(session.status) ? (
-                                        <span className="running-dot" />
-                                      ) : waiting.has(session.id) ? (
-                                        <MessageCircleQuestion size={13} className="session-waiting" aria-label="有待回答的问题" />
-                                      ) : (
-                                        <MessageSquare size={13} />
-                                      )}
-                                      <span>{session.title}</span>
-                                    </button>
-                                    <div className="row-menu-anchor">
-                                      <button
-                                        className="icon-button hover-action"
-                                        onClick={() =>
-                                          setMenu(
-                                            menu === session.id
-                                              ? ""
-                                              : session.id,
-                                          )
-                                        }
-                                        aria-label="对话操作"
-                                      >
-                                        <MoreHorizontal size={13} />
-                                      </button>
-                                      {menu === session.id && (
-                                        <div className="context-menu">
-                                          <button
-                                            onClick={() => {
-                                              props.onRename(session);
-                                              setMenu("");
-                                            }}
-                                          >
-                                            重命名
-                                          </button>
-                                          <button
-                                            className="danger-text"
-                                            onClick={() => {
-                                              props.onDelete(
-                                                "session",
-                                                session.id,
-                                                session.title,
-                                              );
-                                              setMenu("");
-                                            }}
-                                          >
-                                            <Trash2 size={14} />
-                                            删除对话
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
+                                    session={session}
+                                    selected={selectedSession?.id === session.id}
+                                    waiting={waiting.has(session.id)}
+                                    menuOpen={menu === session.id}
+                                    onToggleMenu={() => setMenu(menu === session.id ? "" : session.id)}
+                                    onSelect={() => {
+                                      props.onSelect(project, session);
+                                      props.onClose();
+                                    }}
+                                    onRename={() => {
+                                      props.onRename(session);
+                                      setMenu("");
+                                    }}
+                                    onArchive={() => {
+                                      props.onArchive(session, true);
+                                      setMenu("");
+                                    }}
+                                    onDelete={() => {
+                                      props.onDelete("session", session.id, session.title);
+                                      setMenu("");
+                                    }}
+                                  />
                                 ))}
                             </div>
                           )}
@@ -377,6 +338,19 @@ export default function Sidebar(props: Props) {
               </div>
             );
           })}
+          <ArchivedSessions
+            overview={overview}
+            selectedSessionId={selectedSession?.id}
+            matches={matches}
+            menu={menu}
+            onMenu={setMenu}
+            onSelect={(project, session) => {
+              props.onSelect(project, session);
+              props.onClose();
+            }}
+            onRestore={(session) => props.onArchive(session, false)}
+            onDelete={(session) => props.onDelete("session", session.id, session.title)}
+          />
         </nav>
         <div className="sidebar-bottom">
           <button className="sidebar-settings" onClick={props.onSettings}>

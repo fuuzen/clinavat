@@ -63,6 +63,8 @@ export interface Session {
   role_preset?: RolePreset;
   question_mode?: QuestionMode | null;
   question_timeout_ms?: number | null;
+  /** Archived conversations are read-only and listed apart until restored. */
+  archived_at?: string | null;
 }
 
 /** What happens to a question nobody answers in time. */

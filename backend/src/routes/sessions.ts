@@ -15,6 +15,18 @@ import { agentModes, questionModes, rolePresets, validateSessionSettings } from 
 import { questionTimeout } from '../question-defaults.js';
 
 const identifier = z.object({ id: z.uuid() });
+
+/** Ends an idle conversation's resident CLI and slot state; fails while it still runs. */
+async function releaseSession(context: Context, id: string, userId: string): Promise<void> {
+  const current = sessionFor(context, id, userId);
+  await context.agents.reclaim(id);
+  if (context.agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)) {
+    throw new HttpError(409, '请等待会话结束并完成状态回收，或先停止会话');
+  }
+  await context.config.credentials.retrySessionRelease(id);
+  if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请先停止会话后重试');
+}
+
 export function sessionRoutes(app: FastifyInstance, context: Context) {
   const { store, events, agents, ssh, turns, questionDefaults } = context;
   app.get('/api/overview', async request => {
@@ -33,7 +45,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       // Conversations that wait for the user to answer a question asked while nobody was there.
       deferredQuestions: store.all<{ session_id: string; count: number }>(`SELECT deferred_questions.session_id,COUNT(*) AS count
         FROM deferred_questions JOIN sessions ON sessions.id=deferred_questions.session_id
-        WHERE sessions.user_id=? GROUP BY deferred_questions.session_id`, request.user.id),
+        WHERE sessions.user_id=? AND sessions.archived_at IS NULL GROUP BY deferred_questions.session_id`, request.user.id),
     };
   });
   app.post('/api/sessions', async (request, reply) => {
@@ -111,17 +123,27 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     const session = sessionFor(context, id, request.user.id);
     return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
-      const current = sessionFor(context, id, request.user.id);
-      await agents.reclaim(id);
-      if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)) {
-        throw new HttpError(409, '请等待会话结束并完成状态回收，或先停止会话');
-      }
-      await context.config.credentials.retrySessionRelease(id);
-      if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请先停止会话后重试');
+      await releaseSession(context, id, request.user.id);
       store.run('DELETE FROM sessions WHERE id=?', id);
       return { ok: true };
     });
   });
+  for (const action of ['archive', 'unarchive'] as const) {
+    app.post(`/api/sessions/:id/${action}`, async request => {
+      const { id } = identifier.parse(request.params);
+      sessionFor(context, id, request.user.id);
+      z.object({}).strict().parse(request.body ?? {});
+      return withResourceLocks(context, [`session:${id}`], async () => {
+        // Archiving also hands the slot back, so an archived conversation never holds a resident CLI.
+        if (action === 'archive') await releaseSession(context, id, request.user.id);
+        store.run(action === 'archive' ? "UPDATE sessions SET archived_at=COALESCE(archived_at,datetime('now')) WHERE id=?"
+          : 'UPDATE sessions SET archived_at=NULL WHERE id=?', id);
+        const updated = sessionFor(context, id, request.user.id);
+        events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
+        return updated;
+      });
+    });
+  }
   app.get('/api/sessions/:id/messages', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);

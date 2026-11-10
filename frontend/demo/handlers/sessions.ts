@@ -98,6 +98,13 @@ export const sessionHandlers = [
     db.sessions = db.sessions.filter((session) => session.id !== params.id);
     return ok();
   }),
+  ...(["archive", "unarchive"] as const).map((action) => http.post(`/api/sessions/:id/${action}`, ({ params }) => {
+    const session = findSession(String(params.id));
+    if (!session) return fail(404, "对话不存在");
+    if (action === "archive" && isRunning(session.id)) return fail(409, "请等待会话结束，或先停止会话");
+    session.archived_at = action === "archive" ? session.archived_at ?? timestamp() : null;
+    return HttpResponse.json(session);
+  })),
   http.get("/api/sessions/:id/messages", ({ params }) =>
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
   http.get("/api/sessions/:id/runtime", () =>
@@ -109,6 +116,7 @@ export const sessionHandlers = [
     if (!session) return fail(404, "对话不存在");
     const input = await readBody<SessionInput>(request);
     if (!input.content?.trim()) return fail(400, "请输入消息内容");
+    if (session.archived_at) return fail(409, "对话已归档，请先恢复后再继续");
     if (session.slot_mode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
     if (isRunning(session.id)) {
       // The demo agent follows a script, so it only records guidance sent during a reply.

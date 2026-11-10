@@ -36,6 +36,8 @@ export interface Session {
   role_preset: RolePreset;
   question_mode: QuestionMode | null;
   question_timeout_ms: number | null;
+  /** Archived conversations are hidden from the workspace list and accept no input until restored. */
+  archived_at: string | null;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

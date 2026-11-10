@@ -234,6 +234,17 @@ export default function App() {
     await refresh();
     notify("已删除", "success");
   }
+  async function archive(target: Session, archived: boolean) {
+    try {
+      const updated = await post<Session>(`/sessions/${target.id}/${archived ? "archive" : "unarchive"}`);
+      setOverview((current) => current
+        ? { ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) } : current);
+      if (archived && target.id === sessionId) changeSelection(projectId);
+      notify(archived ? `已归档「${target.title}」，可在侧栏的「已归档」中查看或恢复` : `已恢复「${target.title}」`, "success");
+    } catch (cause) {
+      notify(errorText(cause));
+    }
+  }
   async function logout() {
     try {
       await post("/auth/logout");
@@ -327,6 +338,7 @@ export default function App() {
         onRename={(selected) =>
           setDialog({ type: "rename", session: selected })
         }
+        onArchive={(selected, archived) => void archive(selected, archived)}
         onSettings={() => setDialog({ type: "settings" })}
         adminOpen={showAdmin}
         onAdmin={() => {
@@ -366,6 +378,7 @@ export default function App() {
           onSlotChange={changeSlot}
           onPause={runControl.pause}
           onResume={runControl.resume}
+          onRestore={(target) => archive(target, false)}
           controlPending={runControl.controlPending}
           stopPending={runControl.stopPending}
           onStop={() => void runControl.stop()}

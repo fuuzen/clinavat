@@ -121,6 +121,7 @@ export function sessionGoalRoutes(app: FastifyInstance, context: Context): void 
     const { id } = identifier.parse(request.params);
     const input = goalAction.parse(request.body);
     const original = codexSession(context, id, request.user.id);
+    if (original.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再继续');
     try {
       return await withResourceLocks(context, [`goal:${id}`], async () => {
         const session = codexSession(context, id, request.user.id);

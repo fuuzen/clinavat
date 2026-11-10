@@ -28,6 +28,7 @@ import BehaviorPicker from "./chat/native/BehaviorPicker";
 import QuestionPanel from "./chat/native/QuestionPanel";
 import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
+import ArchivedNotice from "./chat/ArchivedNotice";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
 import { useAgentBehavior } from "./chat/native/useAgentBehavior";
 import { useChatCommands } from "./chat/native/useChatCommands";
@@ -77,6 +78,7 @@ interface Props {
   onStop: () => void;
   onPause: () => Promise<boolean>;
   onResume: () => Promise<boolean>;
+  onRestore: (session: Session) => Promise<void>;
   controlPending: boolean;
   stopPending: boolean;
   onApproval: (
@@ -121,7 +123,7 @@ export default function Chat(props: Props) {
   );
   const currentEngine = accountSelection.engine;
   const { behavior, behaviorSaving, changeBehavior } = useAgentBehavior(session, project?.id, currentEngine, active, props.onBehaviorChange);
-  const goal = useCodexGoal({ sessionId: session?.id, enabled: currentEngine === "codex", connected: props.streamConnected, executing: active, onNotice: props.onNotice });
+  const goal = useCodexGoal({ sessionId: session?.id, enabled: currentEngine === "codex" && !session?.archived_at, connected: props.streamConnected, executing: active, onNotice: props.onNotice });
   const commands = useChatCommands({
     engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,
@@ -382,7 +384,8 @@ export default function Chat(props: Props) {
       {project && !props.loading && <ConversationOutline key={`${project.id}:${session?.id || "new"}`} messages={props.messages} turns={props.turns} scrollRef={scrollRef} onNavigate={() => setStickToBottom(false)} />}
       </div>
       {project && commands.help}
-      {project && (
+      {project && session?.archived_at && <ArchivedNotice session={session} onRestore={props.onRestore} />}
+      {project && !session?.archived_at && (
         <ChatComposer
           ref={composerRef}
           projectId={project.id}
