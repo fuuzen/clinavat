@@ -1,15 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { observeProcessClose, terminateProcess } from '../agent/environment.js';
-import { readJsonLines } from '../agent/ndjson.js';
-import { RpcClient } from '../agent/rpc.js';
 import type { AccountCredentials } from './credentials.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from './credential-files.js';
 import { accountIdentifier, credentialPath, type AccountEngine } from './paths.js';
 import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
-import { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
+import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
+import { claudeProbe, codexProbe } from './usage-probes.js';
+import type { SlotAuthMethod } from './slot-tokens.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
 
@@ -41,7 +40,7 @@ export interface SlotUsageView {
   error: string | null;
 }
 
-export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string }
+export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string; auth_method?: SlotAuthMethod }
 export interface ResidentUsage { update: UsageUpdate; identity: string | null }
 
 interface Snapshot {
@@ -62,12 +61,12 @@ interface SlotState { snapshot?: Snapshot; checkedAt?: number; error?: string; f
 const AUTO_INTERVAL = 60_000;
 const FORCE_INTERVAL = 15_000;
 const STALE_AFTER = 15 * 60_000;
-const PROBE_TIMEOUT = 30_000;
 const MAX_PROBES = 2;
 // Probes on busy slots must not rotate refresh tokens that a running CLI still holds.
 const TOKEN_MARGIN = 15 * 60_000;
 const CODEX_REFRESH_AGE = 7 * 24 * 3600_000;
 const SAVE_DELAY = 2_000;
+const TOKEN_USAGE_NOTE = '长期令牌（setup-token）没有额度查询权限，额度只在对话运行时更新';
 
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex').slice(0, 24); }
 
@@ -132,74 +131,6 @@ async function inspectCredential(home: string, engine: AccountEngine): Promise<C
   return { kind: 'oauth', fresh: expires > deadline && Date.now() - refreshed < CODEX_REFRESH_AGE };
 }
 
-interface Probe { execution: ExecutionHost; scope: ExecutionScope; binary: string; home: string }
-
-function probeEnvironment({ execution, scope, home }: Probe): NodeJS.ProcessEnv {
-  return { ...execution.baseEnvironment(scope), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
-    CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), SHELL: '/bin/bash' };
-}
-
-async function claudeProbe(probe: Probe): Promise<UsageUpdate> {
-  const child = await probe.execution.spawn(probe.binary, [
-    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-    '--restricted', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-    '--tools', '', '--disable-slash-commands', '--no-session-persistence',
-  ], { scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe) });
-  const closed = observeProcessClose(child);
-  child.stderr.resume();
-  let closeLines: (() => void) | undefined;
-  try {
-    const response = await new Promise<any>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Claude 额度查询超时')), PROBE_TIMEOUT);
-      const settle = (error?: Error, value?: unknown) => { clearTimeout(timer); if (error) reject(error); else resolve(value); };
-      const lines = readJsonLines(child.stdout, event => {
-        if (event.type !== 'control_response' || event.response?.request_id !== 'usage') return;
-        if (event.response.subtype !== 'success') {
-          const message = String(event.response.error || 'Claude 额度查询失败');
-          settle(new Error(message.includes('not supported') ? '当前 Claude Code 版本不支持额度查询' : message));
-        } else settle(undefined, event.response.response);
-      }, error => settle(error));
-      closeLines = lines.close;
-      child.once('error', error => settle(error));
-      child.once('close', () => settle(new Error('Claude 在返回额度前退出')));
-      child.stdin.once('error', error => settle(error));
-      for (const request of [{ request_id: 'initialize', request: { subtype: 'initialize' } },
-        { request_id: 'usage', request: { subtype: 'get_usage', skip_behaviors: true } }]) {
-        child.stdin.write(JSON.stringify({ type: 'control_request', ...request }) + '\n');
-      }
-    });
-    return parseClaudeUsage(response);
-  } finally {
-    closeLines?.();
-    child.stdin.end();
-    terminateProcess(child);
-    await closed;
-  }
-}
-
-async function codexProbe(probe: Probe): Promise<UsageUpdate> {
-  const child = await probe.execution.spawn(probe.binary, ['-c', 'cli_auth_credentials_store="file"', 'app-server'], {
-    scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe),
-  });
-  const closed = observeProcessClose(child);
-  child.stderr.resume();
-  const rpc = new RpcClient(child, async message => {
-    if (message.id !== undefined && message.method) rpc.send({ id: message.id, error: { code: -32601, message: 'Usage probe only' } });
-  }, () => undefined);
-  try {
-    await rpc.request('initialize', {
-      clientInfo: { name: 'clinavat_usage', title: 'Clinavat Usage', version: '0.1.0' }, capabilities: { experimentalApi: true },
-    }, PROBE_TIMEOUT);
-    rpc.send({ method: 'initialized', params: {} });
-    return parseCodexRead(await rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true }, PROBE_TIMEOUT));
-  } finally {
-    rpc.close();
-    child.stdin.end();
-    terminateProcess(child);
-    await closed;
-  }
-}
-
 export class SlotUsage {
   readResident: (slot: UsageSlot) => Promise<ResidentUsage | undefined> = async () => undefined;
   private states = new Map<string, SlotState>();
@@ -261,12 +192,17 @@ export class SlotUsage {
     return state;
   }
 
+  private async identity(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>): Promise<string | null> {
+    const token = await this.credentials.tokenIdentity(slot.id).catch(() => null);
+    return token === undefined ? accountKey(slot.home_dir, slot.engine) : token;
+  }
+
   accountIdentity(slotId: string): string | null {
     return this.identities.has(slotId) ? this.identities.get(slotId)! : this.state(slotId).snapshot?.accountKey ?? null;
   }
 
   async captureIdentity(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>): Promise<string | null> {
-    const identity = await accountKey(slot.home_dir, slot.engine);
+    const identity = await this.identity(slot);
     this.bindIdentity(slot.id, identity);
     return identity;
   }
@@ -288,8 +224,15 @@ export class SlotUsage {
     const result: Record<string, SlotUsageView> = {};
     for (const slot of slots) {
       const state = this.state(slot.id);
-      const identity = await accountKey(slot.home_dir, slot.engine);
+      const identity = await this.identity(slot);
       this.bindIdentity(slot.id, identity);
+      if (slot.auth_method === 'token') {
+        // Only live rate-limit events carry this account's windows; there is nothing to query.
+        if (!state.snapshot || state.snapshot.unavailable) state.snapshot = { accountKey: identity, plan: null, windows: new Map(),
+          credits: null, limited: null, observedAt: Date.now(), source: 'query', unavailable: TOKEN_USAGE_NOTE };
+        result[slot.id] = this.view(slot.id);
+        continue;
+      }
       const interval = Math.min(AUTO_INTERVAL * 2 ** (state.failures ?? 0), STALE_AFTER);
       const lastUpdate = Math.max(state.checkedAt ?? 0, state.snapshot?.observedAt ?? 0);
       if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - lastUpdate >= interval) {
@@ -303,6 +246,7 @@ export class SlotUsage {
   async refresh(slot: UsageSlot): Promise<SlotUsageView> {
     const state = this.state(slot.id);
     if (slot.status === 'DISABLED') throw new Error('槽位已停用，不查询额度');
+    if (slot.auth_method === 'token') throw new Error(TOKEN_USAGE_NOTE);
     await this.captureIdentity(slot);
     if (state.inflight) await state.inflight;
     else if (Date.now() - (state.checkedAt ?? 0) >= FORCE_INTERVAL) await this.query(slot);
@@ -337,7 +281,7 @@ export class SlotUsage {
   observe(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, kind: 'codex-read' | 'codex-event' | 'claude-event', payload: unknown,
     identity?: string | null): void {
     void (async () => {
-      const sourceIdentity = identity === undefined ? await accountKey(slot.home_dir, slot.engine) : identity;
+      const sourceIdentity = identity === undefined ? await this.identity(slot) : identity;
       const update = kind === 'codex-read' ? parseCodexRead(payload) : kind === 'codex-event' ? parseCodexEvent(payload) : parseClaudeEvent(payload);
       if (!update.windows.length && update.limited === undefined && kind !== 'codex-read') return;
       await this.apply(slot, update, kind === 'codex-read' ? 'replace' : 'merge', kind === 'codex-read' ? 'query' : 'event', sourceIdentity);
@@ -347,7 +291,7 @@ export class SlotUsage {
   private async apply(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, update: UsageUpdate, mode: 'replace' | 'merge',
     source: Snapshot['source'], sourceIdentity?: string | null) {
     const state = this.state(slot.id);
-    const currentIdentity = await accountKey(slot.home_dir, slot.engine);
+    const currentIdentity = await this.identity(slot);
     this.identities.set(slot.id, currentIdentity);
     const changed = sourceIdentity !== undefined && (source === 'event'
       ? sourceIdentity === null || sourceIdentity !== currentIdentity : !sameAccount(sourceIdentity, currentIdentity));
@@ -397,7 +341,7 @@ export class SlotUsage {
       this.notify(slot.id);
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
-          const sourceIdentity = await accountKey(slot.home_dir, slot.engine);
+          const sourceIdentity = await this.identity(slot);
           const result = await this.limited(async () => await this.readResident(slot)
             ?? { update: await this.probe(slot), identity: sourceIdentity });
           await this.apply(slot, result.update, 'replace', 'query', result.identity);

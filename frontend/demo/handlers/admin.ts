@@ -31,7 +31,7 @@ export const adminHandlers = [
     const input = await readBody<{ id?: string; label?: string; engine?: Slot["engine"] }>(request);
     const engine = input.engine || "claude";
     const slot: Slot = {
-      id: input.id || crypto.randomUUID(), label: input.label || "新槽位", engine, status: "IDLE", allowed_user_ids: [],
+      id: input.id || crypto.randomUUID(), label: input.label || "新槽位", engine, status: "IDLE", auth_method: "oauth", allowed_user_ids: [],
       max_concurrent_users: 1, in_use: false, in_use_by_you: false, active_user_id: null,
       home_dir: `/data/slots/${input.id || engine}`, credential_revision: 1, updated_at: timestamp(),
     };
@@ -42,6 +42,21 @@ export const adminHandlers = [
     runsIn: "vm",
     command: `lxc exec clinavat-host:s-demo --project clinavat -t -- setpriv --reuid=1000 --regid=1000 --clear-groups -- claude auth login  # ${String(params.id)}`,
   })),
+  http.put("/api/admin/slots/:id/setup-token", async ({ params, request }) => {
+    const slot = db.slots.find((item) => item.id === params.id);
+    if (!slot) return fail(404, "槽位不存在");
+    if (slot.engine !== "claude") return fail(400, "只有 Claude Code 槽位支持长期令牌");
+    const { token } = await readBody<{ token?: string }>(request);
+    if (!/^sk-ant-oat[A-Za-z0-9_-]{20,500}$/.test(token?.trim() || "")) return fail(400, "请粘贴 claude setup-token 输出的完整令牌（以 sk-ant-oat 开头）");
+    Object.assign(slot, { auth_method: "token", credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
+    return HttpResponse.json(slot);
+  }),
+  http.delete("/api/admin/slots/:id/setup-token", ({ params }) => {
+    const slot = db.slots.find((item) => item.id === params.id);
+    if (!slot) return fail(404, "槽位不存在");
+    Object.assign(slot, { auth_method: "oauth", credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
+    return HttpResponse.json(slot);
+  }),
   http.patch("/api/admin/slots/:id", async ({ params, request }) => {
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");

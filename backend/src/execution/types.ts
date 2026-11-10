@@ -22,6 +22,8 @@ export interface ExecutionSpawnOptions {
   scope: ExecutionScope;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** Variables that must never appear on a command line, such as account tokens; requires a piped stdin. */
+  secrets?: Record<string, string>;
   stdin?: 'pipe' | 'ignore';
 }
 

@@ -81,11 +81,14 @@ export class SlotSelector {
     catch (error) { if (error instanceof HttpError) return undefined; throw error; }
     const occupant = this.config.credentials.activeUserId(slot.id);
     if (current.credential_revision !== slot.credential_revision || occupant && occupant !== userId || this.blocked(current, model)) return undefined;
+    // A long-lived token cannot read its quota, so it never proves enough headroom for automatic use.
+    if (current.auth_method === 'token') return undefined;
     const headroom = remaining(this.config.usage.view(slot.id), model);
     return headroom !== null && headroom >= this.config.autoSlotMinRemainingPercent ? current : undefined;
   }
 
   async ensureEligible(slot: Slot, userId: string, model?: string | null): Promise<void> {
+    if (slot.auth_method === 'token') throw new HttpError(409, '使用长期令牌的账号不参与自动选择，请改为固定账号');
     const view = (await this.config.usage.views([slot]))[slot.id];
     if (remaining(view, model) === null) await this.config.usage.refresh(slot);
     if (!this.eligible(slot, userId, model)) throw new HttpError(409, '账号额度、权限或占用状态已变化，请重新选择可用账号');
@@ -112,7 +115,7 @@ export class SlotSelector {
     if (request.engine !== 'claude') throw new HttpError(409, 'Codex 尚未完成跨账号验证，请选择固定账号');
     const excluded = new Set(request.exclude);
     const slots = availableSlots(this.store, request.userId).filter(slot => slot.engine === request.engine
-      && slot.status === 'IDLE' && !excluded.has(slot.id));
+      && slot.status === 'IDLE' && slot.auth_method !== 'token' && !excluded.has(slot.id));
     const inspected = await Promise.all(slots.map(slot => this.inspect(slot, request)));
     request.signal?.throwIfAborted();
     const candidates = inspected.filter((slot): slot is Slot => slot !== null)
@@ -123,7 +126,7 @@ export class SlotSelector {
       .sort((a, b) => Number(b.slot.id === request.preferredSlotId) - Number(a.slot.id === request.preferredSlotId)
         || b.headroom - a.headroom || a.slot.id.localeCompare(b.slot.id)).map(item => item.slot);
     if (!candidates.length) throw new HttpError(409,
-      `没有可自动使用的 Claude 账号：需要访问权限、可用出口、最新额度，且相关窗口至少剩余 ${this.config.autoSlotMinRemainingPercent}%`);
+      `没有可自动使用的 Claude 账号：需要浏览器登录、访问权限、可用出口、最新额度，且相关窗口至少剩余 ${this.config.autoSlotMinRemainingPercent}%`);
     return candidates;
   }
 
@@ -132,7 +135,7 @@ export class SlotSelector {
     let lastError: unknown;
     const excluded = [...(request.exclude ?? [])];
     const preferred = availableSlots(this.store, request.userId).find(slot => slot.id === request.preferredSlotId
-      && slot.engine === 'claude' && slot.status === 'IDLE' && !excluded.includes(slot.id));
+      && slot.engine === 'claude' && slot.status === 'IDLE' && slot.auth_method !== 'token' && !excluded.includes(slot.id));
     if (preferred) {
       // Staying on a usable account must not boot every other slot merely to rediscover the same choice.
       const ready = await this.inspect(preferred, request);

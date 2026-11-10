@@ -28,7 +28,7 @@ export class ProcessExecutionHost implements ExecutionHost {
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
     return spawn(binary, args, {
-      cwd: options.cwd, env: options.env, detached: process.platform !== 'win32',
+      cwd: options.cwd, env: { ...options.env, ...options.secrets }, detached: process.platform !== 'win32',
       stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
   }

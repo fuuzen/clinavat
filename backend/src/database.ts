@@ -124,6 +124,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
     `);
     this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
+    this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {
       this.addColumn(table, 'question_mode', "TEXT CHECK(question_mode IN ('skip','defer'))");

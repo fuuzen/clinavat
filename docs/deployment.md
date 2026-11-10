@@ -20,7 +20,7 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 
 | 变量 | 说明 |
 | --- | --- |
-| `CLINAVAT_MASTER_KEY` | **必填**。64 位十六进制主密钥，用 `openssl rand -hex 32` 生成。用于加密保存 SSH 私钥，丢失后已保存的私钥无法解密，必须长期保留 |
+| `CLINAVAT_MASTER_KEY` | **必填**。64 位十六进制主密钥，用 `openssl rand -hex 32` 生成。用于加密保存 SSH 私钥和 Claude 长期令牌，丢失后已保存的私钥和令牌无法解密，必须长期保留 |
 | `CLINAVAT_DATA_DIR` | 数据目录（数据库、密钥、槽位授权等），默认 `~/.local/share/clinavat`；相对路径相对于 `backend/` |
 | `CLINAVAT_WORKSPACE_DIR` | 项目镜像目录，默认 `/var/tmp/clinavat-workspace` |
 | `CLINAVAT_HOST` / `CLINAVAT_PORT` | Hub 监听地址，默认 `127.0.0.1:3001` |

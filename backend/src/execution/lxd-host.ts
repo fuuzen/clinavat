@@ -317,11 +317,19 @@ export class LxdExecutionHost implements ExecutionHost {
   private runId(scope: ExecutionScope): string { return `${scope.userId ? 'run' : 'probe'}-${randomBytes(12).toString('hex')}`; }
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
+    const secrets = Object.entries(options.secrets ?? {});
+    if (secrets.some(([name, value]) => !/^[A-Z][A-Z0-9_]*$/.test(name) || /[\r\n]/.test(value))) throw new Error('运行凭据格式无效');
+    if (secrets.length && options.stdin === 'ignore') throw new Error('传递运行凭据需要标准输入');
     const machine = await this.attach(options.scope);
     const id = this.runId(options.scope);
-    const child = spawn(this.config.lxcBinary, this.execArguments(machine, this.command(id, options.cwd, binary, args), options.env), {
+    const env = secrets.length ? { ...options.env, CLINAVAT_SECRET_NAMES: secrets.map(([name]) => name).join(' ') } : options.env;
+    const child = spawn(this.config.lxcBinary, this.execArguments(machine, this.command(id, options.cwd, binary, args), env), {
       env: childEnvironment(), detached: true, stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
+    // The run script reads these lines before the command starts; later writes reach the command itself.
+    // A failed write surfaces as the run's own exit, before the caller attaches its handlers.
+    if (secrets.length) child.stdin.on('error', () => undefined);
+    for (const [, value] of secrets) child.stdin.write(`${value}\n`);
     delegateSuspension(child, {
       freeze: async () => {
         const result = await this.exec(machine, ['bash', '-c', freezeScript, 'clinavat-freeze', id]);

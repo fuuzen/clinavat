@@ -6,6 +6,7 @@ import { credentialHash, privateDirectory, readAccountCredential, readPrivateJso
 import { accountIdentifier, type AccountEngine } from './paths.js';
 import { assertSlotSessionState, bindSlotSessionState, detachSlotSessionState } from './session-state/index.js';
 import { initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
+import type { SlotAuthMethod, SlotTokens } from './slot-tokens.js';
 import type { ExecutionHost } from '../execution/types.js';
 
 interface CredentialContext {
@@ -26,7 +27,7 @@ interface LeaseRelease {
   lease: SlotLease; sessionId: string; projectId?: string;
   counted: boolean; released: boolean; pending?: Promise<void>;
 }
-interface CurrentSlot { home_dir: string; engine: AccountEngine; credential_revision: number; status: string }
+interface CurrentSlot { home_dir: string; engine: AccountEngine; credential_revision: number; status: string; auth_method: SlotAuthMethod }
 
 export class AccountCredentials {
   private leases = new Map<string, SlotLease>();
@@ -40,7 +41,7 @@ export class AccountCredentials {
   reclaimIdle: (slotId: string) => Promise<void> = async () => undefined;
 
   constructor(private dataDir: string, private store: Store, private execution: ExecutionHost,
-    private onSlotActivity?: (slotId: string) => void) {}
+    readonly tokens: SlotTokens, private onSlotActivity?: (slotId: string) => void) {}
 
   isUserBusy(userId: string): boolean { return [...this.leases.values()].some(lease => lease.journal.userId === userId); }
   isSlotBusy(slotId: string): boolean { return this.leases.has(slotId); }
@@ -64,7 +65,29 @@ export class AccountCredentials {
     this.currentSlot(journal, true);
     const lease = this.leases.get(journal.slotId);
     if (lease) { await lease.ready; this.assertHealthy(lease); }
-    return credentialHash(await readAccountCredential(journal.home, journal.engine));
+    return credentialHash(await this.loginCredential(journal));
+  }
+
+  /** Variables that authenticate a CLI without a credential file; never place them on a command line. */
+  async secretEnvironment(slotId: string): Promise<Record<string, string>> {
+    if (this.authMethod(slotId) !== 'token') return {};
+    const token = await this.tokens.read(slotId);
+    if (!token) throw new HttpError(409, '授权槽位尚未设置长期令牌，请联系管理员');
+    return { CLAUDE_CODE_OAUTH_TOKEN: token };
+  }
+
+  /** The account behind a long-lived token; undefined when the slot uses a browser login. */
+  async tokenIdentity(slotId: string): Promise<string | null | undefined> {
+    return this.authMethod(slotId) === 'token' ? this.tokens.identity(slotId) : undefined;
+  }
+
+  private authMethod(slotId: string): SlotAuthMethod | undefined {
+    return this.store.get<{ auth_method: SlotAuthMethod }>('SELECT auth_method FROM account_slots WHERE id=?', slotId)?.auth_method;
+  }
+
+  private async loginCredential(journal: SlotJournal): Promise<string | undefined> {
+    if (this.currentSlot(journal).auth_method !== 'token') return readAccountCredential(journal.home, journal.engine);
+    return await this.tokens.identity(journal.slotId) ?? undefined;
   }
 
   // Runs a short task while no lease exists; new leases wait for it. Returns undefined when the slot is in use.
@@ -210,7 +233,7 @@ export class AccountCredentials {
   }
 
   private currentSlot(journal: SlotJournal, requireAccess = false): CurrentSlot {
-    const slot = this.store.get<CurrentSlot>('SELECT home_dir,engine,credential_revision,status FROM account_slots WHERE id=?', journal.slotId);
+    const slot = this.store.get<CurrentSlot>('SELECT home_dir,engine,credential_revision,status,auth_method FROM account_slots WHERE id=?', journal.slotId);
     if (!slot || slot.home_dir !== journal.home || slot.engine !== journal.engine || slot.credential_revision !== journal.revision) {
       throw new HttpError(409, '槽位配置发生变化，已保留用户状态，请刷新或检查恢复日志');
     }
@@ -224,7 +247,7 @@ export class AccountCredentials {
     this.currentSlot(journal, true);
     await this.execution.assertReleased(journal.home);
     if (await readPrivateJson(this.file(journal.slotId))) throw new Error('槽位仍有未处理的运行恢复日志，请先重启 Hub 完成恢复');
-    if (await readAccountCredential(journal.home, journal.engine) === undefined) {
+    if (await this.loginCredential(journal) === undefined) {
       throw new HttpError(409, `授权槽位尚未完成 ${journal.engine} 登录，请联系管理员`);
     }
     await initializeSlotProfile(this.dataDir, journal.slotId, journal.home, journal.engine);

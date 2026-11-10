@@ -95,6 +95,7 @@ async function claudeModels(config: AgentConfig, context: AgentContext): Promise
     '--tools', '', '--disable-slash-commands', '--no-session-persistence',
   ], {
     scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
+    secrets: await config.credentials.secretEnvironment(context.slot.id),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();

@@ -5,10 +5,11 @@ import { requireAdmin, publicUser } from '../auth.js';
 import { HttpError, type Host, type Project, type Slot, type User } from '../models.js';
 import { withResourceLocks, type Context } from '../context.js';
 import { createUser, credentials } from '../users.js';
-import { updateSlot } from '../accounts/assignments.js';
+import { setSlotToken, updateSlot } from '../accounts/assignments.js';
 import { availableSlots, serializeAdminSlot, serializeUserSlot } from '../accounts/access.js';
 import { privateDirectory } from '../accounts/credential-files.js';
 import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
+import { parseSetupToken } from '../accounts/slot-tokens.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export function adminRoutes(app: FastifyInstance, context: Context) {
@@ -102,6 +103,7 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     const { id } = z.object({ id: slotId }).parse(request.params);
     const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', id);
     if (!slot) throw new HttpError(404, '槽位不存在');
+    if (slot.auth_method === 'token') throw new HttpError(409, '该槽位使用长期令牌，请先改回浏览器登录');
     return withResourceLocks(context, [`slot-config:${id}`], async () => {
       await context.agents.reclaimWhere({ slotId: id });
       const prepared = await config.credentials.whileIdle(id, async () => {
@@ -118,6 +120,17 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
       if (!prepared) throw new HttpError(409, '该槽位正在使用或查询额度，请结束后再生成登录命令');
       return prepared.value;
     });
+  });
+  app.put('/api/admin/slots/:id/setup-token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+    requireAdmin(request);
+    const { id } = z.object({ id: slotId }).parse(request.params);
+    const { token } = z.object({ token: z.string().max(1000) }).strict().parse(request.body);
+    return serializeAdminSlot(context, await setSlotToken(context, id, parseSetupToken(token)));
+  });
+  app.delete('/api/admin/slots/:id/setup-token', async request => {
+    requireAdmin(request);
+    const { id } = z.object({ id: slotId }).parse(request.params);
+    return serializeAdminSlot(context, await setSlotToken(context, id, null));
   });
   app.patch('/api/admin/slots/:id', async request => {
     requireAdmin(request);

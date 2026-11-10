@@ -1,10 +1,8 @@
-import { useState } from "react";
-import { LoaderCircle, ShieldCheck, Terminal } from "lucide-react";
-import { errorText, post } from "../../api";
+import { ShieldCheck } from "lucide-react";
 import type { Slot, SlotUsage, User } from "../../types";
 import SlotUsageMeter from "../usage/SlotUsageMeter";
 import MobileCardDetails from "../admin/MobileCardDetails";
-import { CopyButton } from "../Dialogs";
+import SlotLogin from "./SlotLogin";
 import SlotUserPicker from "./SlotUserPicker";
 import "../../styles/slot-admin-card.css";
 
@@ -14,38 +12,12 @@ interface Props {
   users: User[];
   busy: boolean;
   onUpdate: (slot: Slot, values: Record<string, unknown>) => Promise<void>;
+  onLoginChanged: (slot: Slot, message: string) => Promise<void>;
   assignmentVersion?: number;
   assignmentError?: string;
 }
 
-/** The server prepares the slot's machine first, so the login itself runs where the slot's conversations run. */
-function LoginCommand({ slot }: { slot: Slot }) {
-  const [command, setCommand] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  async function prepare() {
-    setLoading(true);
-    setError("");
-    try { setCommand((await post<{ command: string }>(`/admin/slots/${encodeURIComponent(slot.id)}/login-command`)).command); }
-    catch (cause) { setError(errorText(cause)); }
-    finally { setLoading(false); }
-  }
-  return (
-    <details>
-      <summary><Terminal size={12} />服务器登录命令</summary>
-      <p className="slot-login-note">请先停止使用该槽位的任务，并确认槽位已绑定出口，再以运行服务的系统用户在服务器终端执行。</p>
-      {command ? <><pre>{command}</pre><CopyButton value={command} /></> : (
-        <button type="button" className="button-secondary" disabled={loading} onClick={() => void prepare()}>
-          {loading && <LoaderCircle className="spin" size={13} aria-hidden="true" />}
-          {loading ? "正在准备登录环境…" : "生成登录命令"}
-        </button>
-      )}
-      {error && <p className="slot-user-error">{error}</p>}
-    </details>
-  );
-}
-
-export default function SlotCard({ slot, usage, users, busy, onUpdate, assignmentVersion = 0, assignmentError }: Props) {
+export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginChanged, assignmentVersion = 0, assignmentError }: Props) {
   const allowedIds = slot.allowed_user_ids || [];
   const shared = allowedIds.length > 1;
   const owner = allowedIds.length === 1 ? users.find((user) => user.id === allowedIds[0]) : undefined;
@@ -58,7 +30,7 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, assignmen
         <span className="slot-icon"><ShieldCheck size={17} /></span>
         <div>
           <strong>{slot.label}</strong>
-          <small>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}</small>
+          <small>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}{slot.auth_method === "token" ? " · 长期令牌" : ""}</small>
         </div>
         <button type="button" role="switch" className="slot-enabled-switch" aria-label={`${slot.label}启用状态`}
           aria-checked={enabled} disabled={busy || running}
@@ -72,8 +44,8 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, assignmen
         <SlotUserPicker key={`${slot.id}:${slot.credential_revision}:${assignmentVersion}`} slot={slot} users={users}
           disabled={busy || running} onSave={(userId) => onUpdate(slot, { allowedUserIds: userId ? [userId] : [] })} />
         {assignmentError && <p className="slot-user-error">{assignmentError}</p>}
-        {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} usage={usage} refreshable />}
-        {slot.home_dir && <LoginCommand slot={slot} />}
+        {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} usage={usage} refreshable={slot.auth_method !== "token"} />}
+        {slot.home_dir && <SlotLogin slot={slot} disabled={busy || running} onChanged={onLoginChanged} />}
       </MobileCardDetails>
     </article>
   );

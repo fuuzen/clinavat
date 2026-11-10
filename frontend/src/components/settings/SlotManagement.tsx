@@ -95,6 +95,18 @@ export default function SlotManagement({
       setBusy(false);
     }
   }
+  async function loginChanged(updated: Slot, message: string) {
+    setError("");
+    setSlots((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setSuccess(message);
+    const [reloadResult, overviewResult] = await Promise.allSettled([load(), onRefresh()]);
+    if (reloadResult.status === "rejected") {
+      setRequiresReload(true);
+      setError(`登录方式已更新，但列表刷新失败：${errorText(reloadResult.reason)}。请刷新后再操作。`);
+    } else if (overviewResult.status === "rejected") {
+      setError(`登录方式已更新，但工作台刷新失败：${errorText(overviewResult.reason)}。`);
+    }
+  }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -109,7 +121,7 @@ export default function SlotManagement({
       });
       setAdding(false);
       await Promise.all([load(), onRefresh()]);
-      setSuccess("槽位已创建，请完成官方 CLI 登录，并在卡片中选择使用者。");
+      setSuccess("槽位已创建，请完成官方 CLI 登录（Claude 也可改用长期令牌），并在卡片中选择使用者。");
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -206,6 +218,7 @@ export default function SlotManagement({
                 users={users}
                 busy={busy || requiresReload}
                 onUpdate={update}
+                onLoginChanged={loginChanged}
                 assignmentVersion={assignmentVersions[slot.id] || 0}
                 assignmentError={assignmentErrors[slot.id]}
               />

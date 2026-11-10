@@ -31,6 +31,7 @@ import { SiteSettingsService } from './site-settings.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 import type { AgentContext } from './agent/types.js';
 import { AccountCredentials } from './accounts/credentials.js';
+import { SlotTokens } from './accounts/slot-tokens.js';
 import { ensureClaudeSlotIdentity } from './accounts/claude-identity.js';
 import { SlotUsage } from './accounts/usage.js';
 import { SlotSelector } from './accounts/selection.js';
@@ -62,7 +63,9 @@ for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('
   await execution.assertReleased(slot.home_dir);
   if (slot.engine === 'claude') await ensureClaudeSlotIdentity(config.dataDir, slot.id, slot.home_dir);
 }
-const credentials = new AccountCredentials(config.dataDir, store, execution, slotId => onSlotActivity(slotId));
+const ssh = new SshManager(config);
+const credentials = new AccountCredentials(config.dataDir, store, execution, new SlotTokens(config.dataDir, ssh.keys),
+  slotId => onSlotActivity(slotId));
 await credentials.recover();
 const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
@@ -76,7 +79,6 @@ await usage.init();
 // Slot machines exist only with the VM host, and only then does a slot need a gateway binding.
 const slotMachines = config.executionHost === 'lxd' ? machines : undefined;
 let gateway: GatewayService | undefined;
-const ssh = new SshManager(config);
 const hostCommands = execution.kind === 'vm' ? new HostCommands(config, ssh.keys) : undefined;
 const agentConfig = { ...config, credentials, usage, execution,
   egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } },

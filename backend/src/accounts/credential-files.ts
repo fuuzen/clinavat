@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { HttpError } from '../models.js';
 import { openContained } from '../runtime/contained-files.js';
@@ -77,4 +77,17 @@ export async function readAccountCredential(home: string, engine: AccountEngine)
     }
   }
   return Object.keys(fields).length ? JSON.stringify(fields) : undefined;
+}
+
+/** Drops a browser login from a Claude slot so that only its long-lived token can authenticate the CLI. */
+export async function clearClaudeLogin(home: string): Promise<void> {
+  for (const [relative, key] of [[join('.claude', '.credentials.json'), 'claudeAiOauth'],
+    ...claudeConfigFiles.map(file => [file, 'oauthAccount'])]) {
+    const file = join(home, relative);
+    const content = await readPrivateJson(file, home);
+    if (content === undefined) continue;
+    const { [key]: _removed, ...rest } = JSON.parse(content) as Record<string, unknown>;
+    if (Object.keys(rest).length) await writePrivateJson(file, JSON.stringify(rest));
+    else await rm(file, { force: true });
+  }
 }

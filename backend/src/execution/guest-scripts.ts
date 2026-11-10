@@ -24,6 +24,9 @@ finish() {
 /** Runs a command as the unprivileged user in its own cgroup: $1 run id, $2 uid, $3 gid, $4 cwd, then the command. */
 export const runScript = preamble + String.raw`
 id="$1"; uid="$2"; gid="$3"; cwd="$4"; shift 4
+# Secrets arrive as the first stdin lines, in the order named, so that they never appear on a command line.
+for name in \${CLINAVAT_SECRET_NAMES:-}; do IFS= read -r value; export "$name=$value"; done
+unset CLINAVAT_SECRET_NAMES name value
 group="$groups/$id"
 mkdir "$group"
 echo "$$" > "$markers/$id"
@@ -41,7 +44,7 @@ while :; do
 done
 finish "$id"
 exit "$status"
-`;
+`.replaceAll('\\${', '${');
 
 /** Starts the user's Mutagen daemon in a cgroup that outlives the commands talking to it: $1 uid, $2 gid, $3 binary. */
 export const daemonScript = preamble + String.raw`

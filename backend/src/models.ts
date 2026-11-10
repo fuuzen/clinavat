@@ -8,6 +8,8 @@ export interface User {
 export interface Slot {
   id: string; label: string; home_dir: string; engine: 'claude' | 'codex';
   status: 'IDLE' | 'RATE_LIMITED' | 'DISABLED';
+  /** `token` slots authenticate with a long-lived `claude setup-token` token instead of a browser login. */
+  auth_method: 'oauth' | 'token';
   credential_revision: number;
   updated_at: string;
 }

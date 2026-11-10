@@ -54,6 +54,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
     scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
+    secrets: await services.config.credentials.secretEnvironment(services.context.slot.id),
   });
   services.control.track(child);
   const closed = observeProcessClose(child);

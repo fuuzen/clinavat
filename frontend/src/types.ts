@@ -11,6 +11,7 @@ export interface Slot {
   label: string;
   engine: "claude" | "codex";
   status: "IDLE" | "RATE_LIMITED" | "DISABLED";
+  auth_method: "oauth" | "token";
   allowed_user_ids?: string[];
   max_concurrent_users: 1;
   in_use: boolean;
