@@ -17,6 +17,7 @@ npm run dev                 # 同时启动后端和前端
 
 ```bash
 npm run check   # 前后端类型检查
+npm run prices:update -w backend   # 更新用量统计使用的模型价格快照
 npm run build   # 构建项目目录内的 backend/dist 和 frontend/dist，不影响运行目录中的线上服务
 npm start       # 只启动后端；生产环境的前端由 Web 入口托管
 ```
@@ -48,6 +49,7 @@ backend/src/
   gateway/     上游网关控制
   routes/      HTTP API
   runtime/     SSH、密钥加密、同步、remote-shell、终端
+  token-usage/ Token 用量记录与价格快照
   server.ts    后端入口
 frontend/src/
   components/  界面组件

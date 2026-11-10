@@ -240,3 +240,27 @@ export interface SessionRuntime {
   switching?: { fromSlotId: string; attempt: number; targetSlotId?: string };
   settling?: boolean;
 }
+
+/** Tokens and API-price cost per user, slot and model over a period; `unpriced` records lack a known price. */
+export interface TokenUsageRow {
+  user_id: string;
+  username: string | null;
+  slot_id: string;
+  slot_label: string | null;
+  engine: "claude" | "codex";
+  model: string;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number | null;
+  unpriced: number;
+  last_used_at: string;
+}
+
+export interface TokenUsageReport {
+  days: number;
+  priceSnapshotDate: string;
+  rows: TokenUsageRow[];
+}

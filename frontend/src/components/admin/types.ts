@@ -7,7 +7,8 @@ export type AdminTab =
   | "users"
   | "slots"
   | "gateway"
-  | "questions";
+  | "questions"
+  | "usage";
 
 export interface AdminHealth {
   status: string;

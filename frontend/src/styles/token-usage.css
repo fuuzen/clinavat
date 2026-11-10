@@ -1,0 +1,30 @@
+.token-usage { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.token-usage-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.token-usage-toolbar select { width: auto; margin-left: auto; font-size: 12px; }
+.token-usage-summary { display: flex; gap: 22px; }
+.token-usage-summary > span { display: flex; flex-direction: column; gap: 3px; }
+.token-usage-summary small { font-size: 11px; color: var(--muted); }
+.token-usage-summary strong { font-size: 18px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+.token-usage-scroll { overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); }
+.token-usage-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.token-usage-table th,
+.token-usage-table td { padding: 8px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.token-usage-table th { font-size: 11px; font-weight: 450; color: var(--muted); background: var(--panel); }
+.token-usage-table th:first-child,
+.token-usage-table td:first-child { text-align: left; white-space: normal; min-width: 140px; }
+.token-usage-table tbody tr:last-child td { border-bottom: 0; }
+.token-usage-group button { display: flex; align-items: flex-start; gap: 6px; padding: 0; color: var(--text); text-align: left; }
+.token-usage-group button svg { flex-shrink: 0; margin-top: 2px; color: var(--muted); transition: transform .15s; }
+.token-usage-group button svg.open { transform: rotate(90deg); }
+.token-usage-group button span { display: flex; flex-direction: column; gap: 3px; }
+.token-usage-group strong { font-weight: 500; overflow-wrap: anywhere; }
+.token-usage-table small { display: block; font-size: 11px; color: var(--muted); }
+.token-usage-model td { color: var(--text-secondary); background: var(--panel); }
+.token-usage-model td:first-child { padding-left: 29px; overflow-wrap: anywhere; }
+.token-usage-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; }
+@media (max-width: 700px) {
+  .token-usage-secondary { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .token-usage-group button svg { transition: none; }
+}

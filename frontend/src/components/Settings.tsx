@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import {
+  BarChart3,
   CircleUserRound,
   MessageCircleQuestion,
   Palette,
@@ -10,6 +11,7 @@ import { Modal } from "./Dialogs";
 import AccountSettings from "./settings/AccountSettings";
 import ServiceStatus from "./settings/ServiceStatus";
 import QuestionSettings from "./settings/QuestionSettings";
+import TokenUsageSettings from "./settings/TokenUsageSettings";
 
 const AppearanceSettings = lazy(() => import("./settings/AppearanceSettings"));
 
@@ -19,13 +21,13 @@ interface Props {
 }
 
 export default function Settings({ overview, onClose }: Props) {
-  const [tab, setTab] = useState<"account" | "conversation" | "appearance" | "system">(
+  const [tab, setTab] = useState<"account" | "usage" | "conversation" | "appearance" | "system">(
     "account",
   );
   return (
     <Modal
       title="工作台设置"
-      subtitle="管理个人账号和对话默认值、调整工作台外观，查看连接与服务状态。"
+      subtitle="管理个人账号和对话默认值、查看用量、调整工作台外观，查看连接与服务状态。"
       onClose={onClose}
       wide
     >
@@ -37,6 +39,13 @@ export default function Settings({ overview, onClose }: Props) {
           >
             <CircleUserRound size={16} />
             我的账号
+          </button>
+          <button
+            className={tab === "usage" ? "active" : ""}
+            onClick={() => setTab("usage")}
+          >
+            <BarChart3 size={16} />
+            用量统计
           </button>
           <button
             className={tab === "conversation" ? "active" : ""}
@@ -69,6 +78,7 @@ export default function Settings({ overview, onClose }: Props) {
           {tab === "account" && (
             <AccountSettings overview={overview} />
           )}
+          {tab === "usage" && <TokenUsageSettings />}
           {tab === "conversation" && <QuestionSettings />}
           {tab === "system" && <ServiceStatus />}
         </div>

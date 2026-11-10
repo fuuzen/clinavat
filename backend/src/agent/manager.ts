@@ -148,6 +148,8 @@ export class AgentManager {
         turnEnded: outcome => this.turnEnded(state, outcome),
         automaticTurn: origin => this.automaticTurn(state, origin),
         activityChanged: () => { this.publish(state); this.scheduleIdle(state); },
+        recordTokenUsage: update => this.callbacks.recordTokenUsage?.({ userId: context.user.id, slotId: context.slot.id, sessionId,
+          turnId: context.session.turn_id ?? null, engine: context.session.engine }, update),
       };
       context.account_identity = await this.config.usage?.captureIdentity(context.slot) ?? null;
       if (state.abort.signal.aborted) throw new DOMException('会话已停止', 'AbortError');

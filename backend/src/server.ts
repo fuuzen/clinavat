@@ -23,6 +23,8 @@ import { siteAccessRoutes } from './routes/site-access.js';
 import { siteSettingsRoutes } from './routes/site-settings.js';
 import { questionDefaultsRoutes } from './routes/question-defaults.js';
 import { QuestionDefaults } from './question-defaults.js';
+import { tokenUsageRoutes } from './routes/token-usage.js';
+import { TokenUsageLedger } from './token-usage/ledger.js';
 import { gatewayRoutes } from './routes/gateway.js';
 import { GatewayClient } from './gateway/client.js';
 import { GatewayService } from './gateway/service.js';
@@ -85,6 +87,7 @@ const agentConfig = { ...config, credentials, usage, execution,
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };
 const questionDefaults = new QuestionDefaults(store, config.approvalTimeoutMs);
+const tokenUsage = new TokenUsageLedger(store);
 const slots = new SlotSelector(store, agentConfig);
 onSlotActivity = slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot', payload: { id: slotId } });
@@ -122,6 +125,10 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     return queue ? JSON.parse(queue.inputs) : [];
   },
   questionPolicy: sessionId => questionDefaults.forSession(sessionId),
+  recordTokenUsage(owner, update) {
+    try { tokenUsage.apply(owner, update); }
+    catch (error) { app.log.error({ err: error, sessionId: owner.sessionId }, '无法记录 Token 用量'); }
+  },
   deferQuestion(question) {
     store.run('INSERT INTO deferred_questions(id,session_id,questions,created_at) VALUES(?,?,?,?)',
       question.id, question.session_id, JSON.stringify(question.questions), question.created_at);
@@ -244,7 +251,7 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, hostCommands };
+const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, hostCommands };
 resourceRoutes(app, context);
 sessionRoutes(app, context);
 agentModelRoutes(app, context);
@@ -253,6 +260,7 @@ adminRoutes(app, context);
 siteAccessRoutes(app, siteAccess);
 siteSettingsRoutes(app, new SiteSettingsService(store), store, events);
 questionDefaultsRoutes(app, context);
+tokenUsageRoutes(app, context);
 gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMachines, config.imageBuilderAddress);
 gatewayRoutes(app, gateway);
 app.get('/api/health', async () => {

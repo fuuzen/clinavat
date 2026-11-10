@@ -7,6 +7,7 @@ import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
 import { ClaudeQuotaTracker } from './claude-quota.js';
+import { ClaudeUsageMeter } from '../token-usage/meters.js';
 import { parseClaudeUsage } from '../accounts/usage-parsers.js';
 import type { AgentRun, RunServices, RunTask } from './types.js';
 
@@ -61,6 +62,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   let diagnostics = '';
   let resultError = '';
   const quota = new ClaudeQuotaTracker();
+  const tokenUsage = new ClaudeUsageMeter();
   let messageId = '';
   let activeTextIndex: number | undefined;
   const thinkingBlocks = new Set<number>();
@@ -176,6 +178,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     }
     if (event.type === 'assistant') {
       quota.observeAssistant(event);
+      tokenUsage.observeAssistant(event);
       const contents = Array.isArray(event.message?.content) ? event.message.content : [];
       const nativeMessageId = String(event.message?.id || messageId || randomUUID());
       for (const [index, entry] of contents.entries()) {
@@ -209,6 +212,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       }
     }
     if (event.type === 'result') {
+      services.recordTokenUsage({ records: tokenUsage.finish(event) });
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
         const errors = Array.isArray(event.errors) ? event.errors.join('\n') : '';
         resultError = errors || String(event.result || event.api_error || event.subtype || 'CLI 返回失败结果');

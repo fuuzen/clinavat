@@ -3,6 +3,7 @@ import type { AgentModel, DevHost, Project, SlotUsage } from "../../src/types";
 import { completePaths, fileMeta, gitState, isDirectory, listFiles, readFile, remoteDirectories, writeFile } from "../filesystem";
 import { emit } from "../events";
 import { db } from "../store";
+import { tokenUsageReport } from "../token-usage";
 import { fail, ok, readBody } from "./respond";
 
 const transfers = new Map<string, Uint8Array[]>();
@@ -60,6 +61,8 @@ export const workspaceHandlers = [
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),
   http.post("/api/slots/:id/usage/refresh", ({ params }) => HttpResponse.json(usage(String(params.id)))),
+  http.get("/api/token-usage", ({ request }) => HttpResponse.json(
+    tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30), db.user.id))),
   http.get("/api/agent/models", ({ request }) =>
     HttpResponse.json({ models: models[new URL(request.url).searchParams.get("engine") || "claude"] || [] })),
 

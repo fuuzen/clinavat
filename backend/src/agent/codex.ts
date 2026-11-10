@@ -24,6 +24,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   services.control.track(child);
   const closed = observeProcessClose(child);
   let threadId = '';
+  let usageModel = 'unknown';
   let turnId = '';
   let activeTurnId = '';
   let diagnostics = '';
@@ -102,6 +103,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     if (message.method === 'item/completed' && params.item?.type === 'commandExecution' && runningCommands.delete(String(params.item.id))) {
       services.activityChanged();
     }
+    // Usage of an earlier turn can arrive late and still counts.
+    if (message.method === 'thread/tokenUsage/updated') services.recordTokenUsage({ codex: { model: usageModel, tokenUsage: params.tokenUsage } });
     if (params.turnId && turnId && params.turnId !== turnId && message.method !== 'turn/started') return;
     if (message.id !== undefined && message.method) {
       if (await requests.handle(message)) return;
@@ -262,6 +265,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     if (!result?.thread?.id) throw new Error('Codex 未返回线程 ID，请确认固定版本的 app-server 协议');
     if (nativeId && result.thread.id !== nativeId) throw new Error('Codex 恢复的会话与当前对话不一致');
     threadId = String(result.thread.id);
+    usageModel = typeof result.model === 'string' && result.model ? result.model : model ?? usageModel;
     if (signal.aborted) throw new Error('会话已停止');
     await services.update({ native_session_id: threadId });
     await goals.get();

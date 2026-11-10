@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Boxes, Globe2, LayoutDashboard, Menu, MessageCircleQuestion, Network, Server, ShieldCheck, Users, Waypoints } from "lucide-react";
+import { BarChart3, Boxes, Globe2, LayoutDashboard, Menu, MessageCircleQuestion, Network, Server, ShieldCheck, Users, Waypoints } from "lucide-react";
 import { api, errorText } from "../../api";
 import { useSiteSettings } from "../../site/store";
 import type { DevHost, Overview, Project, Slot, User } from "../../types";
@@ -11,6 +11,7 @@ import HostManagement from "./HostManagement";
 import GatewayManagement from "./GatewayManagement";
 import ResourceManagement from "./ResourceManagement";
 import QuestionDefaults from "./QuestionDefaults";
+import TokenUsageReport from "./TokenUsageReport";
 import type { AdminHealth, AdminTab } from "./types";
 
 interface Props {
@@ -33,6 +34,7 @@ const tabs = [
   { id: "connections", label: "开发机连接", icon: Network },
   { id: "users", label: "用户与权限", icon: Users },
   { id: "slots", label: "槽位管理", icon: ShieldCheck },
+  { id: "usage", label: "用量统计", icon: BarChart3 },
   { id: "questions", label: "对话设置", icon: MessageCircleQuestion },
 ] satisfies { id: AdminTab; label: string; icon: typeof Server }[];
 
@@ -118,6 +120,7 @@ export default function AdminPanel(props: Props) {
             {id === "users" && tab === id && <div className="admin-existing-module"><UserManagement onRefresh={refresh} onSlots={() => selectTab("slots")} /></div>}
             {id === "slots" && tab === id && <div className="admin-existing-module"><SlotManagement onRefresh={refresh} /></div>}
             {id === "questions" && tab === id && <QuestionDefaults />}
+            {id === "usage" && tab === id && <TokenUsageReport />}
           </section>
         ))}
         <footer className="admin-footer"><span>{siteSettings.name} <span> / </span> ADMINISTRATION</span><span><ShieldCheck size={12} />仅管理员可访问</span></footer>

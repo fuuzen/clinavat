@@ -10,6 +10,7 @@ import type { ConversationStore } from './conversation.js';
 import type { SlotSelector } from './accounts/selection.js';
 import type { QuestionDefaults } from './question-defaults.js';
 import type { HostCommands } from './execution/host-commands.js';
+import type { TokenUsageLedger } from './token-usage/ledger.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -19,6 +20,7 @@ export interface Context {
   turns: ConversationStore;
   slots: SlotSelector;
   questionDefaults: QuestionDefaults;
+  tokenUsage: TokenUsageLedger;
   /** Only with slot machines; otherwise a local project's commands already run on the host. */
   hostCommands?: HostCommands;
 }

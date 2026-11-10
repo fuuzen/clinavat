@@ -116,7 +116,17 @@ export class Store {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         questions TEXT NOT NULL, created_at TEXT NOT NULL, deferred_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS token_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        slot_id TEXT NOT NULL, session_id TEXT, turn_id TEXT, engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        model TEXT NOT NULL, input_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+        cache_write_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL,
+        cost_usd REAL, cost_source TEXT CHECK(cost_source IN ('cli','prices')),
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
+      CREATE INDEX IF NOT EXISTS token_usage_user ON token_usage(user_id,recorded_at);
+      CREATE INDEX IF NOT EXISTS token_usage_recorded ON token_usage(recorded_at);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id,created_at);
       CREATE INDEX IF NOT EXISTS turns_session ON session_turns(session_id,started_at);
       CREATE INDEX IF NOT EXISTS slot_access_user ON slot_user_access(user_id,slot_id);
@@ -124,6 +134,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
     `);
     this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
+    // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
+    this.addColumn('sessions', 'token_usage_cursor', 'TEXT');
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {

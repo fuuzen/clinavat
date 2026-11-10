@@ -7,6 +7,7 @@ import type { QuestionPolicy } from './session-settings.js';
 import type { RunControl } from './run-control.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
 import type { ExecutionHost } from '../execution/types.js';
+import type { TokenUsageUpdate, UsageOwner } from '../token-usage/ledger.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -96,6 +97,8 @@ export interface AgentCallbacks {
   questionPolicy(sessionId: string): QuestionPolicy;
   /** Keeps an unanswered question; it is answered later through a message. Throws when it cannot be kept. */
   deferQuestion(question: DeferredQuestion): void;
+  /** Must never fail the run: usage statistics are secondary to the conversation. */
+  recordTokenUsage?(owner: UsageOwner, update: TokenUsageUpdate): void;
 }
 
 export type TurnOrigin = { messageId: string } | { summary: string };
@@ -147,4 +150,6 @@ export interface RunServices {
   automaticTurn(origin: TurnOrigin): void;
   /** Something changed that can make the process idle or keep it from being idle. */
   activityChanged(): void;
+  /** Tokens the CLI reported, attributed to the current turn. */
+  recordTokenUsage(update: TokenUsageUpdate): void;
 }

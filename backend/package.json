@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "start": "node --env-file-if-exists=\"${CLINAVAT_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/clinavat/hub.env}\" dist/server.js",
+    "prices:update": "node scripts/update-model-prices.mjs",
     "admin:reset-password": "node --env-file-if-exists=\"${CLINAVAT_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/clinavat/hub.env}\" dist/reset-admin-password.js"
   },
   "dependencies": {

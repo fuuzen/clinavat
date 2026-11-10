@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 import { withSiteDefaults, type SiteSettings } from "../../src/site/settings";
 import type { QuestionPolicy, QuestionPreference, Slot, User } from "../../src/types";
 import { db, timestamp } from "../store";
+import { tokenUsageReport } from "../token-usage";
 import { fail, readBody, unavailable } from "./respond";
 
 export const adminHandlers = [
@@ -68,6 +69,8 @@ export const adminHandlers = [
     slot.credential_revision += 1;
     return HttpResponse.json(slot);
   }),
+  http.get("/api/admin/token-usage", ({ request }) => HttpResponse.json(
+    tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30)))),
   http.get("/api/admin/site/settings", () => HttpResponse.json(db.siteSettings)),
   http.put("/api/admin/site/settings", async ({ request }) => {
     db.siteSettings = withSiteDefaults(await readBody<SiteSettings>(request));
