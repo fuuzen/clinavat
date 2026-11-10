@@ -1,0 +1,135 @@
+/* The list scrolls on its own, so the breadcrumb, its upload buttons and the drop prompt stay in view. */
+.file-listing {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.file-listing > .file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.file-breadcrumb .file-upload-actions {
+  display: flex;
+  gap: 2px;
+  margin-right: -6px;
+}
+.file-breadcrumb .file-upload-actions .icon-button {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+}
+.file-breadcrumb .file-upload-actions .icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.file-drop-overlay {
+  position: absolute;
+  inset: 6px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-dim) 82%, transparent);
+  color: var(--accent);
+  pointer-events: none;
+  animation: preview-fade 0.12s ease-out;
+}
+.file-drop-overlay > strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.file-drop-overlay > span {
+  max-width: 85%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 9px 12px 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--muted);
+}
+.upload-status-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.upload-status-summary > svg {
+  flex-shrink: 0;
+  color: var(--success);
+}
+.upload-status-summary > svg.spin {
+  color: var(--accent);
+}
+.upload-status.has-failures .upload-status-summary > svg {
+  color: var(--warning);
+}
+.upload-status-summary > span {
+  flex: 1;
+  min-width: 0;
+}
+.upload-status-summary > .icon-button {
+  width: 22px;
+  height: 22px;
+}
+.upload-status-bar {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface);
+}
+.upload-status-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
+.upload-status > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status > ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.upload-status li {
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+.upload-status li > strong {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status li > span {
+  color: var(--danger);
+}

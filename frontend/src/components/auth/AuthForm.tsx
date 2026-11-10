@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type InvalidEvent } from "react";
 import { ArrowRight, LoaderCircle, ShieldCheck } from "lucide-react";
 import { errorText, post } from "../../api";
 import type { SiteSettings } from "../../site/settings";
+import ClientHubSwitch from "../ClientHubSwitch";
 import { interpolate, RichContent } from "./content";
 
 export type AuthMode = "login" | "register" | "setup";
@@ -100,5 +101,6 @@ export default function AuthForm({ settings, mode, registrationEnabled, preview,
       </button>
     </div>}
     {texts.securityNote && <div className="auth-note"><ShieldCheck size={15} /><RichContent content={texts.securityNote} settings={settings} inline /></div>}
+    {!preview && <ClientHubSwitch className="text-button auth-client-hub" />}
   </div>;
 }

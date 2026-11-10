@@ -50,6 +50,7 @@ export interface Session {
   id: string;
   project_id: string;
   engine: "claude" | "codex";
+  slot_mode: SlotMode;
   slot_id: string | null;
   title: string;
   status: string;
@@ -59,6 +60,27 @@ export interface Session {
   permission_mode?: PermissionMode;
   agent_mode?: AgentMode;
   role_preset?: RolePreset;
+  question_mode?: QuestionMode | null;
+  question_timeout_ms?: number | null;
+}
+
+/** What happens to a question nobody answers in time. */
+export type QuestionMode = "skip" | "defer";
+export interface QuestionPolicy {
+  mode: QuestionMode;
+  timeoutMs: number;
+}
+/** A field left null follows the next level of defaults. */
+export interface QuestionPreference {
+  mode: QuestionMode | null;
+  timeoutMs: number | null;
+}
+
+export type SlotMode = "manual" | "auto";
+export interface AccountSelection {
+  engine: Session["engine"];
+  slotMode: SlotMode;
+  slotId?: string;
 }
 
 export type PermissionMode = "manual" | "accept-edits" | "auto" | "full-access" | "yolo";
@@ -125,6 +147,8 @@ export interface Turn {
   duration_ms?: number | null;
   paused_at?: string | null;
   paused_ms?: number;
+  slot_id?: string | null;
+  credential_revision?: number | null;
   status: "running" | "pausing" | "paused" | "completed" | "interrupted" | "error";
   items: ActivityItem[];
 }
@@ -135,6 +159,8 @@ export interface Overview {
   hosts: DevHost[];
   projects: Project[];
   sessions: Session[];
+  questionDefaults: QuestionPolicy;
+  deferredQuestions: { session_id: string; count: number }[];
 }
 
 export interface PoolEvent {
@@ -210,4 +236,6 @@ export interface SessionRuntime {
   turnActive: boolean;
   queue: { id: string; content: string; queuedAt: string }[];
   tasks: RuntimeTask[];
+  switching?: { fromSlotId: string; attempt: number; targetSlotId?: string };
+  settling?: boolean;
 }

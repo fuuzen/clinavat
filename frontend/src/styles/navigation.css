@@ -308,6 +308,10 @@
   color: var(--muted);
   margin-top: 4px;
 }
+.session-waiting {
+  flex-shrink: 0;
+  color: var(--accent);
+}
 .running-dot {
   flex-shrink: 0;
   width: 6px;

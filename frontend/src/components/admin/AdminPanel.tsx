@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Boxes, Globe2, LayoutDashboard, Menu, Network, Server, ShieldCheck, Users, Waypoints } from "lucide-react";
+import { Boxes, Globe2, LayoutDashboard, Menu, MessageCircleQuestion, Network, Server, ShieldCheck, Users, Waypoints } from "lucide-react";
 import { api, errorText } from "../../api";
 import { useSiteSettings } from "../../site/store";
 import type { DevHost, Overview, Project, Slot, User } from "../../types";
@@ -10,6 +10,7 @@ import SiteSettings from "./SiteSettings";
 import HostManagement from "./HostManagement";
 import GatewayManagement from "./GatewayManagement";
 import ResourceManagement from "./ResourceManagement";
+import QuestionDefaults from "./QuestionDefaults";
 import type { AdminHealth, AdminTab } from "./types";
 
 interface Props {
@@ -32,6 +33,7 @@ const tabs = [
   { id: "connections", label: "开发机连接", icon: Network },
   { id: "users", label: "用户与权限", icon: Users },
   { id: "slots", label: "槽位管理", icon: ShieldCheck },
+  { id: "questions", label: "对话设置", icon: MessageCircleQuestion },
 ] satisfies { id: AdminTab; label: string; icon: typeof Server }[];
 
 export default function AdminPanel(props: Props) {
@@ -115,6 +117,7 @@ export default function AdminPanel(props: Props) {
             {(id === "workspaces" || id === "connections") && tab === id && <ResourceManagement kind={id} overview={props.overview} users={users} selectedUserId={resourceUserId} onSelectUser={setResourceUserId} onOpenProject={props.onOpenProject} onNewProject={props.onNewProject} onNewHost={props.onNewHost} onEditHost={props.onEditHost} onConnect={props.onConnect} onRefresh={refresh} refreshing={loading} />}
             {id === "users" && tab === id && <div className="admin-existing-module"><UserManagement onRefresh={refresh} onSlots={() => selectTab("slots")} /></div>}
             {id === "slots" && tab === id && <div className="admin-existing-module"><SlotManagement onRefresh={refresh} /></div>}
+            {id === "questions" && tab === id && <QuestionDefaults />}
           </section>
         ))}
         <footer className="admin-footer"><span>{siteSettings.name} <span> / </span> ADMINISTRATION</span><span><ShieldCheck size={12} />仅管理员可访问</span></footer>

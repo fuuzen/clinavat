@@ -39,7 +39,9 @@ export class ProcessExecutionHost implements ExecutionHost {
     });
   }
 
-  assertReleased(home: string, sessionId?: string): Promise<void> { return assertSlotProcessesStopped(home, sessionId); }
+  assertReleased(home: string, sessionId?: string, workspaceCgroups?: ReadonlySet<string>): Promise<void> {
+    return assertSlotProcessesStopped(home, sessionId, workspaceCgroups);
+  }
 
   async loginCommand(_slotId: string, _home: string, argv: string[], env: Record<string, string>): Promise<string> {
     return [...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`), ...argv.map(shellQuote)].join(' ');

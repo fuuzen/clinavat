@@ -1,12 +1,13 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { api, errorText } from "./api";
-import type { AgentBehavior, Overview, PermissionMode, Session } from "./types";
+import type { AccountSelection, AgentBehavior, Overview, PermissionMode, QuestionPreference, Session, SlotMode } from "./types";
 
 function useSessionUpdate(
   setOverview: Dispatch<SetStateAction<Overview | null>>,
   notify: (message: string) => void,
 ) {
-  return useCallback(async (sessionId: string, values: { permissionMode?: PermissionMode; slotId?: string } & Partial<AgentBehavior>) => {
+  return useCallback(async (sessionId: string, values: { permissionMode?: PermissionMode; slotId?: string; slotMode?: SlotMode;
+    questionMode?: QuestionPreference["mode"]; questionTimeoutMs?: QuestionPreference["timeoutMs"] } & Partial<AgentBehavior>) => {
     try {
       const updated = await api<Session>(`/sessions/${sessionId}`, {
         method: "PATCH", body: JSON.stringify(values),
@@ -40,11 +41,20 @@ export function useSessionPermissions(
     update(sessionId, { permissionMode }), [update]);
 }
 
+export function useSessionQuestions(
+  setOverview: Dispatch<SetStateAction<Overview | null>>,
+  notify: (message: string) => void,
+) {
+  const update = useSessionUpdate(setOverview, notify);
+  return useCallback((sessionId: string, value: QuestionPreference) =>
+    update(sessionId, { questionMode: value.mode, questionTimeoutMs: value.timeoutMs }), [update]);
+}
+
 export function useSessionSlot(
   setOverview: Dispatch<SetStateAction<Overview | null>>,
   notify: (message: string) => void,
 ) {
   const update = useSessionUpdate(setOverview, notify);
-  return useCallback((sessionId: string, slotId: string) =>
-    update(sessionId, { slotId }), [update]);
+  return useCallback((sessionId: string, selection: AccountSelection) =>
+    update(sessionId, { slotMode: selection.slotMode, ...(selection.slotMode === "manual" ? { slotId: selection.slotId } : {}) }), [update]);
 }

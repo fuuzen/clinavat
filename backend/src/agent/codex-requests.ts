@@ -2,7 +2,7 @@ import path from 'node:path';
 import { getPermissionMode } from './permissions.js';
 import type { RpcMessage } from './rpc.js';
 import type { RunServices } from './types.js';
-import type { UserInputQuestion } from './user-input.js';
+import { unansweredNotice, type UserInputQuestion } from './user-input.js';
 
 const nativeApprovals = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
 
@@ -20,8 +20,10 @@ function approvalChanges(value: unknown) {
   });
 }
 
-function usesRemoteShell(command: unknown, cwd: string, root: string) {
+function usesRemoteShell(command: unknown, cwd: string, project: RunServices['context']['project']) {
   if (typeof command !== 'string') return false;
+  const root = project.local_path;
+  if (project.execution_mode === 'local') return !!project.host_shell && command.includes(project.host_shell);
   if (command.includes(path.join(root, '.bin', 'remote-shell'))) return true;
   return path.resolve(root, cwd) === path.resolve(root)
     && /(?:^|[\s'"`;|&()])(?:\.\/)?\.bin\/remote-shell(?=$|[\s'"`;|&()])/.test(command);
@@ -84,9 +86,12 @@ export function createCodexRequests(
         try {
           const questions = message.params?.questions as UserInputQuestion[];
           if (!Array.isArray(questions)) throw new Error('原生问题列表无效');
-          const answers = await services.ask(questions, controller.signal);
+          const outcome = await services.ask(questions, controller.signal);
+          // Codex has no way to decline a question; a kept one is answered with the request to end the turn.
+          const answers = outcome.status === 'answered' ? outcome.answers : outcome.status === 'deferred'
+            ? Object.fromEntries(questions.map(question => [question.id, [unansweredNotice(outcome)]])) : {};
           if (canReply(key, controller)) send({ id: message.id, result: {
-            answers: Object.fromEntries(Object.entries(answers ?? {}).map(([id, values]) => [id, { answers: values }])),
+            answers: Object.fromEntries(Object.entries(answers).map(([id, values]) => [id, { answers: values }])),
           } });
         } catch (error) {
           if (canReply(key, controller)) send({ id: message.id,
@@ -109,7 +114,7 @@ export function createCodexRequests(
       const command = Array.isArray(params.command) ? params.command.join(' ') : params.command ?? item?.command;
       const root = services.context.project.local_path;
       const cwd = typeof params.cwd === 'string' ? params.cwd : typeof item?.cwd === 'string' ? item.cwd : root;
-      const remote = services.context.project.execution_mode !== 'local' && usesRemoteShell(command, cwd, root);
+      const remote = usesRemoteShell(command, cwd, services.context.project);
       try {
         if (signal.aborted || !isRunning()) return true;
         if (remote) await services.verifyShell();

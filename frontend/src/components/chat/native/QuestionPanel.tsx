@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { HelpCircle, LoaderCircle } from "lucide-react";
 import { api, errorText, post } from "../../../api";
+import type { QuestionMode } from "../../../types";
+import { durationLabel, modeLabel } from "./questionPolicy";
 import "../../../styles/native-chat.css";
 
 interface Question {
@@ -11,11 +13,12 @@ interface Question {
   multiSelect?: boolean;
   options?: { label: string; description: string }[];
 }
-interface QuestionRequest {
+/** `deferred`: kept after nobody answered in time; the answer goes to the agent as a new message. */
+type QuestionRequest = {
   id: string;
   session_id: string;
   questions: Question[];
-}
+} & ({ status: "pending"; timeout_ms: number; on_timeout: QuestionMode } | { status: "deferred" });
 
 function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAnswered: () => void }) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
@@ -37,8 +40,12 @@ function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAns
     } catch (cause) { setError(errorText(cause)); }
     finally { pendingRef.current = false; setSending(false); }
   }
-  return <form className="agent-question" onSubmit={(event) => { event.preventDefault(); void submit(false); }}>
-    <div className="agent-question-heading" aria-live="polite"><HelpCircle size={16} /><strong>需要你的意见</strong></div>
+  const deferred = request.status === "deferred";
+  return <form className={`agent-question${deferred ? " deferred" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(false); }}>
+    <div className="agent-question-heading" aria-live="polite"><HelpCircle size={16} /><strong>{deferred ? "智能体在等你回答" : "需要你的意见"}</strong></div>
+    <p className="agent-question-hint">{deferred
+      ? "提问时你不在，本轮已结束。回答或跳过后会作为新消息发送，智能体收到后继续。"
+      : `${durationLabel(request.timeout_ms)}内未回答将${modeLabel(request.on_timeout)}（暂停期间不计时）。`}</p>
     {request.questions.map((question, index) => <fieldset key={question.id} disabled={sending}>
       <legend>{question.header || `问题 ${index + 1}`}</legend>
       <p>{question.question}</p>
@@ -58,7 +65,7 @@ function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAns
     </fieldset>)}
     {error && <p className="agent-question-error" role="alert">{error}</p>}
     <div className="agent-question-actions">
-      <button className="button" type="button" disabled={sending} onClick={() => void submit(true)}>跳过</button>
+      <button className="button" type="button" disabled={sending} onClick={() => void submit(true)}>{deferred ? "跳过并继续" : "跳过"}</button>
       <button className="button button-primary" type="submit" disabled={sending || request.questions.some((question) => !answers[question.id]?.length && !custom[question.id]?.trim())}>{sending && <LoaderCircle size={14} className="spin" />}提交回答</button>
     </div>
   </form>;

@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { withSiteDefaults, type SiteSettings } from "../../src/site/settings";
-import type { Slot, User } from "../../src/types";
+import type { QuestionPolicy, QuestionPreference, Slot, User } from "../../src/types";
 import { db, timestamp } from "../store";
 import { fail, readBody, unavailable } from "./respond";
 
@@ -57,6 +57,16 @@ export const adminHandlers = [
   http.put("/api/admin/site/settings", async ({ request }) => {
     db.siteSettings = withSiteDefaults(await readBody<SiteSettings>(request));
     return HttpResponse.json(db.siteSettings);
+  }),
+  http.get("/api/admin/settings/questions", () => HttpResponse.json(db.siteQuestions)),
+  http.put("/api/admin/settings/questions", async ({ request }) => {
+    db.siteQuestions = await readBody<QuestionPolicy>(request);
+    return HttpResponse.json(db.siteQuestions);
+  }),
+  http.get("/api/settings/questions", () => HttpResponse.json({ site: db.siteQuestions, user: db.userQuestions })),
+  http.put("/api/settings/questions", async ({ request }) => {
+    db.userQuestions = await readBody<QuestionPreference>(request);
+    return HttpResponse.json({ site: db.siteQuestions, user: db.userQuestions });
   }),
   http.get("/api/admin/site-access", () => HttpResponse.json(db.siteAccess)),
   http.patch("/api/admin/site-access", async ({ request }) => {

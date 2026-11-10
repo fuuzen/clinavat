@@ -192,6 +192,7 @@ export default function GatewayManagement() {
   }
 
   const disabled = !!busy || loading || !overview;
+  const needsGatewaySetup = !!info && (!info.configured || loadError.includes("网关拒绝了 Hub 密钥"));
   const health = overview?.status.health;
   const state = overview?.state;
   const rolledBack = new Set((overview?.audit ?? []).filter((entry) => entry.status === "ROLLED_BACK").map((entry) => entry.revision));
@@ -234,12 +235,13 @@ export default function GatewayManagement() {
       {error && <div className="inline-error" role="alert">{error}</div>}
       {message && <p className="gateway-message" role="status"><Check size={13} />{message}</p>}
 
-      {loadError && <Section icon={KeyRound} title="接入网关" description={`读取网关失败：${loadError}`}>
-        {info && <div className="gateway-setup">
-          <p>在网关上以 root 运行 <code>deploy/gateway/install.sh</code> 并附带下列参数，为 Hub 授权专用密钥（仅允许调用 <code>{info.gwctl}</code>，不能登录 shell）。已安装过的网关重复运行时不会改变现有配置。</p>
+      {loadError && <Section icon={needsGatewaySetup ? KeyRound : Network} title={needsGatewaySetup ? "接入网关" : "网关暂不可用"} description={`读取网关失败：${loadError}`}>
+        {needsGatewaySetup && info ? <div className="gateway-setup">
+          {!info.configured && <p>请先配置网关的 SSH 地址，再为 Hub 授权专用公钥。</p>}
+          <p>在运行 sing-box 的网关服务器内，以 root 运行 <code>deploy/gateway/install.sh</code> 并附带下列参数，为 Hub 授权专用密钥（仅允许调用 <code>{info.gwctl}</code>，不能登录 shell）。安装脚本会更新网关配置，请按提示审阅后确认。</p>
           <div className="gateway-copy"><code>{info.installCommand}</code><button type="button" className="icon-button" aria-label="复制命令" onClick={() => copy(info.installCommand)}><Copy size={14} /></button></div>
           <div className="gateway-copy"><code>{info.publicKey}</code><button type="button" className="icon-button" aria-label="复制公钥" onClick={() => copy(info.publicKey)}><Copy size={14} /></button></div>
-        </div>}
+        </div> : <p>请确认网关连接正常，再点击刷新重试。若持续失败，请查看 Hub 服务日志。</p>}
       </Section>}
 
       {overview && state && <>

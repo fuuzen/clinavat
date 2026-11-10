@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { RunServices } from './types.js';
 import { answerClaudeQuestions } from './claude-questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
+import { questionTimeoutRange } from './session-settings.js';
 
 const preToolUseCallback = 'clinavat-pre-tool-use';
 
@@ -44,8 +45,9 @@ export class ClaudeControl {
       try {
         this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize', hooks: { PreToolUse: [{
           matcher: '.*', hookCallbackIds: [preToolUseCallback],
-          // An unanswered callback blocks the tool. Hub deadlines exclude paused time; this native one uses wall time even after SIGSTOP.
-          timeout: Math.max(86400, Math.ceil(this.services.config.approvalTimeoutMs / 1000) + 10),
+          // An unanswered callback blocks the tool. Hub deadlines exclude paused time; this native one uses wall time
+          // even after SIGSTOP, so it leaves a day beyond the longest Hub deadline.
+          timeout: Math.ceil(Math.max(this.services.config.approvalTimeoutMs, questionTimeoutRange.max) / 1000) + 86400,
         }] } } });
       } catch (error) {
         this.close(error instanceof Error ? error : new Error('Claude CLI 初始化失败'));
@@ -176,11 +178,11 @@ export class ClaudeControl {
       }
       const input = request.input as Record<string, unknown>;
       if (request.tool_name === 'AskUserQuestion') {
-        const updatedInput = input.answers && typeof input.answers === 'object'
-          ? input : await answerClaudeQuestions(this.services, input, token.signal);
-        const response = updatedInput ? {
-          behavior: 'allow', updatedInput,
-        } : { behavior: 'deny', message: '用户跳过了这些问题，请基于已有信息继续，不要假定任何选项已获用户同意。' };
+        const answer = input.answers && typeof input.answers === 'object'
+          ? { updatedInput: input } : await answerClaudeQuestions(this.services, input, token.signal);
+        const response = 'updatedInput' in answer ? {
+          behavior: 'allow', updatedInput: answer.updatedInput,
+        } : { behavior: 'deny', message: answer.reason };
         if (!this.closed && !token.signal.aborted && this.requests.get(id) === token) {
           this.write({ type: 'control_response', response: { subtype: 'success', request_id: id, response } });
         }

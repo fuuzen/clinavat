@@ -87,8 +87,11 @@ async function groupProcesses(directory) {
 export async function runtimeCounts(database, dataDirectory, hub) {
   const journals = await directoryEntries(join(dataDirectory, 'accounts', 'slot-runtime'));
   const probeDirectory = resolve(dataDirectory, 'run', 'usage-probes');
-  // Each child survives CLI exit until refreshed credentials have been copied back.
-  const probeHomes = (await directoryEntries(probeDirectory)).filter(entry => entry.isDirectory());
+  // Slot directories stay mounted in their VMs; only their temporary children indicate a probe.
+  // Keep unexpected entries blocking deployment as well, rather than assuming they are idle.
+  const probeCounts = await Promise.all((await directoryEntries(probeDirectory)).map(async entry =>
+    entry.isDirectory() ? (await directoryEntries(join(probeDirectory, entry.name))).length : 1));
+  const usageProbeDirectories = probeCounts.reduce((total, count) => total + count, 0);
   const homes = new Set(database.prepare('SELECT home_dir FROM account_slots').all().map(slot => resolve(slot.home_dir)));
   let conversationProcesses = 0;
   let usageProbeProcesses = 0;
@@ -105,7 +108,7 @@ export async function runtimeCounts(database, dataDirectory, hub) {
       } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw new Error(`无法确认 Hub 子进程 ${pid} 的归属`); }
     }
   }
-  return { runtimeJournals: journals.length, conversationProcesses, usageProbeDirectories: probeHomes.length, usageProbeProcesses };
+  return { runtimeJournals: journals.length, conversationProcesses, usageProbeDirectories, usageProbeProcesses };
 }
 
 export function hasRuntimeActivity(runtime, includeUsageProbes = true) {

@@ -3,14 +3,16 @@
 .composer-toolbar > .behavior-trigger {
   min-height: 36px;
 }
-.behavior-mode-symbol {
+.behavior-mode-symbol,
+.question-policy-symbol {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
   color: var(--text-secondary);
 }
-.behavior-mode-symbol > svg {
+.behavior-mode-symbol > svg,
+.question-policy-symbol > svg {
   width: 18px;
   height: 18px;
 }
@@ -55,7 +57,8 @@
     min-height: 44px;
   }
   .composer-toolbar .permission-mode-symbol,
-  .composer-toolbar .behavior-mode-symbol {
+  .composer-toolbar .behavior-mode-symbol,
+  .composer-toolbar .question-policy-symbol {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -63,7 +66,8 @@
     height: 32px;
   }
   .composer-toolbar .permission-mode-symbol > svg,
-  .composer-toolbar .behavior-mode-symbol > svg {
+  .composer-toolbar .behavior-mode-symbol > svg,
+  .composer-toolbar .question-policy-symbol > svg {
     width: 20px;
     height: 20px;
   }

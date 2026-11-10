@@ -5,6 +5,7 @@ export interface UsageUpdate {
   windows: UsageWindow[];
   credits?: SlotUsageView['credits'];
   limited?: boolean | null;
+  limitingWindow?: string | null;
   unavailable?: string;
 }
 
@@ -38,6 +39,7 @@ export function parseClaudeUsage(response: any): UsageUpdate {
   if (response?.rate_limits_available === false) {
     return { windows: [], plan: response?.subscription_type ?? null, unavailable: '该账号没有 Claude 订阅额度数据（API key 或缺少 profile 授权）' };
   }
+  // The CLI also returns null on request failures for accounts eligible to read usage.
   if (!limits || typeof limits !== 'object' || Array.isArray(limits)) {
     throw new Error('Claude 额度查询暂时失败（可能被限流或连接异常），请稍后重试');
   }
@@ -73,7 +75,12 @@ export function parseClaudeEvent(info: any): UsageUpdate {
     for (const [key, window] of Object.entries(info.unifiedWindows)) if (window && typeof window === 'object') add(key, window);
   }
   if (typeof info?.rateLimitType === 'string' && !windows.some(window => window.key === info.rateLimitType)) add(info.rateLimitType, info);
-  return { windows, limited: info?.status === 'rejected' ? true : typeof info?.status === 'string' ? false : undefined };
+  const limitingWindow = typeof info?.rateLimitType === 'string' && labels.has(info.rateLimitType) ? info.rateLimitType : null;
+  const limited = info?.status === 'rejected' ? true : typeof info?.status === 'string' ? false : undefined;
+  const limiting = windows.find(window => window.key === limitingWindow);
+  // unifiedWindows carries utilization without status; the top-level refusal still applies to that window.
+  if (limiting && limited !== undefined) limiting.limited = limited;
+  return { windows, limited, ...(limited !== undefined ? { limitingWindow: limited ? limitingWindow : null } : {}) };
 }
 
 function codexBucket(snapshot: any, prefix: boolean): UsageWindow[] {
@@ -117,3 +124,4 @@ export function parseCodexEvent(params: any): UsageUpdate {
     ...(typeof snapshot?.rateLimitReachedType === 'string' ? { limited: true } : {}),
   };
 }
+

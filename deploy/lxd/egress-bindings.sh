@@ -146,39 +146,41 @@ PROFILE
   ok "mountable paths: $paths"
 }
 
-# Workspaces run as containers with idmapped mounts; prove the project accepts them before anything changes.
+# Restricted disk paths forbid shift=true; map only the Hub's uid/gid and use ordinary bind mounts.
 check_containers() {
-  local quota paths data_dir probe name hub_lxc owner
+  local quota paths data_dir probe name hub_gid idmap owner
+  hub_gid="$(id -g "$hub_user")"
+  printf -v idmap 'uid %s %s\ngid %s %s' "$hub_uid" "$hub_uid" "$hub_gid" "$hub_gid"
   quota="$(lxc project get "$USER_PROJECT" limits.containers)"
   [[ "${quota:-0}" -gt 0 ]] && lxc profile show workspace --project "$USER_PROJECT" >/dev/null 2>&1 \
     || fail "workspace containers are not prepared; run: sudo $0 prepare-containers --hub-user $hub_user"
   paths="$(lxc project get "$USER_PROJECT" restricted.devices.disk.paths)"
   data_dir="$(tr ',' '\n' <<<"$paths" | sed -n 's#/users$##p' | head -1)"
   [[ -n "$data_dir" ]] || fail "cannot find the data directory in restricted.devices.disk.paths"
-  hub_lxc() { sudo -u "$hub_user" -H /snap/bin/lxc "$@" --project "$USER_PROJECT" </dev/null; }
+  hub_lxc() { sudo -u "$hub_user" -H /snap/bin/lxc --project "$USER_PROJECT" "$@" </dev/null; }
   hub_lxc image info "clinavat-host:clinavat-workspace" >/dev/null 2>&1 \
     || fail "image clinavat-workspace is missing; build it as $hub_user: deploy/lxd/build-image.sh --kind workspace"
   name="clinavat-container-check-$$"
   probe="$data_dir/users/.container-check-$$"
-  install -d -m 700 -o "$hub_user" -g "$(id -g "$hub_user")" "$probe"
+  install -d -m 700 -o "$hub_user" -g "$hub_gid" "$probe"
   cleanup_probe() { hub_lxc delete --force "clinavat-host:$name" >/dev/null 2>&1 || true; rm -rf "$probe"; }
   # fail exits the script, which a RETURN trap would not see.
   trap cleanup_probe EXIT
-  hub_lxc init clinavat-host:clinavat-workspace "clinavat-host:$name" --profile workspace >/dev/null \
-    || fail "the Hub's client cannot create an isolated container"
-  hub_lxc config device add "clinavat-host:$name" probe disk source="$probe" path="$probe" shift=true >/dev/null \
-    || fail "the project refuses idmapped (shift=true) mounts"
+  hub_lxc init clinavat-host:clinavat-workspace "clinavat-host:$name" --profile workspace -c "raw.idmap=$idmap" >/dev/null \
+    || fail "the Hub's client cannot create an isolated container with the Hub's uid/gid mapping; check restricted.idmap.uid and restricted.idmap.gid"
+  hub_lxc config device add "clinavat-host:$name" probe disk source="$probe" path="$probe" >/dev/null \
+    || fail "the project refuses the probe bind mount; check restricted.devices.disk.paths"
   hub_lxc start "clinavat-host:$name" || fail "the check container does not start"
   for _ in $(seq 1 30); do hub_lxc exec "clinavat-host:$name" -- true >/dev/null 2>&1 && break; sleep 1; done
-  hub_lxc exec "clinavat-host:$name" -- setpriv --reuid="$hub_uid" --regid="$(id -g "$hub_user")" --clear-groups -- touch "$probe/written" \
-    || fail "the agent user cannot write through the idmapped mount"
-  owner="$(stat -c %u "$probe/written")"
-  [[ "$owner" == "$hub_uid" ]] || fail "files written in the container are owned by uid $owner on the host, expected $hub_uid"
+  hub_lxc exec "clinavat-host:$name" -- setpriv --reuid="$hub_uid" --regid="$hub_gid" --clear-groups -- touch "$probe/written" \
+    || fail "the agent user cannot write through the bind mount"
+  owner="$(stat -c %u:%g "$probe/written")"
+  [[ "$owner" == "$hub_uid:$hub_gid" ]] || fail "files written in the container are owned by $owner on the host, expected $hub_uid:$hub_gid"
   hub_lxc exec "clinavat-host:$name" -- sh -c 'mkdir /sys/fs/cgroup/clinavat-check && rmdir /sys/fs/cgroup/clinavat-check' \
     || fail "the container cannot create cgroups for its processes"
   cleanup_probe
   trap - EXIT
-  ok "workspace containers: isolated uid range, idmapped mounts write as $hub_user, cgroups usable"
+  ok "workspace containers: isolated uid range with Hub uid/gid mapped, bind mounts write as $hub_user, cgroups usable"
 }
 
 backup() {

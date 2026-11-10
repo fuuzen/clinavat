@@ -6,11 +6,13 @@ export type AdminTab =
   | "connections"
   | "users"
   | "slots"
-  | "gateway";
+  | "gateway"
+  | "questions";
 
 export interface AdminHealth {
   status: string;
   version: string;
+  execution: "process" | "vm";
   runtime: {
     claude: boolean;
     codex: boolean;

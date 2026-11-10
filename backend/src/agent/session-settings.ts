@@ -4,6 +4,11 @@ export const agentModes = ['normal', 'plan'] as const;
 export type AgentMode = typeof agentModes[number];
 export const rolePresets = ['default', 'reviewer', 'architect'] as const;
 export type RolePreset = typeof rolePresets[number];
+/** What happens to a question nobody answers in time: `skip` lets the agent go on, `defer` keeps it and ends the turn. */
+export const questionModes = ['skip', 'defer'] as const;
+export type QuestionMode = typeof questionModes[number];
+export interface QuestionPolicy { mode: QuestionMode; timeoutMs: number }
+export const questionTimeoutRange = { min: 60_000, max: 24 * 3_600_000 } as const;
 
 export function validateSessionSettings(engine: 'claude' | 'codex', agentMode: unknown, rolePreset: unknown) {
   if (!agentModes.includes(agentMode as AgentMode)) throw new HttpError(400, '不支持的工作模式');

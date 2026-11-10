@@ -26,11 +26,13 @@ import { useComposerDraft } from "./chat/composer/useComposerDraft";
 import ConversationOutline from "./chat/ConversationOutline";
 import BehaviorPicker from "./chat/native/BehaviorPicker";
 import QuestionPanel from "./chat/native/QuestionPanel";
+import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
 import { useAgentBehavior } from "./chat/native/useAgentBehavior";
 import { useChatCommands } from "./chat/native/useChatCommands";
 import type {
+  AccountSelection,
   Approval,
   AgentSelection,
   AgentBehavior,
@@ -39,6 +41,7 @@ import type {
   Overview,
   PermissionMode,
   Project,
+  QuestionPreference,
   Session,
   ToolEvent,
   Turn,
@@ -64,11 +67,12 @@ interface Props {
   onNewProject: () => void;
   onSelectProject: (project: Project) => void;
   onProjectRefresh: () => Promise<void>;
-  onSend: (content: string, engine: "claude" | "codex", selection: AgentSelection, permissionMode: PermissionMode, slotId: string, behavior: AgentBehavior, mode?: InputMode) => Promise<boolean>;
+  onSend: (content: string, selection: AgentSelection, permissionMode: PermissionMode, account: AccountSelection, behavior: AgentBehavior, mode?: InputMode) => Promise<boolean>;
   onBehaviorChange: (sessionId: string, value: AgentBehavior) => Promise<void>;
+  onQuestionsChange: (sessionId: string, value: QuestionPreference) => Promise<void>;
   onNotice: (message: string, kind?: "error" | "success") => void;
   onDiff: () => void;
-  onSlotChange: (sessionId: string, slotId: string) => Promise<void>;
+  onSlotChange: (sessionId: string, selection: AccountSelection) => Promise<void>;
   onPermissionChange: (sessionId: string, mode: PermissionMode) => Promise<void>;
   onStop: () => void;
   onPause: () => Promise<boolean>;
@@ -98,25 +102,28 @@ export default function Chat(props: Props) {
   const [stickToBottom, setStickToBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<ComposerHandle>(null);
+  const sessionRuntime = useSessionRuntime(session?.id, props.streamConnected, props.onNotice);
+  const switching = !!sessionRuntime.runtime.switching;
+  const settling = !!sessionRuntime.runtime.settling;
+  const controlsBlocked = switching || settling;
   const currentTurn = [...props.turns].reverse().find((turn) => turn.session_id === session?.id && isActive(turn.status));
-  const runStatus = isActive(session?.status) ? session!.status : currentTurn?.status;
-  const active = props.sending || isActive(session?.status) ||
+  const runStatus = controlsBlocked ? "running" : isActive(session?.status) ? session!.status : currentTurn?.status;
+  const active = controlsBlocked || props.sending || isActive(session?.status) ||
     !!currentTurn;
   const [sendMode, setSendMode] = useState<InputMode>("steer");
   // Locks the input from the moment a message is submitted until the server accepts it.
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
-  const sessionRuntime = useSessionRuntime(session?.id, props.streamConnected, props.onNotice);
-  const { slot, slotId, slotSaving, changeSlot } = useConversationSlot(overview, project?.id, session, props.onSlotChange);
+  const { slot, slotId, accountSelection, catalogSlot, slotAvailable, slotSaving, changeSlot } = useConversationSlot(overview, project?.id, session, props.onSlotChange);
   const syncReady = project?.sync_status === "WATCHING" || project?.sync_status === "LOCAL";
   const host = overview.hosts.find(
     (item) => item.id === project?.dev_host_id,
   );
-  const currentEngine = session?.engine || slot?.engine || "claude";
+  const currentEngine = accountSelection.engine;
   const { behavior, behaviorSaving, changeBehavior } = useAgentBehavior(session, project?.id, currentEngine, active, props.onBehaviorChange);
   const goal = useCodexGoal({ sessionId: session?.id, enabled: currentEngine === "codex", connected: props.streamConnected, executing: active, onNotice: props.onNotice });
   const commands = useChatCommands({
-    engine: currentEngine, session, active, busy: behaviorSaving || permissionSaving || slotSaving,
+    engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,
     onNew: () => { if (project) props.onSelectProject(project); },
     onStop: props.onStop, onDiff: props.onDiff, onNotice: props.onNotice,
@@ -128,8 +135,8 @@ export default function Chat(props: Props) {
     },
   });
   const occupied = !!slot?.in_use && !slot.in_use_by_you;
-  const slotAvailable = slot?.status === "IDLE" && slot.engine === currentEngine && !occupied;
-  const accountKey = slot ? `${slot.id}:${slot.credential_revision}:${slot.updated_at}` : "unselected";
+  const accountKey = catalogSlot ? `${catalogSlot.id}:${catalogSlot.credential_revision}:${catalogSlot.updated_at}` : "unselected";
+  const selectionAccountKey = accountSelection.slotMode === "auto" ? "auto" : accountKey;
   useEffect(() => {
     setStickToBottom(true);
   }, [session?.id, project?.id]);
@@ -138,7 +145,7 @@ export default function Chat(props: Props) {
       model: session?.model || null,
       reasoningEffort: session?.reasoning_effort || null,
     });
-  }, [session?.id, project?.id, currentEngine, session?.model, session?.reasoning_effort, accountKey]);
+  }, [session?.id, project?.id, currentEngine, session?.model, session?.reasoning_effort, selectionAccountKey]);
   useEffect(() => {
     permissionRequestRef.current += 1;
     setPermissionMode(session?.permission_mode || "manual");
@@ -199,6 +206,7 @@ export default function Chat(props: Props) {
       permissionSaving ||
       behaviorSaving ||
       slotSaving ||
+      controlsBlocked ||
       !slotAvailable ||
       !syncReady ||
       !props.streamConnected
@@ -206,7 +214,7 @@ export default function Chat(props: Props) {
       return;
     const content = draft;
     try {
-      const stillSelected = await props.onSend(content, currentEngine, selection, permissionMode, slotId, behavior, running ? sendMode : undefined);
+      const stillSelected = await props.onSend(content, selection, permissionMode, accountSelection, behavior, running ? sendMode : undefined);
       if (stillSelected) setStickToBottom(true);
     } catch {
       // The send handler reports failures and only clears drafts after server acceptance.
@@ -228,7 +236,9 @@ export default function Chat(props: Props) {
     }
   }
   const composerWarning = !slotAvailable
-    ? occupied
+    ? accountSelection.slotMode === "auto"
+      ? "当前没有可用的 Claude 账号，请等待账号释放或联系管理员。"
+      : occupied
       ? "此槽位正由其他用户使用，释放后可继续；也可选择其他已获授权的账号。"
       : slot
         ? `此槽位${statusLabel(slot.status)}，请选择其他可用账号或联系管理员。`
@@ -392,13 +402,13 @@ export default function Chat(props: Props) {
           onPause={() => void props.onPause()}
           onResume={() => void props.onResume()}
           runStatus={runStatus}
-          controlPending={props.controlPending}
+          controlPending={props.controlPending || controlsBlocked}
           stopPending={props.stopPending}
           connected={props.streamConnected}
           active={active}
           available={slotAvailable}
           locked={submitting || props.sending}
-          sendDisabled={!draft.trim() || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || !slotAvailable || !syncReady || !props.streamConnected}
+          sendDisabled={!draft.trim() || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
           warning={[composerWarning, storageError].filter(Boolean).join(" ") || undefined}
           showScrollToBottom={!stickToBottom}
           onScrollToBottom={() => setStickToBottom(true)}
@@ -406,10 +416,11 @@ export default function Chat(props: Props) {
           <SlotPicker
             slots={overview.slots}
             slotId={slotId}
+            selection={accountSelection}
             engine={session?.engine}
             disabled={active || permissionSaving || behaviorSaving}
             saving={slotSaving}
-            onChange={(id) => void changeSlot(id)}
+            onChange={(value) => void changeSlot(value)}
           />
           <PermissionPicker
             openRequest={commands.permissionRequest}
@@ -421,14 +432,16 @@ export default function Chat(props: Props) {
             onChange={(mode) => void changePermission(mode)}
           />
           <BehaviorPicker engine={currentEngine} value={behavior} disabled={active || slotSaving || permissionSaving || !slotAvailable} saving={behaviorSaving} onChange={(value) => void changeBehavior(value)} openRequest={commands.behaviorRequest} />
+          <QuestionPolicyPicker key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`} session={session}
+            defaults={overview.questionDefaults} onChange={props.onQuestionsChange} />
           <ModelPicker
             openRequest={commands.modelRequest}
             engine={currentEngine}
             projectId={project.id}
             accountKey={accountKey}
-            slotId={slotId}
+            slotId={catalogSlot?.id || ""}
             sessionId={session?.id}
-            accountAvailable={slot?.status === "IDLE" && slot.engine === currentEngine}
+            accountAvailable={catalogSlot?.status === "IDLE" && catalogSlot.engine === currentEngine}
             disabled={active || slotSaving || permissionSaving || behaviorSaving || !slotAvailable}
             value={selection}
             onChange={setSelection}

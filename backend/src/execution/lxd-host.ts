@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { childEnvironment, runCommand } from '../runtime/process.js';
@@ -42,6 +42,7 @@ export interface Machine {
 interface InstanceRow {
   name: string; status: string; type?: string; config?: Record<string, string>;
   devices?: Record<string, Record<string, string>>; expanded_config?: Record<string, string>;
+  state?: { pid?: number };
 }
 
 const guestPath = '/usr/local/bin:/usr/bin:/bin';
@@ -151,14 +152,14 @@ export class LxdExecutionHost implements ExecutionHost {
     if (!row) {
       const idmap = this.uid === this.gid ? `both ${this.uid} ${this.uid}` : `uid ${this.uid} ${this.uid}\ngid ${this.gid} ${this.gid}`;
       await this.checkedLxc(['init', ...(container
-        // A workspace only runs Hub-controlled synchronization, so a container is enough. Its profile gives it its own
-        // uid range, apart from other workspaces and from the Hub; idmapped mounts still write files as the Hub's user.
+        // Its profile isolates root and the remaining uid range. Only the Hub's uid/gid are mapped directly for
+        // ordinary bind mounts: LXD forbids shift=true when a project restricts source paths.
         // The default profile carries VM-only settings.
         ? [this.target(this.config.lxdWorkspaceImage), this.target(machine.name), '--profile', 'workspace',
           '-c', `limits.memory=${this.config.workspaceMemory}`]
         // Agents run arbitrary code: a slot gets its own kernel.
-        : [this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `raw.idmap=${idmap}`, '-c', `limits.max_bus_ports=${vmBusPorts}`]),
-        '-c', `${kindKey}=${machine.kind}`, '-c', `${ownerKey}=${machine.owner}`], vmStartTimeoutMs).catch((error: Error) => {
+        : [this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `limits.max_bus_ports=${vmBusPorts}`]),
+        '-c', `raw.idmap=${idmap}`, '-c', `${kindKey}=${machine.kind}`, '-c', `${ownerKey}=${machine.owner}`], vmStartTimeoutMs).catch((error: Error) => {
         throw /limit|exceed/i.test(error.message)
           ? new Error(`${error.message}（LXD 项目配额不足，请调高 limits.memory、limits.cpu、limits.virtual-machines 或 limits.containers）`) : error;
       });
@@ -177,6 +178,7 @@ export class LxdExecutionHost implements ExecutionHost {
           ? ['config', 'device', 'set', this.target(machine.name), 'eth0', `ipv4.address=${identity.address}`]
           : ['config', 'device', 'override', this.target(machine.name), 'eth0', `ipv4.address=${identity.address}`]);
       }
+      await this.rebindRuntimeMounts(machine, row?.devices, false);
       await this.checkedLxc(['start', this.target(machine.name)], vmStartTimeoutMs);
       machine.prepared = false;
     } else if (row.devices?.eth0?.['ipv4.address'] !== identity.address) {
@@ -191,7 +193,27 @@ export class LxdExecutionHost implements ExecutionHost {
     const prepared = await this.exec(machine, ['bash', '-c', prepareScript, 'clinavat-prepare', String(this.uid), String(this.gid),
       this.controlDirectory(), identity.hostname ?? '', identity.machineId ?? '']);
     if (prepared.code !== 0) throw new Error(`虚拟机初始化失败：${prepared.stderr.trim().slice(0, 500)}`);
+    if (row?.status === 'Running') await this.rebindRuntimeMounts(machine, row.devices, true);
     machine.prepared = true;
+  }
+
+  private async rebindRuntimeMounts(machine: Machine, devices: InstanceRow['devices'], running: boolean): Promise<void> {
+    const runtime = resolve(this.config.dataDir, 'run') + sep;
+    for (const [name, device] of Object.entries(devices ?? {})) {
+      if (device.type !== 'disk' || !device.path || !resolve(device.path).startsWith(runtime)) continue;
+      // systemd recreates the runtime tree when the Hub stops; surviving guests still hold its old directory inodes.
+      await mkdir(device.path, { recursive: true, mode: 0o700 });
+      const source = await realpath(device.path);
+      if (!running) {
+        await this.checkedLxc(['config', 'device', 'set', this.target(machine.name), name, `source=${source}`]);
+        continue;
+      }
+      await this.checkedLxc(['config', 'device', 'remove', this.target(machine.name), name]);
+      machine.mounts.delete(device.path);
+      const options = Object.entries({ ...device, source }).filter(([key]) => key !== 'type').map(([key, value]) => `${key}=${value}`);
+      await this.checkedLxc(['config', 'device', 'add', this.target(machine.name), name, 'disk', ...options]);
+      machine.mounts.add(device.path);
+    }
   }
 
   private controlDirectory(): string { return join(this.config.dataDir, 'run', 'cm'); }
@@ -259,9 +281,7 @@ export class LxdExecutionHost implements ExecutionHost {
           await mkdir(path, { recursive: true, mode: 0o700 });
           // LXD refuses a source reached through a symlink, such as the data directory's run link.
           await this.checkedLxc(['config', 'device', 'add', this.target(machine.name), deviceName(path), 'disk',
-            `source=${await realpath(path)}`, `path=${path}`, ...(readonly ? ['readonly=true'] : []),
-            // A container's idmapped mount writes as the Hub's user; a VM maps that user through virtiofs instead.
-            ...(machine.kind === 'workspace' ? ['shift=true'] : [])]).catch((error: Error) => {
+            `source=${await realpath(path)}`, `path=${path}`, ...(readonly ? ['readonly=true'] : [])]).catch((error: Error) => {
             if (/not allowed|restricted/i.test(error.message)) throw new Error(`${error.message}（目录不在 LXD 项目的挂载白名单中，本机项目目录请用 egress-bindings.sh prepare-containers --local-root 加入）`);
             throw /\bport|pci/i.test(error.message)
               ? new Error(`${error.message}（虚拟机设备端口可能已用尽：每个挂载目录各占一个。调高 limits.max_bus_ports 后需重启该虚拟机）`) : error;
@@ -338,8 +358,24 @@ export class LxdExecutionHost implements ExecutionHost {
   }
 
   async assertReleased(home: string, sessionId?: string): Promise<void> {
-    await this.local.assertReleased(home, sessionId);
     await this.load();
+    const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json']);
+    const workspaceCgroups = new Set<string>();
+    for (const row of JSON.parse(shown.stdout) as InstanceRow[]) {
+      if (row.type !== 'container' || row.status !== 'Running' || this.machines.get(row.name)?.kind !== 'workspace') continue;
+      const pid = row.state?.pid;
+      if (!pid || !Number.isSafeInteger(pid) || pid <= 0) continue;
+      const project = this.config.lxdProject === 'default' ? '' : `${this.config.lxdProject}_`;
+      const root = `/lxc.payload.${project}${row.name}`;
+      const cgroups = await readFile(`/proc/${pid}/cgroup`, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (['ENOENT', 'ESRCH'].includes(error.code ?? '')) return '';
+        throw error;
+      });
+      const unified = cgroups.split('\n').find(line => line.startsWith('0::'))?.slice(3);
+      // LXD may be remote or its PID may have exited; only the matching kernel cgroup proves local ownership.
+      if (unified === root || unified?.startsWith(`${root}/`)) workspaceCgroups.add(root);
+    }
+    await this.local.assertReleased(home, sessionId, workspaceCgroups);
     const holders = [...this.machines.values()].filter(machine => machine.mounts.has(home));
     for (const machine of holders) {
       const result = await this.exec(machine, ['bash', '-c', releasedScript, 'clinavat-released', home, sessionId ?? '']);

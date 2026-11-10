@@ -19,7 +19,7 @@ export function useSessionRunControl(
     if (!session || selectedSessionRef.current !== session.id) return false;
     const current = requests.current.get(session.id) ?? new Set<RunAction>();
     if (current.has("stop") || (action !== "stop" && (current.has("pause") || current.has("resume")))) return false;
-    if (!isActive(session.status)) {
+    if (action !== "stop" && !isActive(session.status)) {
       notify("当前没有正在执行的任务。");
       return false;
     }

@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { Session } from "../../src/types";
+import type { Session, Slot, SlotMode } from "../../src/types";
 import type { CodexGoal } from "../../src/components/chat/native/useCodexGoal";
 import { answerQuestion, asPayload, controlRun, decideApproval, isRunning, startRun } from "../agent";
 import { emit } from "../events";
@@ -10,11 +10,14 @@ interface SessionInput {
   projectId?: string;
   engine?: Session["engine"];
   slotId?: string;
+  slotMode?: SlotMode;
   model?: string | null;
   reasoningEffort?: string | null;
   permissionMode?: Session["permission_mode"];
   agentMode?: Session["agent_mode"];
   rolePreset?: Session["role_preset"];
+  questionMode?: Session["question_mode"];
+  questionTimeoutMs?: Session["question_timeout_ms"];
   title?: string;
   content?: string;
   mode?: "steer" | "queue" | "interrupt";
@@ -22,6 +25,16 @@ interface SessionInput {
 
 const goals = new Map<string, CodexGoal>();
 const busyMessage = "对话仍在运行，请等待结束或先停止后修改";
+
+function chooseSlot(engine: Session["engine"], mode: SlotMode, slotId?: string | null): Slot | undefined {
+  const usable = db.slots.filter(slot => slot.engine === engine && slot.status === "IDLE" && (!slot.in_use || slot.in_use_by_you));
+  const selected = usable.find(slot => slot.id === slotId);
+  return mode === "auto" ? selected ?? usable[0] : selected;
+}
+
+function invalidMode(engine: Session["engine"], mode: SlotMode): boolean {
+  return !["manual", "auto"].includes(mode) || mode === "auto" && engine !== "claude";
+}
 
 function goalAction(sessionId: string, action: string, objective?: string): CodexGoal | null {
   const current = goals.get(sessionId);
@@ -43,8 +56,14 @@ export const sessionHandlers = [
   http.post("/api/sessions", async ({ request }) => {
     const input = await readBody<SessionInput>(request);
     if (!db.projects.some((project) => project.id === input.projectId)) return fail(400, "项目不存在");
+    const engine = input.engine ?? "claude";
+    const slotMode = input.slotMode ?? "manual";
+    if (invalidMode(engine, slotMode)) return fail(400, "自动选择仅适用于 Claude 对话");
+    if (slotMode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
+    const slot = chooseSlot(engine, slotMode, input.slotId);
+    if (!slot) return fail(409, "当前没有可用的授权账号");
     const session: Session = {
-      id: crypto.randomUUID(), project_id: input.projectId!, engine: input.engine || "claude", slot_id: input.slotId || null,
+      id: crypto.randomUUID(), project_id: input.projectId!, engine, slot_mode: slotMode, slot_id: slot.id,
       title: input.title || "新对话", status: "idle", updated_at: timestamp(), model: input.model ?? null,
       reasoning_effort: input.reasoningEffort ?? null, permission_mode: input.permissionMode ?? "manual",
       agent_mode: input.agentMode ?? "normal", role_preset: input.rolePreset ?? "default",
@@ -55,12 +74,21 @@ export const sessionHandlers = [
   http.patch("/api/sessions/:id", async ({ params, request }) => {
     const id = String(params.id);
     const input = await readBody<SessionInput>(request);
-    if (!findSession(id)) return fail(404, "对话不存在");
-    const settingsChanged = [input.permissionMode, input.agentMode, input.rolePreset, input.slotId].some((value) => value !== undefined);
+    const current = findSession(id);
+    if (!current) return fail(404, "对话不存在");
+    const settingsChanged = [input.permissionMode, input.agentMode, input.rolePreset, input.slotId, input.slotMode].some((value) => value !== undefined);
     if (settingsChanged && isRunning(id)) return fail(409, busyMessage);
+    const slotMode = input.slotMode ?? (input.slotId !== undefined ? "manual" : current.slot_mode);
+    if (invalidMode(current.engine, slotMode)) return fail(400, "自动选择仅适用于 Claude 对话");
+    if (slotMode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
+    if (slotMode === "manual" && (input.slotId !== undefined || input.slotMode !== undefined)
+      && !chooseSlot(current.engine, slotMode, input.slotId ?? current.slot_id)) return fail(409, "所选授权账号不可用");
+    const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
     const session = touchSession(id, Object.fromEntries(Object.entries({
       title: input.title, permission_mode: input.permissionMode, agent_mode: input.agentMode,
-      role_preset: input.rolePreset, slot_id: input.slotId,
+      role_preset: input.rolePreset, slot_id: input.slotId, slot_mode: slotMode,
+      question_mode: input.questionMode, question_timeout_ms: input.questionTimeoutMs,
+      ...(changedSlot ? { model: null, reasoning_effort: null } : {}),
     }).filter(([, value]) => value !== undefined)));
     emit({ type: "session", sessionId: id, payload: asPayload(session!) });
     return HttpResponse.json(session);
@@ -81,6 +109,7 @@ export const sessionHandlers = [
     if (!session) return fail(404, "对话不存在");
     const input = await readBody<SessionInput>(request);
     if (!input.content?.trim()) return fail(400, "请输入消息内容");
+    if (session.slot_mode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
     if (isRunning(session.id)) {
       // The demo agent follows a script, so it only records guidance sent during a reply.
       if (input.mode && input.mode !== "steer") return fail(409, "演示环境仅支持以「引导」方式在运行中发送。");
@@ -89,8 +118,12 @@ export const sessionHandlers = [
       emit({ type: "message", sessionId: session.id, payload: message });
       return HttpResponse.json({ sessionId: session.id, status: "steered" });
     }
+    const slot = chooseSlot(session.engine, session.slot_mode, input.slotId ?? session.slot_id);
+    if (!slot) return fail(409, "当前没有可用的授权账号");
     Object.assign(session, {
-      model: input.model ?? session.model, reasoning_effort: input.reasoningEffort ?? session.reasoning_effort,
+      slot_id: slot.id,
+      model: input.model === undefined ? session.model : input.model,
+      reasoning_effort: input.reasoningEffort === undefined ? session.reasoning_effort : input.reasoningEffort,
       permission_mode: input.permissionMode ?? session.permission_mode,
       agent_mode: input.agentMode ?? session.agent_mode, role_preset: input.rolePreset ?? session.role_preset,
     });

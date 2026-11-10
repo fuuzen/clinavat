@@ -10,7 +10,7 @@ Clinavat 由两部分组成：**Hub**（Node.js 后端，默认监听 `127.0.0.1
 | 运行时 | Node.js 22.13+（建议 22.23.4） |
 | 同步 | Mutagen 0.18.1 |
 | 官方 CLI | Claude Code（最低 2.1.295，建议 2.1.308）、Codex 0.164.0 |
-| 宿主机部署另需 | Caddy |
+| 宿主机部署另需 | Caddy；虚拟机模式还需要 OpenSSH 服务器 |
 
 Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CODE_VERSION`、`CODEX_VERSION`、`MUTAGEN_VERSION` 调整。
 
@@ -29,12 +29,14 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 | `CLINAVAT_REGISTRATION` | 是否开放自助注册，默认 `false`；修改后需重启 Hub |
 | `CLINAVAT_ORIGIN` | 首次启动时导入的公开访问地址（宿主机部署），见下文 |
 | `CLINAVAT_PUBLIC_ORIGIN` | 同上，供 Compose 部署使用 |
-| `CLINAVAT_APPROVAL_TIMEOUT_MS` | 网页审批的等待时间，默认 5 分钟 |
+| `CLINAVAT_APPROVAL_TIMEOUT_MS` | 网页审批的等待时间，默认 5 分钟；也是提问等待时间的初始全站默认值，之后可在管理面板「对话设置」中修改，见[无人回答的提问](agents.md#无人回答的提问) |
 | `CLINAVAT_RUNTIME_IDLE_MS` | 回复结束后 CLI 进程常驻的空闲时间，默认 5 分钟，见[常驻进程](agents.md#常驻进程与空闲回收) |
+| `CLINAVAT_UPLOAD_LIMIT_MB` | 网页上传单个文件的大小上限，默认 1024 MiB，见[上传文件](projects.md#上传文件) |
 | `CLINAVAT_EXECUTION_HOST` | `process`（默认）或 `lxd`，见[虚拟机隔离](vm-isolation.md) |
 | `CLINAVAT_LXD_REMOTE` / `_PROJECT` / `_IMAGE`、`CLINAVAT_LXC_BIN` | LXD 模式的连接配置，默认 `clinavat-host`、`clinavat`、`clinavat-agent`、`lxc` |
 | `CLINAVAT_VM_START_TIMEOUT_MS` / `CLINAVAT_VM_BUS_PORTS` | 虚拟机开机等待上限和设备端口数，见[容量与默认值](vm-isolation.md#容量与默认值) |
 | `CLINAVAT_VM_ADDRESSES`、`CLINAVAT_WORKSPACE_MEMORY`、`CLINAVAT_LXD_WORKSPACE_IMAGE`、`CLINAVAT_IMAGE_BUILDER_ADDRESS` | 固定地址范围、工作区容器内存与镜像、镜像构建地址，见[容量与默认值](vm-isolation.md#容量与默认值) |
+| `CLINAVAT_VM_BRIDGE`、`CLINAVAT_HOST_SSH_PORT` | 本机项目命令登录的宿主机网桥地址和 sshd 端口，见[宿主机命令入口](vm-isolation.md#宿主机命令入口) |
 | `CLINAVAT_GATEWAY_HOST` / `_PORT` / `_USER` | [上游网关](../deploy/gateway/README.md)的 SSH 地址；留空则管理面板不连接网关 |
 | `CLINAVAT_*_BIN` | `claude`、`codex`、`mutagen`、`ssh`、`ssh-keygen` 的可执行文件路径 |
 
@@ -82,6 +84,17 @@ sudo cp deploy/clinavat-tmpfiles.conf /etc/tmpfiles.d/clinavat.conf
 
 修改了 `CLINAVAT_WORKSPACE_DIR` 时，同步修改该文件中的路径。
 
+### 本机项目的命令
+
+虚拟机模式下，本机项目的命令经 SSH 回到宿主机、以 Hub 用户执行，需要宿主机运行 OpenSSH 服务器。`deploy/lxd/setup.sh` 安装时会配置 sshd（虚拟机网段只能用密钥登录）和出站规则；Hub 启动时自行生成并授权专用密钥。在 `setup.sh` 加入这一步之前安装的环境，由 root 补做一次：
+
+```bash
+sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh apply --hub-user <Hub 用户>
+sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh check --hub-user <Hub 用户>   # 之后随时可单独检查
+```
+
+运行目录中的脚本随 `host:install` 和发布更新。连接状态在管理面板「宿主机 → 本机项目的命令执行」中查看，详见[宿主机命令入口](vm-isolation.md#宿主机命令入口)。
+
 ## Docker / Podman Compose
 
 ```bash
@@ -115,6 +128,7 @@ docker compose exec hub node -e "fetch('http://127.0.0.1:3001/api/health').then(
 
 - 每个地址是完整的 Origin，例如 `https://clinavat.example.com` 或带非默认端口的 `http://10.0.0.5:8080`；不能包含路径、参数、用户名或通配符。
 - 可以添加多个域名，它们共享账号和数据，但登录 Cookie 按域名区分，需要分别登录。
+- [桌面和移动客户端](client.md)打开的地址同样要在名单中。
 - 名单保存在数据库中。`CLINAVAT_ORIGIN` / `CLINAVAT_PUBLIC_ORIGIN` 只在首次启动时导入一次，之后修改环境变量不会覆盖面板中的配置，删除的地址也不会被重新导入。
 
 首次就想通过公开域名访问时，可以在 `.env` 预填：
@@ -164,16 +178,23 @@ CLINAVAT_COOKIE_SECURE=true
 
 ## 不中断任务的发布
 
-宿主机部署的线上文件位于运行目录（默认 `~/.local/lib/clinavat`）的 `backend/dist` 和 `frontend/dist`。发布只接受已提交的版本：脚本在全新的克隆里安装依赖、检查和构建，工作区里的未提交修改、`node_modules` 和 Git hooks 都不会参与。
+宿主机部署的线上文件位于运行目录（默认 `~/.local/lib/clinavat`）的 `backend/dist` 和 `frontend/dist`。构建脚本总是在全新的克隆里安装依赖、检查和构建，工作区的 `node_modules`、Git 配置和 hooks 都不会参与。默认只构建指定的提交；加 `--working-tree` 时，构建 HEAD 加上工作区里的全部修改，不需要先提交。
 
 ```bash
 scripts=~/.local/lib/clinavat/deploy
 node $scripts/build-release.mjs --repo <项目目录> <提交>       # 输出下面用到的路径
+node $scripts/build-release.mjs --repo <项目目录> --working-tree   # 或：不提交，按工作区现状构建
 node --no-warnings $scripts/release.mjs status
 node --no-warnings $scripts/release.mjs publish <暂存目录>
 # 依赖或部署脚本也有变化时，改用完整安装（会重启服务）：
 node $scripts/host.mjs install --source <源码目录>
 ```
+
+`--working-tree` 的范围和 `git status` 看到的一致：已跟踪文件的修改和删除，以及未被 `.gitignore` 忽略的新文件。脚本只复制这些文件的内容，不在仓库里执行任何 Git 配置的命令。补充说明：
+
+- **没有经过提交审阅**：构建的是执行那一刻工作区的内容，包括智能体刚写入的修改。构建会运行其中的 `package.json` 脚本和构建配置，权限与运行 Hub 的用户相同。
+- **留档**：构建成功后，与 HEAD 的差异保存为 `~/.local/state/clinavat/releases/<HEAD>-worktree-<摘要>.patch`，源码和暂存目录名带同样的后缀。工作区与 HEAD 相同时，按该提交构建，名称不带后缀。
+- **一致性**：智能体还在修改文件时，可能构建到改了一半的版本。先等相关对话结束；检查或构建失败时不会留下任何输出。
 
 发布脚本的行为：
 

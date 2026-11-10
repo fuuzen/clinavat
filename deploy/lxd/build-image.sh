@@ -39,7 +39,7 @@ case "$kind" in agent) alias="${alias:-clinavat-agent}" vm=(--vm) ;; workspace) 
   *) echo "--kind must be agent or workspace" >&2; exit 64 ;; esac
 
 # lxc reads configuration from stdin when it is not a terminal and would otherwise wait forever.
-run() { lxc "$@" --project "$project" </dev/null; }
+run() { lxc --project "$project" "$@" </dev/null; }
 remove_builder() { lxc delete "$remote:$builder" --force --project "$project" </dev/null >/dev/null 2>&1 || true; }
 
 provision() {

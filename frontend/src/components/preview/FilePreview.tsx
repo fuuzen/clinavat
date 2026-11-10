@@ -1,11 +1,13 @@
-import { Component, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, Download, Maximize2 } from "lucide-react";
 import { api, errorText } from "../../api";
-import { detectKind, fileName, kindInfo, rawUrl, type FileKind, type PreviewSource, type RendererProps } from "./fileKinds";
+import { detectKind, fileName, kindInfo, rawUrl, type FileKind, type FileMeta, type PreviewSource, type RendererProps } from "./fileKinds";
 import PreviewToolbar from "./PreviewToolbar";
 import BinaryCard, { PreviewLoading, PreviewMessage } from "./renderers/PreviewStates";
+import { useFileEditing } from "./editor/useFileEditing";
 
+const EditorPane = lazy(() => import("./editor/EditorPane"));
 const CodeView = lazy(() => import("./renderers/CodeView"));
 const MediaView = lazy(() => import("./renderers/MediaView"));
 const SheetView = lazy(() => import("./renderers/SheetView"));
@@ -28,20 +30,13 @@ renderers.svg = renderers.image;
 const heavyPreviewBytes = 40 * 1024 * 1024;
 const wrapPreference = "clinavat.preview.wrap";
 
-interface FileMeta {
-  path: string;
-  size: number;
-  mtime: number;
-  binary: boolean;
-  content?: string;
-}
-
 interface Props {
   projectId: string;
   path: string;
   refresh: number;
   onBack: () => void;
   onOpen: (path: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 class RendererBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -54,8 +49,16 @@ class RendererBoundary extends Component<{ fallback: ReactNode; children: ReactN
   }
 }
 
-export default function FilePreview({ projectId, path, refresh, onBack, onOpen }: Props) {
+export default function FilePreview({ projectId, path, refresh, onBack, onOpen, onDirtyChange }: Props) {
   const [meta, setMeta] = useState<FileMeta | null>(null);
+  // A metadata request still in flight when a save lands would otherwise bring back the version before it.
+  const localWrites = useRef(0);
+  const adoptSaved = useCallback((saved: FileMeta) => {
+    localWrites.current++;
+    setMeta(saved);
+  }, []);
+  const editing = useFileEditing(projectId, path, meta, adoptSaved);
+  const unsaved = editing.editing && editing.dirty;
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [showSource, setShowSource] = useState(false);
@@ -73,18 +76,23 @@ export default function FilePreview({ projectId, path, refresh, onBack, onOpen }
   }, [projectId, path]);
   useEffect(() => {
     let cancelled = false;
+    const writes = localWrites.current;
     setError("");
     api<FileMeta>(`/projects/${projectId}/file?path=${encodeURIComponent(path)}`)
       .then((result) => {
-        if (cancelled) return;
+        if (cancelled || writes !== localWrites.current) return;
         // Keep the current object when nothing changed so refreshes do not re-render heavy viewers.
-        setMeta((current) => (current?.path === result.path && current.mtime === result.mtime && current.size === result.size ? current : result));
+        setMeta((current) => (current?.path === result.path && current.etag === result.etag ? current : result));
       })
       .catch((cause) => !cancelled && setError(errorText(cause)));
     return () => {
       cancelled = true;
     };
   }, [projectId, path, refresh]);
+  useEffect(() => {
+    onDirtyChange?.(unsaved);
+  }, [unsaved, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useLayoutEffect(() => {
     (expanded ? modalRef.current : dockRef.current)?.appendChild(host);
   }, [expanded, host]);
@@ -92,7 +100,8 @@ export default function FilePreview({ projectId, path, refresh, onBack, onOpen }
   useEffect(() => {
     if (!expanded) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.fullscreenElement) setExpanded(false);
+      // The editor consumes Escape itself, for example to close its search panel.
+      if (event.key === "Escape" && !document.fullscreenElement && !event.defaultPrevented) setExpanded(false);
     };
     window.addEventListener("keydown", onKey);
     document.body.classList.add("preview-modal-open");
@@ -105,7 +114,16 @@ export default function FilePreview({ projectId, path, refresh, onBack, onOpen }
   let kind = detectKind(path);
   // Text renderers need the inline payload; binary or oversized text falls back to the download card.
   if (meta && !kindInfo[kind].raw && meta.binary) kind = "binary";
-  const canToggleSource = !!kindInfo[kind].hasSource && meta?.content !== undefined;
+  const canToggleSource = !!kindInfo[kind].hasSource && meta?.content !== undefined && !editing.editing;
+  const textContent = kindInfo[kind].editable ? meta?.content : undefined;
+  // Bytes that are not UTF-8 arrive as U+FFFD, so saving the text back would corrupt the file.
+  const editBlocked = textContent?.includes("\uFFFD") ? "文件含有无法识别的字符（可能不是 UTF-8 编码），不支持在线编辑" : undefined;
+  const leave = () => {
+    if (!unsaved || window.confirm("文件有未保存的修改，确定放弃吗？")) onBack();
+  };
+  const stopEditing = () => {
+    if (!editing.dirty || window.confirm("放弃未保存的修改？")) editing.stop();
+  };
   const sourceVisible = canToggleSource && showSource;
   const downloadUrl = rawUrl(projectId, path, { download: true });
   const source: PreviewSource | undefined = meta
@@ -115,7 +133,15 @@ export default function FilePreview({ projectId, path, refresh, onBack, onOpen }
   const heavy = !!source && !!kindInfo[kind].raw && ["pdf", "slides", "document", "sheet"].includes(kind) && source.size > heavyPreviewBytes;
 
   let body: ReactNode;
-  if (error) {
+  if (editing.editing && source) {
+    body = (
+      <RendererBoundary key={`edit:${path}`} fallback={<PreviewMessage source={source} title="编辑器出现问题" detail="请刷新页面后重试，未保存的修改可能已经丢失。" />}>
+        <Suspense fallback={<PreviewLoading label="正在加载编辑器" />}>
+          <EditorPane editing={editing} path={path} wrap={wrap} />
+        </Suspense>
+      </RendererBoundary>
+    );
+  } else if (error) {
     body = (
       <div className="preview-state preview-card">
         <span className="preview-card-icon tone-danger">
@@ -167,8 +193,18 @@ export default function FilePreview({ projectId, path, refresh, onBack, onOpen }
         showSource={sourceVisible}
         wrap={wrap}
         canToggleSource={canToggleSource}
-        canWrap={kind === "code" || sourceVisible || kind === "notebook"}
-        onBack={onBack}
+        canWrap={kind === "code" || sourceVisible || kind === "notebook" || editing.editing}
+        edit={{
+          available: textContent !== undefined,
+          blocked: editBlocked,
+          active: editing.editing,
+          dirty: editing.dirty,
+          saving: editing.saving,
+          onStart: () => meta && editing.begin(meta),
+          onSave: () => void editing.save(),
+          onStop: stopEditing,
+        }}
+        onBack={leave}
         onToggleExpanded={() => setExpanded((value) => !value)}
         onToggleSource={setShowSource}
         onToggleWrap={() =>

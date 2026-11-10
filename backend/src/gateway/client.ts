@@ -67,7 +67,12 @@ export class GatewayClient {
       // First use pins the host key; a changed key is refused afterwards.
       '-o', `UserKnownHostsFile=${this.knownHosts}`, '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=accept-new',
       '-T', `${target.username}@${target.host}`,
-    ], { input: JSON.stringify({ op, args }), timeout, maxBytes: 4 * 1024 * 1024 });
+    ], { input: JSON.stringify({ op, args }), timeout, maxBytes: 4 * 1024 * 1024 }).catch((error: Error) => {
+      if (error.message === `${this.config.sshBinary} 执行超时`) {
+        throw new HttpError(504, '网关请求超时，请检查网关的 SSH 服务和控制器状态');
+      }
+      throw new HttpError(502, `无法连接网关：${error.message.slice(0, 500)}`);
+    });
     const line = result.stdout.trim().split('\n').pop() ?? '';
     let response: { ok: boolean; result?: T; error?: string };
     try { response = JSON.parse(line); } catch {

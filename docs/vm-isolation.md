@@ -28,12 +28,14 @@
 
 - 所有为用户启动进程的代码都经过 `backend/src/execution/types.ts` 的 `ExecutionHost`，切换后端不再改动这些调用点。
 - **槽位 VM**：每个槽位一台，运行该槽位的全部 CLI 进程，包括对话、模型列表、额度查询和登录。同一账号因此始终出现在同一台机器、同一个出口上。主机名和系统 `/etc/machine-id` 由 Hub 为槽位生成并保存，重建虚拟机后保持不变；Claude 配置中的 CLI `machineID` 另按槽位持久保存，额度探针即使使用临时 HOME 也继承相同值。固定地址决定网关为它选择的出口，见[按来源绑定出口](#按来源绑定出口)。
-- **用户工作区容器**：每个用户一个 LXC 容器，只运行该用户的 Mutagen 守护进程、同步屏障的执行进程，以及本机项目变更面板用到的只读 Git 查询，不运行智能体，所以不需要独立内核。Git 查询放在这里而不是宿主机，是因为智能体能修改仓库的 Git 配置，而配置可以指定要执行的命令；这些命令最多只能在容器内运行。容器使用独立的 uid 范围（`security.idmap.isolated`），与其他工作区和 Hub 的用户互不重叠；目录通过 idmapped 挂载（`shift=true`）绑定进去，写入的文件在宿主机上属于 Hub 用户。与虚拟机相比，它没有 virtiofs 进程，扫描目录是本机文件系统的速度，几秒内启动，内存只占几十 MiB，也没有设备端口上限；与宿主机共享内核，槽位 VM 写入的文件也能立即触发它的变更通知。默认不绑定出口，只能访问直连名单中的开发机。
+- **用户工作区容器**：每个用户一个 LXC 容器，只运行该用户的 Mutagen 守护进程、同步屏障的执行进程，以及本机项目变更面板用到的只读 Git 查询，不运行智能体，所以不需要独立内核。Git 查询放在这里而不是宿主机，是因为智能体能修改仓库的 Git 配置，而配置可以指定要执行的命令；这些命令最多只能在容器内运行。容器使用独立的 uid 范围（`security.idmap.isolated`），其中仅 Hub 的 uid/gid 通过 `raw.idmap` 映射到容器内的同号用户，以普通 bind mount 访问共享目录，写入的文件在宿主机上属于 Hub 用户；root 和其他 uid/gid 仍使用各容器独立的映射。挂载路径白名单不允许使用 `shift=true`。与虚拟机相比，它没有 virtiofs 进程，扫描目录是本机文件系统的速度，几秒内启动，内存只占几十 MiB，也没有设备端口上限；与宿主机共享内核，槽位 VM 写入的文件也能立即触发它的变更通知。默认不绑定出口，只能访问直连名单中的开发机。
 - **网关保持虚拟机**：网关直接面对公网（Nginx、端口映射），并持有代理节点和证书的密钥。容器与宿主机共享内核，一旦网关被攻破，内核漏洞就能直通宿主机上的全部数据，因此不改为容器。它只有一台，改成容器约能省下 0.5 GiB 内存。
 - **同步屏障**：智能体在槽位 VM 中执行远程命令时，`remote-shell` 连接本机的中继进程，中继经 `lxc exec` 的标准输入输出把请求交给 Hub；Hub 持有项目命令锁，并让该用户工作区容器中的常驻进程执行 `mutagen sync flush`。虚拟机之间不开放网络。命令异常退出时连接断开，Hub 随即释放锁。
+
+Hub 重启后首次接管现有机器时，会重新挂载 `run/` 下的临时目录。systemd 会在服务停止时删除并重建这些目录，仅比较挂载路径会让机器继续读取旧目录，导致额度查询 HOME 或运行时密钥不可见。
 - 目录在虚拟机内挂载到与宿主机相同的绝对路径，数据库记录和原生会话路径不需要转换。
 - Claude 的审批 Hook 走 CLI 的标准输入输出（见[与智能体对话](agents.md)），不需要从虚拟机连回宿主机。
-- **本机项目**：管理员「本机开发机」上的项目同样在槽位 VM 中运行 CLI，项目目录通过 virtiofs 挂载到相同的绝对路径，不创建镜像，也不经过同步。账号因此只有一种身份和一个出口。见[本机项目](#本机项目)。
+- **本机项目**：管理员「本机开发机」上的项目同样在槽位 VM 中运行 CLI，项目目录通过 virtiofs 挂载到相同的绝对路径，不创建镜像，也不经过同步。账号因此只有一种身份和一个出口。Bash 命令经 SSH 回到宿主机执行，见[宿主机命令入口](#宿主机命令入口)。
 - **网页终端**：本机项目的网页终端按设计仍是宿主机 Shell，拥有 Hub 用户的全部权限。在其中手动运行 CLI 时，账号会显示宿主机的身份。
 - 每次运行在虚拟机内有独立的 cgroup，由 Hub 随命令传入的脚本创建，再降权到普通用户。暂停用 cgroup 冻结，结束时回收整棵进程树；客户端被强杀后遗留的进程组在下次检查时回收。ssh、同步屏障执行期间不会冻结。
 
@@ -51,28 +53,61 @@
 - **挂载白名单**：本机项目目录要加入 LXD 项目的 `restricted.devices.disk.paths`（`prepare-containers --local-root <目录>`），否则启动对话时会报错。
 - **防护**：虚拟机模式下，Hub 拒绝使用包含或位于数据目录、环境文件目录、发布备份目录、运行目录、项目镜像目录、`~/.ssh`、`~/snap`（LXD 客户端私钥）、`~/.claude`、`~/.codex` 的本机项目。
 
-**代价：**
+**代价：** 构建、测试等命令在宿主机执行，不受虚拟机的内存和工具限制。文件读写和搜索仍经 virtiofs，比本机文件系统慢；Codex 需按系统提示使用包装脚本，否则命令会留在虚拟机里执行。
 
-- **速度**：virtiofs 比本机文件系统慢。实测 `git status` 约 0.6 秒（本机 26 毫秒），`tsc` 约 20 秒（本机 7 秒）。
-- **内存**：槽位 VM 默认 1.5 GiB，同时运行 CLI 和大型构建可能不够。可以单独调高：`sudo lxc config set <实例> limits.memory=3GiB --project clinavat`，再重启该实例，并注意项目配额。
-- **变更通知**：在宿主机上修改文件，虚拟机内的 `tsc --watch`、vite 这类工具收不到通知。
-- **宿主机工具**：智能体用不了 `systemctl`、`lxc`、`sudo` 和宿主机的 SSH 密钥。部署和运维操作要在网页终端或服务器上执行。
-- **依赖**：虚拟机与宿主机共用 `node_modules`。系统版本不同时，一边安装的原生模块可能在另一边无法加载。
+**隔离的边界：** 本机项目的命令以 Hub 用户的身份在宿主机执行，所以这些对话中的智能体拥有 Hub 用户的全部权限，能读取环境文件中的主密钥、数据库和所有用户的数据。本机开发机只对管理员开放，正是因为这一点。智能体还能修改项目目录，包括 `node_modules`、`.git/hooks`、`.git/config` 和 `deploy/` 脚本。Hub 从运行目录启动，这些修改不会在重启时生效。开发 Clinavat 自身时要注意：
 
-**隔离的边界：** 智能体对项目目录有写权限，包括源码、`node_modules`、`.git/hooks`、`.git/config` 和 `deploy/` 脚本。Hub 从运行目录启动，所以这些修改不会在重启时生效。但只要在宿主机上用这个目录运行了命令，它们就会以 Hub 用户身份执行。开发 Clinavat 自身时要注意：
+- **发布**：用运行目录里的脚本在全新克隆中构建：审查提交后按提交构建，或用 `--working-tree` 直接按工作区构建（未经提交审阅，补丁留档），见[不中断任务的发布](deployment.md#不中断任务的发布)。不要在宿主机上的工作区里运行 `npm`、`git commit`、`git status` 或 `deploy/` 脚本：仓库的 Git 配置可以指定要执行的命令，在你自己的终端里运行时还能用上终端缓存的 sudo 凭据。
+- **需要 root 的脚本**：同样使用运行目录里的副本，例如 `sudo ~/.local/lib/clinavat/deploy/lxd/egress-bindings.sh`，不要用 `sudo` 运行项目目录里的脚本。运行目录随 `host:install` 和发布更新，新加的脚本要等下一次发布后才有副本；在那之前只能先审阅项目目录里的版本再运行。
 
-- **发布**：审查提交后，用运行目录里的脚本从提交构建，见[不中断任务的发布](deployment.md#不中断任务的发布)。不要在宿主机上的工作区里运行 `npm`、`git commit`、`git status` 或 `deploy/` 脚本。
-- **需要 root 的脚本**：同样使用运行目录里的副本，例如 `sudo ~/.local/lib/clinavat/deploy/lxd/egress-bindings.sh`，不要用 `sudo` 运行项目目录里的脚本。
+### 宿主机命令入口
+
+虚拟机模式下，本机项目的 CLI 在槽位 VM 中运行，账号的机器和出口不变；Bash 命令经 SSH 回到宿主机，以 Hub 用户的身份在同一个目录中执行。文件的读写和搜索仍通过挂载完成。没有改在虚拟机里执行的选项。
+
+| 内容 | 说明 |
+| --- | --- |
+| Claude 的 Bash | Hook 把命令改写为经 `host-shell` 执行，审批不变 |
+| Codex 的命令 | 按系统提示经 `host-shell -c '<命令>'` 执行；工作区沙箱会拦下 SSH，需要按提示批准 |
+| 暂停 | 与 SSH 开发机相同：等正在执行的宿主机命令结束才显示「已暂停」 |
+| 登录目标 | `<Hub 用户>@<网桥地址>:<端口>`，由 `CLINAVAT_VM_BRIDGE`（默认 `10.31.0.1/24`）和 `CLINAVAT_HOST_SSH_PORT`（默认 22）决定 |
+
+**Hub 自动维护的部分**（虚拟机模式，每次启动）：
+
+- 一把专用密钥：加密保存在 `<数据目录>/host-commands/`，解密到运行时密钥目录 `<数据目录>/run/keys/host-commands/`，与 SSH 配置、`known_hosts` 和 `host-shell` 放在一起。这个目录只读挂载进本机项目的运行，其他项目和探测进程看不到它。
+- `known_hosts` 直接取自宿主机的 `/etc/ssh/ssh_host_*_key.pub`，不需要首次连接时盲信。
+- Hub 用户的 `~/.ssh/authorized_keys` 中带标记的一段，只有这把密钥一行，并限定 `from="<虚拟机网段>",restrict,pty`。标记之外的内容不动；`authorized_keys` 是符号链接，或标记块缺少结束行时，Hub 拒绝改写并报错。
+- 启动后从宿主机登录一次。结果显示在管理面板「宿主机 → 本机项目的命令执行」，可点「重新检测」。登录失败时，本机项目的对话启动会报错并说明原因，不会退回虚拟机中执行。
+
+**安装时配置的部分**（root）：`setup.sh` 最后会运行 `host-commands.sh apply`。已有环境单独运行：
+
+```bash
+sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh apply --hub-user <Hub 用户>
+```
+
+- 在 `/etc/ssh/sshd_config` **末尾**写入带标记的 `Match Address <虚拟机网段>` 块，只允许该网段用密钥登录（`AuthenticationMethods publickey`）。`Match` 块一直延续到下一个 `Match` 或文件末尾，所以要放在最后，之后手动修改该文件时也要保持它在最后。修改前会备份为 `sshd_config.clinavat-backup`；`sshd -t` 不通过时自动还原，通过后重新加载 sshd。
+- 在出站规则 `clinavat-egress` 中放行网桥地址的 SSH 端口。重新运行 `setup.sh` 会重写出站规则，脚本随后会再加上这一条。
+- 不修改 sshd 监听的地址。默认监听所有地址即可；只监听特定地址时，自己加一行 `ListenAddress <网桥地址>`。使用 `ssh.socket` 时（Ubuntu 22.10 起），还要执行 `systemctl daemon-reload` 和 `systemctl restart ssh.socket`。
+- 最后执行 `check`。它也可以单独运行，检查监听地址、按虚拟机来源计算的 sshd 生效配置、出站规则、ufw（启用时提示放行命令），以及 Hub 是否已写入密钥。
+
+手动核对（以默认网段为例）：
+
+```bash
+sudo ss -ltn 'sport = :22'          # 应有 0.0.0.0:22、*:22 或 10.31.0.1:22
+sudo sshd -T -C user=<Hub 用户>,host=guest,addr=10.31.0.10,laddr=10.31.0.1,lport=22 \
+  | grep -E '^(authenticationmethods|passwordauthentication) '   # 应为 publickey 和 no
+```
+
+**安全**：本机项目对话中的智能体拥有 Hub 用户的全部权限，见上文[隔离的边界](#本机项目)。所有槽位 VM 和工作区容器都能连到宿主机的 SSH 端口，但登录只接受密钥，而这把密钥只挂载进管理员本机项目的运行；其他用户的智能体最多只能尝试连接。
 
 ## 隔离边界
 
 | 内容 | 是否隔离 |
 | --- | --- |
 | 其他用户的 workspace、会话数据、SSH 私钥 | 隔离：只挂载进本人的工作区容器，以及本人正在租用的槽位 VM |
-| 工作区容器与宿主机 | 共享内核，以独立 uid 范围的非特权容器运行；其中只有同步程序和 Git 查询。恶意开发机或被改过的 Git 配置可以在容器内运行代码，但还要再利用内核漏洞才能越过这一层 |
+| 工作区容器与宿主机 | 共享内核，以非特权容器运行；root 和其他 uid/gid 使用独立范围，仅 Hub 的 uid/gid 直接映射以访问已挂载目录。其中只有同步程序和 Git 查询，仍依赖容器的挂载、进程和网络隔离 |
 | 同一槽位 VM 中上一位用户留下的内容 | 清除：换人时结束上一位用户的全部进程，卸载其目录，清空 /tmp、/var/tmp、/dev/shm、虚拟机内的家目录和 SSH 连接复用目录；智能体没有 root，无法在其他位置留下内容 |
 | Hub 的数据库、`.env`、主密钥 | 隔离：项目策略禁止挂载这些路径 |
-| 宿主机和内网 | 隔离：出站规则只放行公网和列出的开发机地址 |
+| 宿主机和内网 | 隔离：出站规则只放行公网、列出的开发机地址和宿主机的 SSH 端口；宿主机只接受[宿主机命令入口](#宿主机命令入口)的专用密钥登录 |
 | 其他用户的虚拟机 | 隔离：网卡端口隔离，并过滤 MAC 和 IP |
 | **用户正在租用的共享槽位的账号令牌** | **不隔离**，见下文 |
 
@@ -105,7 +140,7 @@ CLI 必须读取槽位的 OAuth 凭据才能工作，所以槽位目录始终挂
 虚拟机可以在共享目录中创建任意符号链接和特殊文件。这些链接在虚拟机内解析时逃不出共享目录，但 Hub 在宿主机上操作同一目录时，如果跟随链接就可能读写其他用户的数据。规则：
 
 - **读取**用 `runtime/contained-files.ts` 的 `openContained`：非阻塞打开后，从文件描述符读回真实路径再校验，检查和读取之间没有竞争窗口，命名管道也不会卡住 Hub。工作区文件的预览、下载、列表和凭据读取都走它。
-- **写入**用先写临时文件再改名的方式，并拒绝符号链接目录。
+- **写入**用先写临时文件再改名的方式，并拒绝符号链接目录。网页上传和在线编辑的文件先在虚拟机看不到的暂存目录（`<CLINAVAT_WORKSPACE_DIR>/.transfers`）中写完，再由 `runtime/file-transfers.ts` 放进项目：目标目录逐级通过上一级的文件描述符创建并重新校验，路径中任何一级是符号链接都拒绝；不允许覆盖时用 `link` 放置，已有同名文件则失败，不会被替换。
 - **槽位的保存和恢复**在卸载之后进行，此时虚拟机改不了目录；移动文件用 `rename`，不跟随链接。
 - **Hub 需要读回的文件**（SSH 配置、运行时密钥）只读挂载。
 - **不解析共享目录中的复杂格式**：槽位里残留的 SQLite 文件直接归档，不打开。
@@ -124,10 +159,11 @@ sudo deploy/lxd/setup.sh --storage lvm:<卷组>/<精简池> --hub-user <Hub 用�
 ```
 
 - 使用已有卷组时，先手动建好精简池：`lvcreate --type thin-pool -L 40G -n clinavat-thin <卷组>`。
+- 宿主机需要安装并运行 OpenSSH 服务器：脚本最后运行 `host-commands.sh apply`，让虚拟机只能用密钥登录 Hub 用户，供本机项目执行命令，见[宿主机命令入口](#宿主机命令入口)。
 - 脚本把 LXD 的两个 socket 都收回给 root。**`lxd` 组成员等同于 root**，智能体命令又以 Hub 用户运行，所以 Hub 用户不能留在这个组里。此后管理 LXD 需要 `sudo lxc`。
 - 脚本结束时打印一条 `lxc remote add` 命令，以 Hub 用户执行。snap 版 `lxc` 固定把客户端证书放在 `~/snap/lxd/common/config`，备份数据目录时要一起备份。
 - 调用 `lxc launch` 时必须关闭标准输入（`</dev/null`），否则它会一直等待从标准输入读取配置。
-- 创建虚拟机时要带上 `raw.idmap`，它只能在关机状态下设置。`LxdExecutionHost` 创建时会自动带上。
+- 创建槽位 VM 和工作区容器时要带上 `raw.idmap`，映射 Hub 的 uid/gid；容器其余 uid/gid 仍使用独立范围。它只能在关机状态下设置，`LxdExecutionHost` 创建时会自动带上。项目通过 `restricted.idmap.uid` 和 `restricted.idmap.gid` 只允许映射 Hub 用户。
 
 ## 虚拟机镜像
 
@@ -191,6 +227,8 @@ deploy/lxd/build-image.sh --kind workspace   # 工作区容器镜像 clinavat-wo
 | `CLINAVAT_WORKSPACE_MEMORY` | `512MiB` | 工作区容器的内存上限，只在创建时生效 |
 | `CLINAVAT_LXD_WORKSPACE_IMAGE` | `clinavat-workspace` | 工作区容器镜像 |
 | `CLINAVAT_IMAGE_BUILDER_ADDRESS` | `10.31.0.9` | 镜像构建机的固定地址，须在虚拟机网段内、`CLINAVAT_VM_ADDRESSES` 之外，与 `build-image.sh --address` 一致 |
+| `CLINAVAT_VM_BRIDGE` | `10.31.0.1/24` | 宿主机在虚拟机网桥上的地址和网段长度，与 `lxc network get clinavat-users ipv4.address` 一致；本机项目的命令登录这个地址，宿主机只允许这个网段用密钥登录 |
+| `CLINAVAT_HOST_SSH_PORT` | `22` | 宿主机 sshd 的端口，与 `host-commands.sh --port` 一致 |
 | 项目配额 | `setup.sh --max-vms 8 --max-users 32` | `limits.virtual-machines` 取槽位数上限，`limits.containers` 取用户数上限，`limits.cpu` 取虚拟机数的 2 倍，`limits.memory` 取本机内存的 75%。配额按**所有已创建**的实例计算，包括已关机的。项目只接受独立 uid 范围的容器（`restricted.containers.privilege=isolated`） |
 
 配额按配置的上限计算，而不是实际占用：每个槽位 VM 计 2 个 vCPU 和 1.5 GiB，每个工作区容器计 1 个 vCPU 和 512 MiB，构建镜像时构建机再临时占一份。粗略估算：
@@ -319,7 +357,7 @@ sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户>
      --data-dir <新数据目录> --local-root <本机项目目录>
    ```
 
-7. 检查并执行（检查会用 Hub 的受限客户端创建一个临时容器，确认项目接受独立 uid 范围和 idmapped 挂载、写入的文件属于 Hub 用户，然后删除）：
+7. 检查并执行（检查会用 Hub 的受限客户端创建一个临时容器，确认项目接受独立 uid 范围及 Hub uid/gid 映射、普通 bind mount 写入的文件属于 Hub 用户，然后删除）：
 
    ```bash
    sudo deploy/lxd/egress-bindings.sh check --hub-user <Hub 用户>
@@ -342,7 +380,7 @@ sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户>
 
 **回滚**：`sudo deploy/lxd/egress-bindings.sh rollback`。先切回共享节点，再恢复网关、宿主机网络和 LXD 设置。迁移后创建的虚拟机有固定地址，在共享模式下同样可用。
 
-**全新安装**的顺序：`setup.sh`（本机项目目录用 `--local-root` 传入）→ 构建两个镜像 → `gateway-vm.sh prepare` 和 `cutover` → `egress-bindings.sh apply`。网关虚拟机的准备阶段依赖虚拟机网桥的地址转换，所以 `setup.sh` 仍先开启它，由迁移脚本关闭。
+**全新安装**的顺序：`setup.sh`（本机项目目录用 `--local-root` 传入）→ 构建两个镜像 → `gateway-vm.sh prepare` 和 `cutover` → `egress-bindings.sh apply`。`setup.sh` 已配置[宿主机命令入口](#宿主机命令入口)的 sshd 和出站规则。网关虚拟机的准备阶段依赖虚拟机网桥的地址转换，所以 `setup.sh` 仍先开启它，由迁移脚本关闭。
 
 ## 切换到虚拟机模式
 

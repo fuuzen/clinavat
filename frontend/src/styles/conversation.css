@@ -119,6 +119,26 @@
 .message-user > .message-author time {
   margin: 0 4px 0 0;
 }
+.message-collapsed {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
+}
+.message-expand {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  gap: 4px;
+  margin: 6px 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.message-expand:hover {
+  color: var(--text);
+  background: var(--hover);
+}
 .mini-avatar,
 .agent-avatar {
   display: flex;

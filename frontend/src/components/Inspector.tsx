@@ -1,7 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
-  ArrowLeft,
-  ChevronRight,
   Files,
   Folder,
   FolderCheck,
@@ -15,7 +13,9 @@ import {
 } from "lucide-react";
 import { api, errorText, formatBytes, post } from "../api";
 import type { FileEntry, GitState, Project, ProjectUsage } from "../types";
-import { iconFor, kindInfo, detectKind } from "./preview/fileKinds";
+import FileBrowser from "./workspace/FileBrowser";
+import UploadStatus from "./workspace/UploadStatus";
+import { useUploads } from "./workspace/useUploads";
 const TerminalView = lazy(() => import("./TerminalView"));
 const FilePreview = lazy(() => import("./preview/FilePreview"));
 
@@ -35,7 +35,6 @@ export default function Inspector({
   tabRequest,
 }: Props) {
   const [tab, setTab] = useState<"files" | "changes" | "terminal">("files");
-  useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -45,6 +44,7 @@ export default function Inspector({
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
   const projectId = project?.id;
   const showSyncAction = !!project &&
     (project.execution_mode !== "local" || project.sync_status === "ERROR");
@@ -86,6 +86,25 @@ export default function Inspector({
   useEffect(() => {
     void load();
   }, [load, refresh]);
+  const uploads = useUploads(projectId, () => void load());
+  const uploading = !!uploads.progress?.running;
+  useEffect(() => {
+    if (!editorDirty && !uploading) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editorDirty, uploading]);
+  // Leaving the files tab unmounts the editor; closing the panel also stops uploads.
+  const confirmDiscard = () => !editorDirty || window.confirm("文件有未保存的修改，确定放弃吗？");
+  const switchTab = (next: typeof tab) => {
+    if (next !== tab && confirmDiscard()) setTab(next);
+  };
+  useEffect(() => {
+    if (tabRequest && confirmDiscard()) setTab(tabRequest.tab);
+  }, [tabRequest]);
+  const close = () => {
+    if (confirmDiscard() && (!uploading || window.confirm("文件仍在上传，关闭工作区会中断上传。确定关闭吗？"))) onClose();
+  };
   function openFile(entry: FileEntry) {
     if (entry.type === "directory") setPath(entry.path);
     setSelected(entry.type === "file" ? entry.path : null);
@@ -135,7 +154,7 @@ export default function Inspector({
           </button>
           <button
             className="icon-button"
-            onClick={onClose}
+            onClick={close}
             aria-label="关闭工作区"
           >
             <X size={16} />
@@ -145,21 +164,21 @@ export default function Inspector({
       <div className="inspector-tabs">
         <button
           className={tab === "files" ? "active" : ""}
-          onClick={() => setTab("files")}
+          onClick={() => switchTab("files")}
         >
           <Files size={14} />
           文件
         </button>
         <button
           className={tab === "changes" ? "active" : ""}
-          onClick={() => setTab("changes")}
+          onClick={() => switchTab("changes")}
         >
           <GitCompareArrows size={14} />
           变更
         </button>
         <button
           className={tab === "terminal" ? "active" : ""}
-          onClick={() => setTab("terminal")}
+          onClick={() => switchTab("terminal")}
         >
           <TerminalSquare size={14} />
           终端
@@ -213,72 +232,23 @@ export default function Inspector({
                     refresh={refresh + previewReloads}
                     onBack={() => setSelected(null)}
                     onOpen={openLinkedFile}
+                    onDirtyChange={setEditorDirty}
                   />
                 </Suspense>
               ) : (
-                <>
-                  <div className="file-breadcrumb">
-                    {path ? (
-                      <button
-                        className="icon-button"
-                        onClick={() =>
-                          setPath(path.split("/").slice(0, -1).join("/"))
-                        }
-                        aria-label="上一级目录"
-                      >
-                        <ArrowLeft size={14} />
-                      </button>
-                    ) : (
-                      <ChevronRight size={13} />
-                    )}
-                    <span title={path}>{path || "项目根目录"}</span>
-                    <span className="file-count">{files.length}</span>
-                  </div>
-                  {busy ? (
-                    <div className="loading-state">
-                      <LoaderCircle size={18} className="spin" />
-                    </div>
-                  ) : files.length === 0 ? (
-                    <div className="inspector-empty small">
-                      <Folder size={25} />
-                      <p>
-                        这个目录暂时没有文件。
-                        <br />
-                        {project.execution_mode !== "local" && "首次同步可能需要一些时间。"}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="file-list">
-                      {[...files]
-                        .sort((a, b) =>
-                          a.type === b.type
-                            ? a.name.localeCompare(b.name)
-                            : a.type === "directory"
-                              ? -1
-                              : 1,
-                        )
-                        .map((entry) => {
-                          const FileIcon = iconFor(entry.path);
-                          return (
-                          <button
-                            key={entry.path}
-                            onClick={() => openFile(entry)}
-                          >
-                            {entry.type === "directory" ? (
-                              <Folder size={15} className="folder-icon" />
-                            ) : (
-                              <FileIcon size={14} className={`tone-${kindInfo[detectKind(entry.path)].tone}`} />
-                            )}
-                            <span>{entry.name}</span>
-                            {entry.type === "directory" && (
-                              <ChevronRight size={12} />
-                            )}
-                          </button>
-                          );
-                        })}
-                    </div>
-                  )}
-                </>
+                <FileBrowser
+                  path={path}
+                  entries={files}
+                  busy={busy}
+                  uploading={uploading}
+                  syncedMirror={project.execution_mode !== "local"}
+                  onNavigate={setPath}
+                  onOpen={openFile}
+                  onUpload={(picked) => void uploads.start(path, picked)}
+                />
+              )}
+              {uploads.progress && (
+                <UploadStatus progress={uploads.progress} onCancel={uploads.cancel} onDismiss={uploads.dismiss} />
               )}
             </div>
           ) : (

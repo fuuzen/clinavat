@@ -13,7 +13,7 @@ async function processIdentity(pid: string): Promise<ProcessIdentity> {
 
 const exited = (identity: ProcessIdentity) => ['Z', 'X', 'x'].includes(identity.state);
 
-export async function assertSlotProcessesStopped(home: string, sessionId?: string): Promise<void> {
+export async function assertSlotProcessesStopped(home: string, sessionId?: string, workspaceCgroups: ReadonlySet<string> = new Set()): Promise<void> {
   if (process.platform !== 'linux' || !process.getuid) throw new Error('槽位交接需要 Linux /proc 进程检查');
   const expected = resolve(home);
   const survivors: string[] = [];
@@ -24,6 +24,16 @@ export async function assertSlotProcessesStopped(home: string, sessionId?: strin
       if ((await stat(join('/proc', pid))).uid !== process.getuid()) continue;
       identity = await processIdentity(pid);
       if (exited(identity)) continue;
+      if (workspaceCgroups.size) {
+        const cgroups = await readFile(join('/proc', pid, 'cgroup'), 'utf8');
+        const unified = cgroups.split('\n').find(line => line.startsWith('0::'))?.slice(3);
+        if (unified && [...workspaceCgroups].some(root => unified === root || unified.startsWith(`${root}/`))) {
+          const current = await processIdentity(pid);
+          if (identity.start === current.start) continue;
+          identity = current;
+          if (exited(identity)) continue;
+        }
+      }
       const environment = await readFile(join('/proc', pid, 'environ'));
       const entries = environment.toString().split('\0');
       if (sessionId && !entries.includes(`CLINAVAT_SESSION_ID=${sessionId}`)) continue;

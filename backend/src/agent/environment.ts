@@ -23,7 +23,9 @@ export function agentEnvironment(execution: ExecutionHost, context: AgentContext
 }
 
 export function agentScope(context: AgentContext): ExecutionScope {
-  return { userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home, context.project.local_path] };
+  return { userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home, context.project.local_path],
+    // The host command key reaches local-project runs only.
+    ...(context.project.host_shell ? { readOnlyPaths: [path.dirname(context.project.host_shell)] } : {}) };
 }
 
 export async function findExecutable(binary: string): Promise<string> {

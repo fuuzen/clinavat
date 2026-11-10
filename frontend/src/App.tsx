@@ -3,13 +3,9 @@ import { AlertCircle, LoaderCircle } from "lucide-react";
 import { api, ApiError, errorText, post } from "./api";
 import { loadSiteSettings, useSiteSettings } from "./site/store";
 import type {
-  AgentSelection,
-  AgentBehavior,
-  InputMode,
   Approval,
   DevHost,
   Overview,
-  PermissionMode,
   Project,
   Session,
   ToolEvent,
@@ -17,14 +13,15 @@ import type {
 import { useWorkspaceEvents } from "./useWorkspaceEvents";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useConversationHistory } from "./useConversationHistory";
-import { useSessionBehavior, useSessionPermissions, useSessionSlot } from "./useSessionPermissions";
+import { useSessionBehavior, useSessionPermissions, useSessionQuestions, useSessionSlot } from "./useSessionPermissions";
 import { useSessionRunControl } from "./useSessionRunControl";
 import { usePendingSends } from "./components/chat/usePendingSends";
-import { clearComposerDraft, getComposerDraftKey, moveComposerDraft, readComposerDraft } from "./components/chat/composer/draftStorage";
+import { createMessageSender } from "./components/chat/send-message";
 import { HostDialog, ProjectDialog } from "./components/ResourceDialogs";
 import { hostConnectionMessage, type HostConnection } from "./components/hosts/host-connection";
 import Auth from "./components/Auth";
 import Brand from "./components/Brand";
+import ClientHubSwitch from "./components/ClientHubSwitch";
 import Sidebar from "./components/Sidebar";
 import Chat from "./components/Chat";
 import Inspector from "./components/Inspector";
@@ -101,6 +98,7 @@ export default function App() {
   const changePermission = useSessionPermissions(setOverview, notify);
   const changeSlot = useSessionSlot(setOverview, notify);
   const changeBehavior = useSessionBehavior(setOverview, notify);
+  const changeQuestions = useSessionQuestions(setOverview, notify);
   const runControl = useSessionRunControl(session, selectedSessionRef, setOverview, refresh, reloadMessages, notify);
   const refreshApprovals = useCallback(async () => {
     try {
@@ -189,72 +187,12 @@ export default function App() {
     setAdminOpen(false);
     changeSelection(nextProject.id, nextSession?.id);
   }
-  async function send(
-    content: string,
-    engine: "claude" | "codex",
-    selection: AgentSelection,
-    permissionMode: PermissionMode,
-    slotId: string,
-    behavior: AgentBehavior,
-    mode?: InputMode,
-  ) {
-    if (!project || !overview) return false;
-    const pending = beginSend(project.id, selectedSessionRef.current);
-    if (!pending) return false;
-    const request = ++sendRequestRef.current;
-    const originProjectId = project.id;
-    const originSessionId = selectedSessionRef.current;
-    const originDraftKey = getComposerDraftKey(overview.user.id, originProjectId, originSessionId);
-    const submittedDraft = readComposerDraft(originDraftKey);
-    // Messages for a running reply keep its live output on screen.
-    if (!mode) {
-      setStreaming("");
-      setTools([]);
-    }
-    try {
-      let target = session;
-      if (!target) {
-        target = await post<Session>("/sessions", {
-          projectId: project.id,
-          engine, slotId,
-          ...selection,
-          permissionMode,
-          ...behavior,
-          title: content.slice(0, 40),
-        });
-        moveComposerDraft(
-          originDraftKey,
-          getComposerDraftKey(overview.user.id, originProjectId, target.id),
-          request === sendRequestRef.current ? undefined : submittedDraft,
-        );
-        pending.useSession(target.id);
-        setOverview((previous) =>
-          previous
-            ? { ...previous, sessions: [target!, ...previous.sessions] }
-            : previous,
-        );
-        if (
-          request === sendRequestRef.current &&
-          selectedProjectRef.current === originProjectId &&
-          selectedSessionRef.current === originSessionId
-        ) {
-          selectedSessionRef.current = target.id;
-          setSessionId(target.id);
-        }
-      }
-      await post(`/sessions/${target.id}/messages`, { content, ...selection, permissionMode, slotId, ...behavior, ...(mode ? { mode } : {}) });
-      clearComposerDraft(originDraftKey, submittedDraft);
-      clearComposerDraft(getComposerDraftKey(overview.user.id, originProjectId, target.id), submittedDraft);
-      await Promise.all([refresh(), reloadMessages(target.id)]);
-      return request === sendRequestRef.current;
-    } catch (cause) {
-      notify(errorText(cause));
-      if (request !== sendRequestRef.current) return false;
-      throw cause;
-    } finally {
-      pending.finish();
-    }
-  }
+  const send = createMessageSender({
+    project, session, userId: overview?.user.id, beginSend, request: sendRequestRef,
+    selectedProject: selectedProjectRef, selectedSession: selectedSessionRef, selectSession: setSessionId,
+    receiveSession: target => setOverview(previous => previous ? { ...previous, sessions: [target, ...previous.sessions] } : previous),
+    clearOutput: () => { setStreaming(""); setTools([]); }, refresh, reloadMessages, notify,
+  });
   async function decide(
     id: string,
     decision: "allow" | "deny",
@@ -352,6 +290,7 @@ export default function App() {
         >
           重新连接服务
         </button>
+        <ClientHubSwitch />
       </div>
     );
   if (!overview)
@@ -421,6 +360,7 @@ export default function App() {
           onSend={send}
           onPermissionChange={changePermission}
           onBehaviorChange={changeBehavior}
+          onQuestionsChange={changeQuestions}
           onNotice={notify}
           onDiff={() => { setInspectorRequest({ tab: "changes", id: Date.now() }); setInspectorOpen(true); }}
           onSlotChange={changeSlot}

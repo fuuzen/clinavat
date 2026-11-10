@@ -1,9 +1,21 @@
 import { http, HttpResponse } from "msw";
 import type { AgentModel, DevHost, Project, SlotUsage } from "../../src/types";
-import { completePaths, fileMeta, gitState, listFiles, readFile, remoteDirectories } from "../filesystem";
+import { completePaths, fileMeta, gitState, isDirectory, listFiles, readFile, remoteDirectories, writeFile } from "../filesystem";
 import { emit } from "../events";
 import { db } from "../store";
 import { fail, ok, readBody } from "./respond";
+
+const transfers = new Map<string, Uint8Array[]>();
+
+// Mirrors the Hub's conditional writes: If-None-Match: * creates only, If-Match replaces only an unchanged file.
+function refusedWrite(request: Request, path: string) {
+  if (isDirectory(path)) return fail(409, "同名目录已存在");
+  const existing = fileMeta(path);
+  if (existing && request.headers.get("if-none-match") === "*") return fail(412, "文件已存在");
+  const expected = request.headers.get("if-match");
+  if (expected && existing?.etag !== expected) return fail(412, existing ? "文件已在其他地方被修改" : "文件已被删除");
+  return undefined;
+}
 
 const efforts = [
   { value: "low", label: "Low" },
@@ -41,7 +53,9 @@ function findProject(id: unknown): Project | undefined {
 
 export const workspaceHandlers = [
   http.get("/api/overview", () => db.signedIn
-    ? HttpResponse.json({ user: db.user, slots: db.slots, hosts: db.hosts, projects: db.projects, sessions: db.sessions })
+    ? HttpResponse.json({ user: db.user, slots: db.slots, hosts: db.hosts, projects: db.projects, sessions: db.sessions,
+      questionDefaults: { mode: db.userQuestions.mode ?? db.siteQuestions.mode, timeoutMs: db.userQuestions.timeoutMs ?? db.siteQuestions.timeoutMs },
+      deferredQuestions: [] })
     : fail(401, "请先登录")),
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),
@@ -144,6 +158,36 @@ export const workspaceHandlers = [
         "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
       },
     });
+  }),
+  http.put("/api/projects/:id/transfers/:transfer", async ({ request, params }) => {
+    const query = new URL(request.url).searchParams;
+    const path = query.get("path") || "";
+    const offset = Number(query.get("offset"));
+    const size = Number(query.get("size"));
+    const transfer = String(params.transfer);
+    if (offset === 0) {
+      const refused = refusedWrite(request, path);
+      if (refused) return refused;
+    }
+    const chunks = offset === 0 ? [] : transfers.get(transfer);
+    if (!chunks) return fail(409, "上传已失效，请重新上传");
+    chunks.push(new Uint8Array(await request.arrayBuffer()));
+    const received = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    if (received < size) {
+      transfers.set(transfer, chunks);
+      return HttpResponse.json({ received });
+    }
+    transfers.delete(transfer);
+    const refused = refusedWrite(request, path);
+    if (refused) return refused;
+    const bytes = new Uint8Array(received);
+    chunks.reduce((position, chunk) => (bytes.set(chunk, position), position + chunk.length), 0);
+    const { size: written, mtime, etag } = writeFile(path, bytes);
+    return HttpResponse.json({ received, file: { path, size: written, mtime, etag } });
+  }),
+  http.delete("/api/projects/:id/transfers/:transfer", ({ params }) => {
+    transfers.delete(String(params.transfer));
+    return ok();
   }),
   http.get("/api/projects/:id/git", () => HttpResponse.json(gitState())),
   http.get("/api/projects/:id/completions", ({ request }) =>

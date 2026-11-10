@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { AdminHealth } from "./types";
 import MobileCardDetails from "./MobileCardDetails";
+import HostCommands from "./HostCommands";
 import "../../styles/admin-host.css";
 
 interface Props {
@@ -93,6 +94,8 @@ export default function HostManagement({ health, loading, error, onRefresh }: Pr
           <div><span className="admin-host-icon"><Terminal size={17} /></span><div><strong>OpenSSH</strong><small>开发机安全连接</small></div><RuntimeStatus available={health?.runtime.ssh} loading={loading} /></div>
         </div>
       </section>
+
+      <HostCommands execution={health?.execution} />
 
       <section aria-labelledby="admin-host-resource-heading">
         <div className="admin-host-section-heading">

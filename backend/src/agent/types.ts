@@ -1,7 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { AccountCredentials } from '../accounts/credentials.js';
-import type { SlotUsage, UsageUpdate } from '../accounts/usage.js';
-import type { UserInputAnswers, UserInputQuestion } from './user-input.js';
+import type { SlotUsage } from '../accounts/usage.js';
+import type { UsageUpdate } from '../accounts/usage-parsers.js';
+import type { DeferredQuestion, UserInputOutcome, UserInputQuestion } from './user-input.js';
+import type { QuestionPolicy } from './session-settings.js';
 import type { RunControl } from './run-control.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
 import type { ExecutionHost } from '../execution/types.js';
@@ -17,6 +19,8 @@ export interface AgentConfig {
   usage?: SlotUsage;
   /** Refuses a run whose slot has no egress yet, instead of letting the CLI fail on network errors. */
   egress?: { assertBound(slotId: string): Promise<void> };
+  /** The wrapper that runs a local project's shell commands on the host; null where they run beside the CLI. */
+  hostShell?(context: AgentContext): Promise<string | null>;
 }
 
 export interface AgentContext {
@@ -28,10 +32,13 @@ export interface AgentContext {
   project: {
     id: string; local_path: string; remote_path: string; sync_name: string;
     execution_mode?: 'local' | 'direct' | 'bwrap' | 'symlink' | null;
+    /** Set for a run of a local project whose shell commands go back to the host over SSH. */
+    host_shell?: string | null;
   };
   session: {
     id: string;
     engine: 'claude' | 'codex';
+    slot_mode?: 'manual' | 'auto';
     native_session_id?: string | null;
     jsonl_file_path?: string | null;
     model?: string | null;
@@ -78,6 +85,17 @@ export interface AgentCallbacks {
   saveUserMessage(sessionId: string, content: string): string;
   /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */
   beginTurn(sessionId: string, origin: TurnOrigin, authorization: TurnAuthorization): string;
+  quotaReached?(context: AgentContext, quota: QuotaFailure): void;
+  prepareFailover?(context: AgentContext, quota: QuotaFailure, excludedSlotIds: string[], signal: AbortSignal): Promise<AgentContext>;
+  verifyAutomaticSlot?(context: AgentContext): Promise<void>;
+  // Must only inspect current eligibility; refreshing here could invalidate the frozen run identity.
+  assertAutomaticSlot?(context: AgentContext): void;
+  loadQueuedInputs?(sessionId: string): QueuedInput[];
+  saveQueuedInputs?(sessionId: string, inputs: QueuedInput[]): void;
+  /** Read for each question, so a changed setting applies to the next question of a running conversation. */
+  questionPolicy(sessionId: string): QuestionPolicy;
+  /** Keeps an unanswered question; it is answered later through a message. Throws when it cannot be kept. */
+  deferQuestion(question: DeferredQuestion): void;
 }
 
 export type TurnOrigin = { messageId: string } | { summary: string };
@@ -87,7 +105,8 @@ export type InputMode = 'steer' | 'queue' | 'interrupt';
 export interface QueuedInput { id: string; content: string; prompt: string; queuedAt: string; messageId?: string }
 /** A background task of the running CLI. */
 export interface RunTask { id: string; description: string; type: string }
-export interface TurnOutcome { status: 'completed' | 'interrupted' | 'error'; error?: string; output?: string }
+export interface QuotaFailure { window: string; resetsAt: string | null }
+export interface TurnOutcome { status: 'completed' | 'interrupted' | 'error'; error?: string; output?: string; quota?: QuotaFailure }
 
 /** One resident CLI process; a conversation runs any number of turns in it. */
 export interface AgentRun {
@@ -120,7 +139,7 @@ export interface RunServices {
   event(type: string, payload: unknown): void;
   update(fields: Parameters<AgentCallbacks['updateSession']>[1]): Promise<void>;
   approve(tool: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<ApprovalDecision>;
-  ask(questions: UserInputQuestion[], signal?: AbortSignal): Promise<UserInputAnswers | null>;
+  ask(questions: UserInputQuestion[], signal?: AbortSignal): Promise<UserInputOutcome>;
   verifyShell(): Promise<void>;
   /** Must be called synchronously with the end of the turn's output, before any event of a later turn. */
   turnEnded(outcome: TurnOutcome): void;

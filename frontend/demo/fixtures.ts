@@ -8,6 +8,7 @@ const ids = {
   member: "00000000-0000-4000-8000-000000000002",
   claudeSlot: "00000000-0000-4000-8000-000000000101",
   codexSlot: "00000000-0000-4000-8000-000000000102",
+  claudeBackupSlot: "00000000-0000-4000-8000-000000000103",
   localHost: "00000000-0000-4000-8000-000000000201",
   remoteHost: "00000000-0000-4000-8000-000000000202",
   webProject: "00000000-0000-4000-8000-000000000301",
@@ -22,13 +23,13 @@ function slot(id: string, label: string, engine: Slot["engine"]): Slot {
   return {
     id, label, engine, status: "IDLE", allowed_user_ids: [], max_concurrent_users: 1,
     in_use: false, in_use_by_you: false, active_user_id: null,
-    home_dir: `/data/slots/${engine}-1`, credential_revision: 1, updated_at: ago(600),
+    home_dir: `/data/slots/${id}`, credential_revision: 1, updated_at: ago(600),
   };
 }
 
 function session(id: string, projectId: string, engine: Session["engine"], slotId: string, title: string, minutes: number): Session {
   return {
-    id, project_id: projectId, engine, slot_id: slotId, title, status: "idle", updated_at: ago(minutes),
+    id, project_id: projectId, engine, slot_mode: "manual", slot_id: slotId, title, status: "idle", updated_at: ago(minutes),
     model: null, reasoning_effort: null, permission_mode: "manual", agent_mode: "normal", role_preset: "default",
   };
 }
@@ -48,7 +49,7 @@ function historyTurn(sessionId: string, userMessageId: string, answerId: string,
 export function createFixtures() {
   const user: User = { id: ids.admin, username: "demo", role: "admin", created_at: ago(60 * 24 * 30), ssh_public_key: demoKey };
   const users: User[] = [user, { id: ids.member, username: "teammate", role: "user", created_at: ago(60 * 24 * 7) }];
-  const slots = [slot(ids.claudeSlot, "Claude 账号 A", "claude"), slot(ids.codexSlot, "Codex 账号 A", "codex")];
+  const slots = [slot(ids.claudeSlot, "Claude 账号 A", "claude"), slot(ids.claudeBackupSlot, "Claude 账号 B", "claude"), slot(ids.codexSlot, "Codex 账号 A", "codex")];
   const hosts: DevHost[] = [
     { id: ids.localHost, kind: "local", name: "本机", host: "localhost", port: 22, username: "clinavat", status: "LOCAL" },
     {

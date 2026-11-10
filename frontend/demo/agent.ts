@@ -1,6 +1,6 @@
 import type { ActivityItem, Session, ToolEvent, Turn } from "../src/types";
 import { emit } from "./events";
-import { db, findSession, timestamp, touchSession, type DemoMessage } from "./store";
+import { db, findSession, timestamp, touchSession, type DemoMessage, type DemoQuestion } from "./store";
 
 interface Run {
   turn: Turn;
@@ -83,9 +83,12 @@ async function requestApproval(run: Run, session: Session, tool: ToolEvent) {
 }
 
 async function askQuestion(run: Run, session: Session) {
-  const request = {
+  const request: DemoQuestion = {
     id: crypto.randomUUID(),
     session_id: session.id,
+    status: "pending",
+    timeout_ms: session.question_timeout_ms ?? db.userQuestions.timeoutMs ?? db.siteQuestions.timeoutMs,
+    on_timeout: session.question_mode ?? db.userQuestions.mode ?? db.siteQuestions.mode,
     questions: [{
       id: "scope", header: "范围", question: "这次改动希望覆盖到哪些部分？",
       options: [
@@ -141,6 +144,12 @@ async function script(run: Run, session: Session, content: string) {
     decision.allow ? "- 在 `src/app.ts` 中接入了请求日志中间件；" : "- 修改被拒绝，代码保持原样；",
     "- `npm run typecheck` 通过。",
     "",
+    "```mermaid",
+    "flowchart LR",
+    "  request[请求] --> logger[请求日志中间件] --> router[路由] --> response[响应]",
+    "  logger -.-> sink[(日志平台)]",
+    "```",
+    "",
     "> 这是在线预览中的模拟回复，不会连接真实的智能体或开发机。",
   ].join("\n");
   await streamText(run, "answer", answer, true);
@@ -175,6 +184,7 @@ export function startRun(session: Session, content: string) {
   db.messages.push(request);
   const turn: Turn = {
     id: request.id, session_id: session.id, user_message_id: request.id, assistant_message_id: null,
+    slot_id: session.slot_id, credential_revision: db.slots.find(slot => slot.id === session.slot_id)?.credential_revision ?? null,
     started_at: timestamp(), completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: "running", items: [],
   };
   db.turns.push(turn);

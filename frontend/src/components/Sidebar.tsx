@@ -6,6 +6,7 @@ import {
   Folder,
   FolderPlus,
   LogOut,
+  MessageCircleQuestion,
   MessageSquare,
   Monitor,
   MoreHorizontal,
@@ -22,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import Brand from "./Brand";
+import ClientHubSwitch from "./ClientHubSwitch";
 import { isActive, statusLabel } from "../api";
 import type { DevHost, Overview, Project, Session } from "../types";
 
@@ -53,6 +55,7 @@ export default function Sidebar(props: Props) {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState("");
+  const waiting = new Set(overview.deferredQuestions.map((item) => item.session_id));
   function toggle(id: string) {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -305,6 +308,8 @@ export default function Sidebar(props: Props) {
                                         <Pause size={13} aria-label="已暂停" />
                                       ) : isActive(session.status) ? (
                                         <span className="running-dot" />
+                                      ) : waiting.has(session.id) ? (
+                                        <MessageCircleQuestion size={13} className="session-waiting" aria-label="有待回答的问题" />
                                       ) : (
                                         <MessageSquare size={13} />
                                       )}
@@ -400,6 +405,7 @@ export default function Sidebar(props: Props) {
                 <ShieldCheck size={16} />
               </button>
             )}
+            <ClientHubSwitch compact />
             <button
               className="icon-button"
               onClick={props.onLogout}

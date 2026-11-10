@@ -32,6 +32,8 @@ cd /root/clinavat-gateway
 
 Hub 接入时追加 `--hub-key 'ssh-ed25519 …'`，该密钥被限制为仅能从 `10.10.10.10` 调用 gwctl，不能获得 shell。安装后应删除号池机原有的网关 root 登录密钥，紧急运维从其他机器登录。
 
+管理面板读取失败时，先查看号池机上的 `journalctl --user -u clinavat-hub.service`。SSH 超时不代表公钥未授权，不需要因此重跑安装脚本。LXD 部署可用 `sudo lxc exec clinavat-gateway --project clinavat-gateway -- journalctl -b -u ssh -u systemd-logind --no-pager -n 80` 查看网关内部日志；在号池宿主机运行 `install.sh` 会因没有 sing-box 而退出。
+
 ## 变更与回滚
 
 每次变更：保存版本快照 → 校验约束、`sing-box check`、`nft -c`、`nginx -t` → 生效 → 健康检查（sing-box / tun、护栏、经代理的出口 IP、号池机 Web 与各站点）→ 90 秒内确认。健康检查失败立即回滚；未确认由 systemd 定时器自动回滚。存在待确认版本时拒绝新的变更；渲染文件被手工修改后拒绝覆盖，需显式传 `overwrite_drift`。

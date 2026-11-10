@@ -25,6 +25,8 @@ export function useChatCommands(props: {
   engine: "claude" | "codex";
   session?: Session;
   active: boolean;
+  switching: boolean;
+  settling: boolean;
   busy: boolean;
   behavior: AgentBehavior;
   selection: AgentSelection;
@@ -65,6 +67,8 @@ export function useChatCommands(props: {
     if (name === "help") { setHelpOpen(true); return "handled"; }
     if (name === "stop") { props.onStop(); return "handled"; }
     if (name === "pause" || name === "resume") {
+      if (props.settling) return fail("正在结束当前执行，请等待完成，或使用 /stop 停止任务。");
+      if (props.switching) return fail("正在切换账号，请等待完成，或使用 /stop 停止任务。");
       if (!props.session || !props.active) return fail("当前没有正在执行的任务。");
       const paused = props.runStatus === "paused" || props.runStatus === "pausing";
       if (name === "pause" && paused) return fail("任务已在暂停中，可使用 /resume 继续。");

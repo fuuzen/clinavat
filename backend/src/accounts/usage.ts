@@ -7,12 +7,11 @@ import { RpcClient } from '../agent/rpc.js';
 import type { AccountCredentials } from './credentials.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from './credential-files.js';
 import { accountIdentifier, credentialPath, type AccountEngine } from './paths.js';
-import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
+import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
-export type { UsageUpdate } from './usage-parsers.js';
 
 export interface UsageWindow {
   key: string;
@@ -32,7 +31,9 @@ export interface SlotUsageView {
   credits: { balance: string | null; unlimited: boolean } | null;
   // Explicit server signal only; never derived from percentages or reset times.
   limited: boolean | null;
+  limitingWindow?: string | null;
   observedAt: string | null;
+  queriedAt: string | null;
   checkedAt: string | null;
   source: 'query' | 'event' | null;
   stale: boolean;
@@ -43,14 +44,15 @@ export interface SlotUsageView {
 export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string }
 export interface ResidentUsage { update: UsageUpdate; identity: string | null }
 
-
 interface Snapshot {
   accountKey: string | null;
   plan: string | null;
   windows: Map<string, UsageWindow>;
   credits: SlotUsageView['credits'];
   limited: boolean | null;
+  limitingWindow?: string | null;
   observedAt: number;
+  queriedAt?: number;
   source: 'query' | 'event';
   unavailable?: string;
 }
@@ -91,9 +93,19 @@ async function accountKey(home: string, engine: AccountEngine): Promise<string |
   } catch { return null; }
 }
 
-// Cached usage is only dropped on a proven account change; an unreadable or rotating identity keeps it.
+// Cooldowns remain conservative when identity is unreadable or only a rotating token is known.
 function sameAccount(cached: string | null, current: string | null): boolean {
   return !cached || !current || cached === current || cached.startsWith('token:') || current.startsWith('token:');
+}
+export { sameAccount as sameUsageAccount };
+
+function sameSnapshotAccount(cached: string | null, current: string | null): boolean {
+  return !!cached && cached === current;
+}
+
+function reusableSnapshot(snapshot: Snapshot, identity: string | null): boolean {
+  return sameSnapshotAccount(snapshot.accountKey, identity)
+    || (!!snapshot.unavailable && snapshot.windows.size === 0 && snapshot.accountKey === identity);
 }
 
 interface CachedSnapshot extends Omit<Snapshot, 'windows'> { windows: UsageWindow[] }
@@ -191,6 +203,7 @@ async function codexProbe(probe: Probe): Promise<UsageUpdate> {
 export class SlotUsage {
   readResident: (slot: UsageSlot) => Promise<ResidentUsage | undefined> = async () => undefined;
   private states = new Map<string, SlotState>();
+  private identities = new Map<string, string | null>();
   private running = 0;
   private queue: (() => void)[] = [];
   private readonly root: string;
@@ -222,7 +235,10 @@ export class SlotUsage {
     catch { return; }
     for (const [slotId, entry] of Object.entries(cached ?? {})) {
       if (!entry || !Array.isArray(entry.windows) || typeof entry.observedAt !== 'number') continue;
-      this.state(slotId).snapshot = { ...entry, windows: new Map(entry.windows.map(window => [window.key, window])) };
+      const queriedAt = entry.queriedAt ?? (entry.source === 'query' ? entry.observedAt : undefined);
+      this.state(slotId).snapshot = { ...entry, queriedAt, windows: new Map(entry.windows.map(window => [window.key, {
+        ...window, observedAt: window.observedAt ?? (queriedAt ? new Date(queriedAt).toISOString() : undefined),
+      }])) };
     }
   }
 
@@ -245,19 +261,35 @@ export class SlotUsage {
     return state;
   }
 
-  captureIdentity(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>): Promise<string | null> {
-    return accountKey(slot.home_dir, slot.engine);
+  accountIdentity(slotId: string): string | null {
+    return this.identities.has(slotId) ? this.identities.get(slotId)! : this.state(slotId).snapshot?.accountKey ?? null;
+  }
+
+  async captureIdentity(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>): Promise<string | null> {
+    const identity = await accountKey(slot.home_dir, slot.engine);
+    this.bindIdentity(slot.id, identity);
+    return identity;
+  }
+
+  private bindIdentity(slotId: string, identity: string | null): void {
+    const state = this.state(slotId);
+    this.identities.set(slotId, identity);
+    // Unknown or rotated identities cannot prove that positive headroom belongs to the current login.
+    if (state.snapshot && !reusableSnapshot(state.snapshot, identity)) {
+      state.snapshot = undefined;
+      state.checkedAt = undefined;
+      state.error = undefined;
+      state.failures = 0;
+      this.scheduleSave();
+    }
   }
 
   async views(slots: UsageSlot[], refresh = false): Promise<Record<string, SlotUsageView>> {
     const result: Record<string, SlotUsageView> = {};
     for (const slot of slots) {
       const state = this.state(slot.id);
-      if (state.snapshot && !sameAccount(state.snapshot.accountKey, await accountKey(slot.home_dir, slot.engine))) {
-        state.snapshot = undefined;
-        state.checkedAt = undefined;
-        this.scheduleSave();
-      }
+      const identity = await accountKey(slot.home_dir, slot.engine);
+      this.bindIdentity(slot.id, identity);
       const interval = Math.min(AUTO_INTERVAL * 2 ** (state.failures ?? 0), STALE_AFTER);
       const lastUpdate = Math.max(state.checkedAt ?? 0, state.snapshot?.observedAt ?? 0);
       if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - lastUpdate >= interval) {
@@ -271,6 +303,7 @@ export class SlotUsage {
   async refresh(slot: UsageSlot): Promise<SlotUsageView> {
     const state = this.state(slot.id);
     if (slot.status === 'DISABLED') throw new Error('槽位已停用，不查询额度');
+    await this.captureIdentity(slot);
     if (state.inflight) await state.inflight;
     else if (Date.now() - (state.checkedAt ?? 0) >= FORCE_INTERVAL) await this.query(slot);
     return this.view(slot.id);
@@ -278,21 +311,25 @@ export class SlotUsage {
 
   view(slotId: string): SlotUsageView {
     const state = this.state(slotId);
-    const snapshot = state.snapshot;
+    const identity = this.identities.get(slotId);
+    const snapshot = state.snapshot && (identity === undefined || reusableSnapshot(state.snapshot, identity))
+      ? state.snapshot : undefined;
     const failedLater = !!state.error && (state.checkedAt ?? 0) > (snapshot?.observedAt ?? 0);
     return {
       slotId,
-      state: snapshot?.unavailable ? 'unavailable' : snapshot ? 'ok' : state.error ? 'error' : 'pending',
+      state: snapshot?.unavailable ? failedLater ? 'error' : 'unavailable' : snapshot ? 'ok' : state.error ? 'error' : 'pending',
       plan: snapshot?.plan ?? null,
       windows: [...(snapshot?.windows.values() ?? [])],
       credits: snapshot?.credits ?? null,
       limited: snapshot?.limited ?? null,
+      limitingWindow: snapshot?.limitingWindow ?? null,
       observedAt: snapshot ? new Date(snapshot.observedAt).toISOString() : null,
+      queriedAt: snapshot?.queriedAt ? new Date(snapshot.queriedAt).toISOString() : null,
       checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
       source: snapshot?.source ?? null,
       stale: !!snapshot && (Date.now() - snapshot.observedAt > STALE_AFTER || failedLater),
       refreshing: !!state.inflight,
-      error: snapshot?.unavailable ?? (failedLater || !snapshot ? state.error ?? null : null),
+      error: failedLater || !snapshot ? state.error ?? null : snapshot.unavailable ?? null,
     };
   }
 
@@ -300,19 +337,32 @@ export class SlotUsage {
   observe(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, kind: 'codex-read' | 'codex-event' | 'claude-event', payload: unknown,
     identity?: string | null): void {
     void (async () => {
+      const sourceIdentity = identity === undefined ? await accountKey(slot.home_dir, slot.engine) : identity;
       const update = kind === 'codex-read' ? parseCodexRead(payload) : kind === 'codex-event' ? parseCodexEvent(payload) : parseClaudeEvent(payload);
       if (!update.windows.length && update.limited === undefined && kind !== 'codex-read') return;
-      await this.apply(slot, update, kind === 'codex-read' ? 'replace' : 'merge', kind === 'codex-read' ? 'query' : 'event', identity);
+      await this.apply(slot, update, kind === 'codex-read' ? 'replace' : 'merge', kind === 'codex-read' ? 'query' : 'event', sourceIdentity);
     })().catch(() => undefined);
   }
 
   private async apply(slot: Pick<UsageSlot, 'id' | 'home_dir' | 'engine'>, update: UsageUpdate, mode: 'replace' | 'merge',
-    source: Snapshot['source'], identity?: string | null) {
+    source: Snapshot['source'], sourceIdentity?: string | null) {
     const state = this.state(slot.id);
-    const key = await accountKey(slot.home_dir, slot.engine);
-    if (identity !== undefined && (!identity || identity !== key)) throw new Error('读取额度期间账号已变化，已丢弃结果');
+    const currentIdentity = await accountKey(slot.home_dir, slot.engine);
+    this.identities.set(slot.id, currentIdentity);
+    const changed = sourceIdentity !== undefined && (source === 'event'
+      ? sourceIdentity === null || sourceIdentity !== currentIdentity : !sameAccount(sourceIdentity, currentIdentity));
+    if (changed) {
+      if (state.snapshot && !reusableSnapshot(state.snapshot, currentIdentity)) {
+        state.snapshot = undefined;
+        this.scheduleSave();
+        this.notify(slot.id);
+      }
+      throw new Error('额度查询期间账号已变化，已丢弃原账号的额度结果');
+    }
+    // Bind the observation to the account which issued it, never to an account found after the request returned.
+    const key = sourceIdentity === undefined ? currentIdentity : sourceIdentity;
     let snapshot = state.snapshot;
-    if (snapshot && !sameAccount(snapshot.accountKey, key)) snapshot = undefined;
+    if (snapshot && !sameSnapshotAccount(snapshot.accountKey, key)) snapshot = undefined;
     if (!snapshot || mode === 'replace' || snapshot.unavailable) {
       snapshot = { accountKey: key, plan: null, windows: new Map(), credits: null, limited: null, observedAt: Date.now(), source };
     }
@@ -326,10 +376,14 @@ export class SlotUsage {
     if (update.plan !== undefined) snapshot.plan = update.plan ?? snapshot.plan;
     if (update.credits !== undefined) snapshot.credits = update.credits;
     if (update.limited !== undefined) snapshot.limited = update.limited;
+    if (update.limitingWindow !== undefined) snapshot.limitingWindow = update.limitingWindow;
+    else if (update.limited !== undefined) snapshot.limitingWindow = null;
     if (update.unavailable) snapshot.unavailable = update.unavailable;
     snapshot.observedAt = Date.now();
+    // A partial event must not make an old, untouched subscription window look freshly queried.
+    if (mode === 'replace' && source === 'query') snapshot.queriedAt = snapshot.observedAt;
     snapshot.source = source;
-    snapshot.accountKey = key ?? snapshot.accountKey;
+    snapshot.accountKey = key;
     state.snapshot = snapshot;
     state.failures = 0;
     if (mode === 'replace') state.error = undefined;
@@ -342,9 +396,16 @@ export class SlotUsage {
     state.inflight ??= (async () => {
       this.notify(slot.id);
       try {
-        const result = await this.limited(async () => await this.readResident(slot)
-          ?? { update: await this.probe(slot), identity: undefined });
-        await this.apply(slot, result.update, 'replace', 'query', result.identity);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const sourceIdentity = await accountKey(slot.home_dir, slot.engine);
+          const result = await this.limited(async () => await this.readResident(slot)
+            ?? { update: await this.probe(slot), identity: sourceIdentity });
+          await this.apply(slot, result.update, 'replace', 'query', result.identity);
+          const currentIdentity = this.identities.get(slot.id) ?? null;
+          // A successful isolated probe may rotate its own token. Re-query under that identity rather than
+          // attributing the old request to a new login or treating normal token rotation as a failure.
+          if (result.identity === currentIdentity || currentIdentity === null) break;
+        }
       } catch (error) {
         state.error = error instanceof Error ? error.message.slice(0, 300) : '额度查询失败';
         state.failures = (state.failures ?? 0) + 1;

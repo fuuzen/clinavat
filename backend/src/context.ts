@@ -7,6 +7,9 @@ import type { AgentManager } from './agent/manager.js';
 import type { AgentConfig } from './agent/types.js';
 import type { ConnectionRegistry } from './connections.js';
 import type { ConversationStore } from './conversation.js';
+import type { SlotSelector } from './accounts/selection.js';
+import type { QuestionDefaults } from './question-defaults.js';
+import type { HostCommands } from './execution/host-commands.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -14,6 +17,10 @@ export interface Context {
   workspaces: WorkspaceManager; agents: AgentManager;
   connections: ConnectionRegistry;
   turns: ConversationStore;
+  slots: SlotSelector;
+  questionDefaults: QuestionDefaults;
+  /** Only with slot machines; otherwise a local project's commands already run on the host. */
+  hostCommands?: HostCommands;
 }
 const activeResources = new WeakMap<Context, Set<string>>();
 const sharedResources = new WeakMap<Context, Map<string, number>>();

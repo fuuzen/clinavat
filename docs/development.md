@@ -23,6 +23,8 @@ npm start       # 只启动后端；生产环境的前端由 Web 入口托管
 
 数据库默认位于 `~/.local/share/clinavat/clinavat.sqlite`，可用 `CLINAVAT_DATA_DIR` 修改。Vite 的开发设置（`VITE_*`）写在项目根目录的 `.env.local`，其中不要放密钥。构建和类型检查不需要官方账号或开发机。
 
+客户端不在根目录的 workspaces 中，开发和构建都在 `client/` 下进行，需要另装 Rust 工具链，见[客户端](client.md#构建)。只修改 Hub 列表页时，`npm run check --prefix client` 不需要 Rust。
+
 ## 在线预览
 
 在线预览是一个纯静态站点，可以托管到 GitHub Pages，用来展示和体验界面。它和正式版**使用同一份前端代码**：构建时以 `demo` 模式启动 [Mock Service Worker](https://mswjs.io/)，在浏览器里拦截 `/api` 的请求、SSE 事件流和终端 WebSocket，由 `frontend/demo/` 中的模拟数据和脚本化的智能体响应。
@@ -51,6 +53,7 @@ frontend/src/
   components/  界面组件
   site/        站点品牌设置
 frontend/demo/ 在线预览的模拟后端
+client/        桌面与移动客户端（Tauri 2），独立的 npm 项目，见 client.md
 deploy/        Caddy / Nginx 配置、宿主机服务、发布脚本、网关控制面
 docs/          使用与运维文档
 compose.yaml   Docker / Podman Compose 配置
@@ -64,5 +67,6 @@ compose.yaml   Docker / Podman Compose 配置
 - **开发机与同步**：在临时的本机 OpenSSH 节点上验证了密钥连接、目录浏览、Mutagen 双向同步、`remote-shell` 前后同步与退出码传递、远端 Git Diff、网页终端，以及删除项目时关闭终端并保留源码。
 - **CLI 交互**：用隔离的真实 Codex CLI 和本地模拟模型服务，验证了原生读取、`apply_patch`、批准与拒绝、权限保存、YOLO 和审批取消。核对了 Claude 的 Plan 参数与 compact 命令，以及 Codex 的协作模式、提问和压缩协议。
 - **网页**：在桌面和手机浏览器上验证了登录、槽位设置、对话创建 / 重命名 / 删除、文件预览、终端、`/` 与 `@` 补全、模式与角色切换、对话大纲和多选提问。
+- **客户端**：Hub 列表页通过类型检查和构建，原生部分对 Android 和 macOS 目标通过 `cargo check`，但还没有在任何平台上实际运行，详见[客户端](client.md#验证情况)。
 
 **尚未验证**：向真实上游模型发起完整对话、规划或上下文压缩流程；在线预览在真实浏览器中的运行。

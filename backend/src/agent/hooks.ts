@@ -42,11 +42,8 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
     await services.control.waitUntilRunning();
     if (tool === 'AskUserQuestion') {
       // Questions must reach the user even when native tool approvals are bypassed.
-      const timeout = new AbortController();
-      const cancelTimeout = services.control.timer(() => timeout.abort(), services.config.approvalTimeoutMs);
-      const updatedInput = await answerClaudeQuestions(services, args, timeout.signal).finally(cancelTimeout);
-      return updatedInput ? decision(true, '用户已回答问题', updatedInput)
-        : decision(false, '用户跳过或未回答这些问题，请依据已有信息继续，不要假定任何选项已获用户同意。');
+      const answer = await answerClaudeQuestions(services, args);
+      return 'updatedInput' in answer ? decision(true, '用户已回答问题', answer.updatedInput) : decision(false, answer.reason);
     }
     if (tool === 'ExitPlanMode') return decision(false, '请在最终回复中展示方案并结束本轮；用户可以通过网页模式菜单切换到 Normal 后请求执行。');
     const cwd = await workspacePath(root, String(input.cwd ?? '.'));
@@ -59,15 +56,14 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
         if (approved.decision !== 'allow') return decision(false, approved.reason ?? '用户拒绝执行');
         await services.verifyShell();
       }
-      if (services.context.project.execution_mode === 'local') {
-        return yolo ? decision(true, 'YOLO：本系统自动批准') : nativeDecision();
-      }
-      const shell = path.join(root, '.bin', 'remote-shell');
+      const local = services.context.project.execution_mode === 'local';
+      const shell = local ? services.context.project.host_shell : path.join(root, '.bin', 'remote-shell');
+      if (!shell) return yolo ? decision(true, 'YOLO：本系统自动批准') : nativeDecision();
       const updatedInput = {
         ...args,
         command: `cd ${quoteShell(cwd)} && ${quoteShell(shell)} ${background ? '--background ' : ''}-c ${quoteShell(args.command)}`,
       };
-      return yolo ? decision(true, 'YOLO：本系统自动批准，命令在开发机执行', updatedInput) : nativeDecision(updatedInput);
+      return yolo ? decision(true, `YOLO：本系统自动批准，命令在${local ? '宿主机' : '开发机'}执行`, updatedInput) : nativeDecision(updatedInput);
     }
     if (['Read', 'Edit', 'Write'].includes(tool)) {
       if (typeof args.file_path !== 'string') return decision(false, '文件路径无效');

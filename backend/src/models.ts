@@ -1,8 +1,9 @@
 import type { PermissionMode } from './agent/permissions.js';
-import type { AgentMode, RolePreset } from './agent/session-settings.js';
+import type { AgentMode, QuestionMode, RolePreset } from './agent/session-settings.js';
 
 export interface User {
   id: string; username: string; password_hash: string; role: 'admin' | 'user'; created_at: string;
+  question_mode?: QuestionMode | null; question_timeout_ms?: number | null;
 }
 export interface Slot {
   id: string; label: string; home_dir: string; engine: 'claude' | 'codex';
@@ -24,12 +25,15 @@ export interface Project {
 }
 export interface Session {
   id: string; project_id: string; user_id: string; engine: 'claude' | 'codex'; slot_id: string | null;
+  slot_mode: 'manual' | 'auto';
   title: string; status: string; native_session_id: string | null;
   jsonl_file_path: string | null; created_at: string; updated_at: string;
   model: string | null; reasoning_effort: string | null;
   permission_mode: PermissionMode;
   agent_mode: AgentMode;
   role_preset: RolePreset;
+  question_mode: QuestionMode | null;
+  question_timeout_ms: number | null;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

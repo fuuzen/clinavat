@@ -189,6 +189,12 @@
 .auth-switch button {
   color: var(--accent);
 }
+.auth-client-hub {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-top: 18px;
+}
 .auth-note {
   display: flex;
   align-items: center;

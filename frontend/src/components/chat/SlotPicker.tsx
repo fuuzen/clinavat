@@ -1,7 +1,7 @@
-import { Check, ChevronDown, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, RefreshCw, ShieldCheck, Shuffle } from "lucide-react";
 import { useState } from "react";
 import { statusLabel } from "../../api";
-import type { Slot, SlotUsage, UsageWindow } from "../../types";
+import type { AccountSelection, Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow, useSlotUsage } from "../../useSlotUsage";
 import SlotUsageRing from "../usage/SlotUsageRing";
 import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
@@ -11,18 +11,20 @@ import SettingsMenu from "./SettingsMenu";
 interface Props {
   slots: Slot[];
   slotId: string;
+  selection: AccountSelection;
   engine?: "claude" | "codex";
   disabled: boolean;
   saving: boolean;
-  onChange: (slotId: string) => void;
+  onChange: (selection: AccountSelection) => void;
 }
 
-export default function SlotPicker({ slots, slotId, engine, disabled, saving, onChange }: Props) {
+export default function SlotPicker({ slots, slotId, selection, engine, disabled, saving, onChange }: Props) {
   const usage = useSlotUsage(slots.length > 0);
   const now = useNow();
   const selected = slots.find((slot) => slot.id === slotId);
   const available = slots.filter((slot) => !engine || slot.engine === engine);
-  const name = selected?.label || (slotId ? "槽位不可用" : "选择账号");
+  const name = selection.slotMode === "auto" ? selected ? `自动 · ${selected.label}` : "自动选择"
+    : selected?.label || (slotId ? "槽位不可用" : "选择账号");
   const usageDescription = selected
     ? slotUsageRings(selected.engine, usage[selected.id], now, selected.status === "RATE_LIMITED").description : "";
   const title = `当前对话的授权槽位：${name}${selected ? ` · ${selected.engine === "claude" ? "Claude Code" : "Codex"}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
@@ -43,7 +45,7 @@ export default function SlotPicker({ slots, slotId, engine, disabled, saving, on
         </>
       )}
     >
-      {(close) => <SlotMenu available={available} slotId={slotId} engine={engine} usage={usage} now={now} onChange={onChange} close={close} />}
+      {(close) => <SlotMenu available={available} slotId={slotId} selection={selection} engine={engine} usage={usage} now={now} onChange={onChange} close={close} />}
     </SettingsMenu>
   );
 }
@@ -106,15 +108,15 @@ function SlotRefresh({ slot, usage }: { slot: Slot; usage?: SlotUsage }) {
   );
 }
 
-function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
-  available: Slot[]; slotId: string; engine?: "claude" | "codex"; usage: Record<string, SlotUsage>; now: number;
-  onChange: (slotId: string) => void; close: () => void;
+function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, close }: {
+  available: Slot[]; slotId: string; selection: AccountSelection; engine?: "claude" | "codex"; usage: Record<string, SlotUsage>; now: number;
+  onChange: (selection: AccountSelection) => void; close: () => void;
 }) {
   return (
         <>
           <div className="settings-menu-heading">
             <span>当前对话的授权槽位</span>
-            <SettingsHelp menuItem text={"切换仅影响当前对话，可在多个对话中同时使用不同槽位。\n额度条为已用比例，右侧为距重置的时间；查询失败时显示上次获取的数据。"} />
+            <SettingsHelp menuItem text={"Claude 自动选择可用账号，额度耗尽时切换账号继续当前任务。选择具体账号后仅使用该账号。\n切换仅影响当前对话。额度条为已用比例，右侧为距重置的时间；查询失败时显示上次获取的数据。"} />
           </div>
           {(["claude", "codex"] as const).map((type) => {
             const matching = available.filter((slot) => slot.engine === type);
@@ -122,6 +124,16 @@ function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
             return (
               <div key={type} role="group" aria-label={type === "claude" ? "Claude Code 账号" : "Codex 账号"}>
                 <div className="slot-menu-engine">{type === "claude" ? "Claude Code" : "Codex"}</div>
+                {type === "claude" && (
+                  <button type="button" className="settings-menu-item" role="menuitemradio"
+                    aria-checked={selection.slotMode === "auto" && selection.engine === "claude"} tabIndex={-1}
+                    disabled={!matching.some(slot => slot.status === "IDLE" && (!slot.in_use || slot.in_use_by_you))}
+                    onClick={() => { onChange({ engine: "claude", slotMode: "auto" }); close(); }}>
+                    <Shuffle size={16} aria-hidden="true" />
+                    <span className="settings-item-copy"><span className="settings-item-name">自动选择</span><small>额度耗尽时自动切换账号</small></span>
+                    <Check size={14} className="settings-item-check" aria-hidden="true" />
+                  </button>
+                )}
                 {matching.map((slot) => {
                   const slotUsage = usage[slot.id];
                   const limited = slot.status === "RATE_LIMITED";
@@ -131,11 +143,11 @@ function SlotMenu({ available, slotId, engine, usage, now, onChange, close }: {
                         type="button"
                         className="settings-menu-item"
                         role="menuitemradio"
-                        aria-checked={slot.id === slotId}
+                        aria-checked={selection.slotMode === "manual" && slot.id === slotId}
                         tabIndex={-1}
                         disabled={slot.status !== "IDLE" || (slot.in_use && !slot.in_use_by_you)}
                         title={slotUsageRings(slot.engine, slotUsage, now, limited).description}
-                        onClick={() => { onChange(slot.id); close(); }}
+                        onClick={() => { onChange({ engine: slot.engine, slotMode: "manual", slotId: slot.id }); close(); }}
                       >
                         <SlotUsageRing engine={slot.engine} usage={slotUsage} now={now} slotLimited={limited} plain />
                         <span className="slot-menu-label">{slot.label}</span>

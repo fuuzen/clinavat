@@ -33,7 +33,13 @@ done
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ -n "$wan_ip" ]] || { echo "--wan-ip is required" >&2; exit 64; }
 for tool in python3 sing-box nft systemd-run curl; do
-  command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
+  if ! command -v "$tool" >/dev/null; then
+    echo "missing $tool" >&2
+    if [[ "$tool" == sing-box ]]; then
+      echo "Run this script inside the gateway that runs sing-box; for an LXD gateway, enter the gateway VM first." >&2
+    fi
+    exit 1
+  fi
 done
 
 confirm() {

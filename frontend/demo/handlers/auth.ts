@@ -5,6 +5,7 @@ import { fail, ok, readBody } from "./respond";
 const health = {
   status: "ok",
   version: "demo",
+  execution: "process",
   runtime: { claude: true, codex: true, mutagen: true, ssh: true },
 };
 

@@ -47,7 +47,7 @@ rm -rf "$work"
 if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu 2>/dev/null || userdel ubuntu; fi
 groupdel ubuntu 2>/dev/null || true
 groupadd -g "$HUB_GID" clinavat
-# The same uid as the Hub is the identity a VM's virtiofs and a container's idmapped mounts write as on the host.
+# raw.idmap preserves the Hub's uid/gid through a VM's virtiofs and a container's bind mounts.
 useradd -u "$HUB_UID" -g "$HUB_GID" -m -s /bin/bash clinavat
 passwd -l root >/dev/null
 

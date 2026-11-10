@@ -1,7 +1,20 @@
 import { useState, type ReactNode } from "react";
-import { ArrowLeft, Check, Code2, Copy, Download, Eye, Maximize2, Minimize2, WrapText, X } from "lucide-react";
+import { ArrowLeft, Check, Code2, Copy, Download, Eye, LoaderCircle, Maximize2, Minimize2, Pencil, Save, WrapText, X } from "lucide-react";
 import { formatBytes } from "../../api";
 import { fileName, iconFor, kindInfo, type FileKind } from "./fileKinds";
+
+export interface EditControls {
+  /** The file is text that loaded inline, so it can be edited. */
+  available: boolean;
+  /** Why editing is unavailable even though the file is text. */
+  blocked?: string;
+  active: boolean;
+  dirty: boolean;
+  saving: boolean;
+  onStart: () => void;
+  onSave: () => void;
+  onStop: () => void;
+}
 
 interface Props {
   path: string;
@@ -13,6 +26,7 @@ interface Props {
   wrap: boolean;
   canToggleSource: boolean;
   canWrap: boolean;
+  edit: EditControls;
   onBack: () => void;
   onToggleExpanded: () => void;
   onToggleSource: (value: boolean) => void;
@@ -20,7 +34,7 @@ interface Props {
 }
 
 export default function PreviewToolbar(props: Props) {
-  const { path, kind, size, expanded, showSource, wrap } = props;
+  const { path, kind, size, expanded, showSource, wrap, edit } = props;
   const [copied, setCopied] = useState(false);
   const Icon = iconFor(path);
   const directory = path.split("/").slice(0, -1).join("/");
@@ -48,9 +62,27 @@ export default function PreviewToolbar(props: Props) {
           {kindInfo[kind].label}
           {size !== undefined && <> · {formatBytes(size)}</>}
           {expanded && directory && <> · {directory}</>}
+          {edit.active && edit.dirty && <em className="preview-unsaved"> · 未保存</em>}
         </small>
       </div>
       <div className="preview-actions">
+        {edit.active ? (
+          <>
+            <button className="preview-save-button" onClick={edit.onSave} disabled={!edit.dirty || edit.saving} title="保存（Ctrl / ⌘ + S）">
+              {edit.saving ? <LoaderCircle size={13} className="spin" /> : <Save size={13} />}
+              {edit.saving ? "保存中" : "保存"}
+            </button>
+            <button className="icon-button" onClick={edit.onStop} aria-label="退出编辑" title="退出编辑">
+              <Eye size={14} />
+            </button>
+          </>
+        ) : (
+          edit.available && (
+            <button className="icon-button" onClick={edit.onStart} disabled={!!edit.blocked} aria-label="编辑文件" title={edit.blocked ?? "编辑"}>
+              <Pencil size={14} />
+            </button>
+          )
+        )}
         {props.canToggleSource && (
           <div className="preview-segment" role="group" aria-label="显示方式">
             <button className={!showSource ? "active" : ""} onClick={() => props.onToggleSource(false)} title="渲染预览">

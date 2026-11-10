@@ -21,18 +21,25 @@ import { completionRoutes } from './routes/completions.js';
 import { adminRoutes } from './routes/admin.js';
 import { siteAccessRoutes } from './routes/site-access.js';
 import { siteSettingsRoutes } from './routes/site-settings.js';
+import { questionDefaultsRoutes } from './routes/question-defaults.js';
+import { QuestionDefaults } from './question-defaults.js';
 import { gatewayRoutes } from './routes/gateway.js';
 import { GatewayClient } from './gateway/client.js';
 import { GatewayService } from './gateway/service.js';
 import { SiteAccess } from './site-access.js';
 import { SiteSettingsService } from './site-settings.js';
-import type { Host, Project, Session } from './models.js';
+import { HttpError, type Host, type Project, type Session } from './models.js';
+import type { AgentContext } from './agent/types.js';
 import { AccountCredentials } from './accounts/credentials.js';
 import { ensureClaudeSlotIdentity } from './accounts/claude-identity.js';
 import { SlotUsage } from './accounts/usage.js';
+import { SlotSelector } from './accounts/selection.js';
+import { prepareSlotFailover } from './accounts/failover.js';
+import { slotForUser } from './accounts/access.js';
 import { LxdExecutionHost } from './execution/lxd-host.js';
 import { ProcessExecutionHost } from './execution/process-host.js';
 import { MachinePlan } from './execution/machine-plan.js';
+import { HostCommands } from './execution/host-commands.js';
 
 const app = Fastify({
   logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
@@ -69,8 +76,14 @@ await usage.init();
 // Slot machines exist only with the VM host, and only then does a slot need a gateway binding.
 const slotMachines = config.executionHost === 'lxd' ? machines : undefined;
 let gateway: GatewayService | undefined;
+const ssh = new SshManager(config);
+const hostCommands = execution.kind === 'vm' ? new HostCommands(config, ssh.keys) : undefined;
 const agentConfig = { ...config, credentials, usage, execution,
-  egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } } };
+  egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } },
+  hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
+    ? hostCommands.ensureReady() : null };
+const questionDefaults = new QuestionDefaults(store, config.approvalTimeoutMs);
+const slots = new SlotSelector(store, agentConfig);
 onSlotActivity = slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot', payload: { id: slotId } });
 };
@@ -78,7 +91,6 @@ const turns = new ConversationStore(store, turn => {
   const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', turn.session_id);
   if (session) events.broadcast(session.user_id, { type: 'turn', sessionId: turn.session_id, payload: turn });
 });
-const ssh = new SshManager(config);
 mutagenEnvironment = userId => ssh.mutagenEnvironment(userId);
 const workspaces = new WorkspaceManager(config, ssh, execution);
 for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
@@ -96,6 +108,33 @@ for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_stat
   }
 }
 const agents: AgentManager = new AgentManager(agentConfig, {
+  verifyAutomaticSlot: previous => slots.ensureEligible(
+    slotForUser(store, previous.slot.id, previous.user.id, previous.session.engine), previous.user.id, previous.session.model),
+  assertAutomaticSlot(previous) {
+    if (!slots.eligible(previous.slot, previous.user.id, previous.session.model)) {
+      throw new HttpError(409, '账号额度或身份已变化，请重新选择可用账号');
+    }
+  },
+  loadQueuedInputs(sessionId) {
+    const queue = store.get<{ inputs: string }>('SELECT inputs FROM session_input_queue WHERE session_id=?', sessionId);
+    return queue ? JSON.parse(queue.inputs) : [];
+  },
+  questionPolicy: sessionId => questionDefaults.forSession(sessionId),
+  deferQuestion(question) {
+    store.run('INSERT INTO deferred_questions(id,session_id,questions,created_at) VALUES(?,?,?,?)',
+      question.id, question.session_id, JSON.stringify(question.questions), question.created_at);
+  },
+  saveQueuedInputs(sessionId, inputs) {
+    if (!inputs.length) { store.run('DELETE FROM session_input_queue WHERE session_id=?', sessionId); return; }
+    store.run(`INSERT INTO session_input_queue(session_id,inputs) VALUES(?,?)
+      ON CONFLICT(session_id) DO UPDATE SET inputs=excluded.inputs,updated_at=datetime('now')`, sessionId, JSON.stringify(inputs));
+  },
+  quotaReached(previous, quota) {
+    slots.recordLimit(previous.slot, quota, previous.account_identity ?? null);
+    usage.observe(previous.slot, 'claude-event', { status: 'rejected', rateLimitType: quota.window,
+      ...(quota.resetsAt ? { resetsAt: Date.parse(quota.resetsAt) / 1000 } : {}) }, previous.account_identity ?? null);
+  },
+  prepareFailover: (previous, quota, excludedSlotIds, signal) => prepareSlotFailover(context, previous, quota, excludedSlotIds, signal),
   event(event) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', event.sessionId);
     if (session) {
@@ -203,7 +242,7 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns };
+const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, hostCommands };
 resourceRoutes(app, context);
 sessionRoutes(app, context);
 agentModelRoutes(app, context);
@@ -211,6 +250,7 @@ completionRoutes(app, context);
 adminRoutes(app, context);
 siteAccessRoutes(app, siteAccess);
 siteSettingsRoutes(app, new SiteSettingsService(store), store, events);
+questionDefaultsRoutes(app, context);
 gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMachines, config.imageBuilderAddress);
 gatewayRoutes(app, gateway);
 app.get('/api/health', async () => {
@@ -231,6 +271,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
 });
 try {
   await app.listen({ host: config.host, port: config.port });
+  // Prepares the key and logs in once, so a broken path shows in the admin panel before anyone needs it.
+  void hostCommands?.check().then(status => {
+    if (!status.ready) app.log.error({ error: status.error }, '宿主机命令入口不可用');
+  });
   // Guests run their own Mutagen daemons; asking for status boots the VM and restarts the daemon. Not awaited,
   // because a cold boot takes about a minute per user and the site must stay available meanwhile.
   if (execution.kind === 'vm') {

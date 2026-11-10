@@ -1,4 +1,4 @@
-import { Clock3, Square, TerminalSquare, X } from "lucide-react";
+import { Clock3, LoaderCircle, Square, TerminalSquare, X } from "lucide-react";
 import type { SessionRuntime } from "../../types";
 
 interface Props {
@@ -9,9 +9,15 @@ interface Props {
 
 /** Messages waiting for the running reply, and background tasks that will continue the conversation when they end. */
 export default function RuntimeStrip({ runtime, onCancelQueued, onStopTask }: Props) {
-  if (!runtime.queue.length && !runtime.tasks.length) return null;
+  if (!runtime.switching && !runtime.settling && !runtime.queue.length && !runtime.tasks.length) return null;
   return (
     <div className="runtime-strip" aria-label="运行队列">
+      {(runtime.switching || runtime.settling) && (
+        <div className="runtime-item" role="status">
+          <LoaderCircle size={13} className="spin" aria-hidden="true" />
+          <span className="runtime-item-text">{runtime.settling ? "正在结束当前执行，待发消息已保留…" : "额度已用尽，正在切换账号…"}</span>
+        </div>
+      )}
       {runtime.queue.map((item, index) => (
         <div key={item.id} className="runtime-item">
           <Clock3 size={13} aria-hidden="true" />

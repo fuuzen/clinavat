@@ -139,6 +139,8 @@ export function useWorkspaceEvents({
       if (
         data.type === "slot" ||
         data.type === "session" ||
+        data.type === "user-input" ||
+        data.type === "question-defaults" ||
         data.type === "project" ||
         data.type === "done" ||
         data.type === "error"

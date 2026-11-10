@@ -3,6 +3,7 @@
 @import "./styles/navigation.css";
 @import "./styles/workbench.css";
 @import "./styles/conversation.css";
+@import "./styles/diagrams.css";
 @import "./styles/activity.css";
 @import "./styles/composer.css";
 @import "./styles/agent-settings.css";
@@ -10,6 +11,8 @@
 @import "./styles/inspector.css";
 @import "./styles/file-preview.css";
 @import "./styles/file-viewers.css";
+@import "./styles/file-editor.css";
+@import "./styles/file-uploads.css";
 @import "./styles/dialogs.css";
 @import "./styles/settings.css";
 @import "./styles/user-management.css";

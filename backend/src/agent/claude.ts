@@ -6,7 +6,8 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { readJsonLines } from './ndjson.js';
 import { claudePermissionMode } from './permissions.js';
 import { projectInstructions } from './project-instructions.js';
-import { parseClaudeUsage } from '../accounts/usage.js';
+import { ClaudeQuotaTracker } from './claude-quota.js';
+import { parseClaudeUsage } from '../accounts/usage-parsers.js';
 import type { AgentRun, RunServices, RunTask } from './types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
@@ -58,6 +59,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const closed = observeProcessClose(child);
   let diagnostics = '';
   let resultError = '';
+  const quota = new ClaudeQuotaTracker();
   let messageId = '';
   let activeTextIndex: number | undefined;
   const thinkingBlocks = new Set<number>();
@@ -78,10 +80,12 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const control = new ClaudeControl(child, services, inputError);
   const stop = () => { stopped = true; control.close(new Error('会话已停止')); terminateProcess(child); };
   child.stdin.on('error', (error) => { if (!control.closed) inputError(error); });
-  const endTurn = () => {
+  const endTurn = (result?: Record<string, unknown>) => {
     if (!turnActive) return;
     turnActive = false;
     const failure = resultError;
+    const exhaustion = result ? quota.finish(result) : undefined;
+    if (!result) quota.reset();
     const wasInterrupted = interruptRequested;
     const finalGroup = !failure ? messageGroups.get([...messages.keys()].at(-1) || '') : undefined;
     const finalIds = finalGroup ? [...messages.keys()].filter(id => messageGroups.get(id) === finalGroup) : [];
@@ -98,7 +102,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     for (const { id, text } of finalTexts) services.event('activity', { id, kind: 'text', text, final: true });
     const output = finalTexts.map(item => item.text).join('\n\n').trim()
       || (services.context.session.command === 'compact' && !failure ? '原生上下文已压缩。网页中的历史消息仍会保留。' : '');
-    services.turnEnded(wasInterrupted ? { status: 'interrupted', output } : failure ? { status: 'error', error: failure, output } : { status: 'completed', output });
+    services.turnEnded(wasInterrupted ? { status: 'interrupted', output }
+      : failure ? { status: 'error', error: failure, output, quota: exhaustion } : { status: 'completed', output });
     if (nativeSessionReceived) void transcriptPath(services.context.runtime_home, nativeId)
       .then(transcript => transcript ? services.update({ jsonl_file_path: transcript }) : undefined).catch(() => undefined);
   };
@@ -108,7 +113,10 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       turnActive = true;
       services.automaticTurn({ messageId: pendingSteers.get(event.command_uuid)! });
     }
-    if (event.type === 'command_lifecycle' && ['started', 'completed', 'cancelled'].includes(event.state)) pendingSteers.delete(event.command_uuid);
+    if (event.type === 'command_lifecycle' && ['started', 'completed', 'cancelled'].includes(event.state)) {
+      pendingSteers.delete(event.command_uuid);
+      services.activityChanged();
+    }
     if (event.type === 'system' && event.subtype === 'background_tasks_changed' && Array.isArray(event.tasks)) {
       tasks = event.tasks.map((task: Record<string, unknown>) => ({
         id: String(task.task_id), description: String(task.description ?? ''), type: String(task.task_type ?? ''),
@@ -166,6 +174,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       }
     }
     if (event.type === 'assistant') {
+      quota.observeAssistant(event);
       const contents = Array.isArray(event.message?.content) ? event.message.content : [];
       const nativeMessageId = String(event.message?.id || messageId || randomUUID());
       for (const [index, entry] of contents.entries()) {
@@ -200,7 +209,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     }
     if (event.type === 'result') {
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
-        resultError = Array.isArray(event.errors) ? event.errors.join('\n') : String(event.result ?? event.subtype);
+        const errors = Array.isArray(event.errors) ? event.errors.join('\n') : '';
+        resultError = errors || String(event.result || event.api_error || event.subtype || 'CLI 返回失败结果');
       } else if (!messages.size && event.result) {
         const id = randomUUID();
         const text = String(event.result);
@@ -209,7 +219,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         messageGroups.set(id, id);
         services.event('activity', { id, kind: 'text', text });
       }
-      endTurn();
+      endTurn(event);
     }
   }, inputError);
   child.stderr.setEncoding('utf8');
@@ -221,9 +231,10 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       control.close(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
       signal?.removeEventListener('abort', stop);
       lines.close();
-      // Exiting between turns needs no report: every finished turn already recorded its own outcome.
-      if (turnActive && !stopped) reject(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
-      else resolve();
+      // An unexpected exit between turns must still block hand-over after a quota error.
+      if (!stopped && (turnActive || (!closing && code !== 0))) {
+        reject(new Error(resultError || diagnostics.trim() || `Claude CLI 已退出（${code ?? exitSignal}）`));
+      } else resolve();
     });
   }).finally(() => closed);
   // Attach the rejection handler before awaiting spawn: an unavailable binary can fail immediately.
@@ -246,6 +257,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     readUsage: async () => parseClaudeUsage(await control.request({ subtype: 'get_usage', skip_behaviors: true }, 30_000)),
     startTurn: async (text) => {
       if (closing) throw new Error('Claude CLI 正在退出');
+      quota.reset();
       turnActive = true;
       control.sendUser(text);
     },

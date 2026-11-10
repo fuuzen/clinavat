@@ -1,0 +1,155 @@
+/* Design tokens and base controls are shared with the Hub frontend. */
+@import "../../frontend/src/styles/base.css";
+
+body {
+  background: var(--bg);
+}
+.hub-picker {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: calc(32px + env(safe-area-inset-top)) calc(18px + env(safe-area-inset-right))
+    calc(32px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left));
+}
+.hub-panel {
+  width: min(100%, 520px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 20px 60px var(--shadow);
+}
+.hub-panel h1 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+.hub-panel header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.hub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hub-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.hub-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 7px;
+  color: var(--text);
+  text-align: left;
+}
+.hub-open:hover {
+  background: var(--hover);
+}
+.hub-open > svg {
+  color: var(--accent);
+}
+.hub-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hub-label strong,
+.hub-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-label strong {
+  font-weight: 550;
+}
+.hub-label small,
+.hub-url {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.hub-add {
+  align-self: flex-start;
+}
+.hub-launch {
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.hub-launch input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.hub-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.hub-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.hub-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.hub-opening {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 4px;
+  text-align: center;
+}
+.hub-opening > svg {
+  color: var(--accent);
+}
+.hub-opening p {
+  margin: 4px 0 0;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.hub-opening .button {
+  margin-top: 8px;
+}
+.hub-footer {
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 480px) {
+  .hub-panel {
+    padding: 22px 16px;
+    border-radius: 12px;
+  }
+}

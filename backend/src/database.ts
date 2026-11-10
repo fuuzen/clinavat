@@ -80,6 +80,16 @@ export class Store {
         status TEXT NOT NULL DEFAULT 'running', items TEXT NOT NULL DEFAULT '[]',
         slot_id TEXT, credential_revision INTEGER, paused_at TEXT, paused_ms INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS slot_quota_limits (
+        slot_id TEXT NOT NULL REFERENCES account_slots(id) ON DELETE CASCADE,
+        credential_revision INTEGER NOT NULL, window_key TEXT NOT NULL,
+        resets_at TEXT NOT NULL, account_key TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(slot_id,account_key,window_key)
+      );
+      CREATE TABLE IF NOT EXISTS session_input_queue (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        inputs TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         user_id TEXT NOT NULL REFERENCES users(id), tool TEXT NOT NULL, input TEXT NOT NULL,
@@ -99,12 +109,44 @@ export class Store {
         address TEXT NOT NULL UNIQUE, hostname TEXT, machine_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(kind, owner_id)
       );
+      CREATE TABLE IF NOT EXISTS question_defaults (
+        id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('skip','defer')), timeout_ms INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS deferred_questions (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        questions TEXT NOT NULL, created_at TEXT NOT NULL, deferred_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id,created_at);
       CREATE INDEX IF NOT EXISTS turns_session ON session_turns(session_id,started_at);
       CREATE INDEX IF NOT EXISTS slot_access_user ON slot_user_access(user_id,slot_id);
       CREATE UNIQUE INDEX IF NOT EXISTS local_host_user ON dev_hosts(user_id) WHERE kind='local';
+      CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
     `);
+    this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
+    // Question settings left NULL follow the next level: conversation, then its user, then the site.
+    for (const table of ['users', 'sessions']) {
+      this.addColumn(table, 'question_mode', "TEXT CHECK(question_mode IN ('skip','defer'))");
+      this.addColumn(table, 'question_timeout_ms', 'INTEGER');
+    }
+    if (!this.all<{ name: string }>('PRAGMA table_info(slot_quota_limits)').some(column => column.name === 'account_key')) {
+      this.db.exec('ALTER TABLE slot_quota_limits ADD COLUMN account_key TEXT');
+    }
+    if (!this.all<{ name: string; pk: number }>('PRAGMA table_info(slot_quota_limits)').some(column => column.name === 'account_key' && column.pk)) {
+      this.transaction(() => this.db.exec(`
+        CREATE TABLE slot_quota_limits_by_account (
+          slot_id TEXT NOT NULL REFERENCES account_slots(id) ON DELETE CASCADE,
+          credential_revision INTEGER NOT NULL, window_key TEXT NOT NULL,
+          resets_at TEXT NOT NULL, account_key TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY(slot_id,account_key,window_key)
+        );
+        INSERT INTO slot_quota_limits_by_account(slot_id,credential_revision,window_key,resets_at,account_key,recorded_at)
+          SELECT slot_id,MAX(credential_revision),window_key,MAX(resets_at),COALESCE(account_key,''),MAX(recorded_at)
+          FROM slot_quota_limits GROUP BY slot_id,COALESCE(account_key,''),window_key;
+        DROP TABLE slot_quota_limits;
+        ALTER TABLE slot_quota_limits_by_account RENAME TO slot_quota_limits;
+      `));
+    }
     const interruptedAt = new Date().toISOString();
     this.run(`UPDATE session_turns SET status='interrupted',completed_at=?,paused_at=NULL,
       duration_ms=CASE WHEN status='paused' AND duration_ms IS NOT NULL THEN duration_ms
@@ -115,6 +157,10 @@ export class Store {
     for (const user of this.all<User>("SELECT * FROM users WHERE role='admin'")) ensureLocalHost(this, user.id);
     this.run("UPDATE approvals SET status='expired', reason='服务重新启动' WHERE status='pending'");
     this.run('DELETE FROM auth_sessions WHERE expires_at < ?', Date.now());
+  }
+  private addColumn(table: string, column: string, definition: string) {
+    if (this.all<{ name: string }>(`PRAGMA table_info(${table})`).some(item => item.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   get<T>(sql: string, ...params: SQLInputValue[]): T | undefined {
     return this.db.prepare(sql).get(...params) as T | undefined;

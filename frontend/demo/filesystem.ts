@@ -12,6 +12,7 @@ const files: Record<string, string> = {
 };
 // A fixed timestamp keeps preview URLs stable across demo reloads.
 const demoModified = Date.UTC(2026, 9, 26, 8, 0, 0);
+const modified = new Map<string, number>();
 
 const git: GitState = {
   branch: "feature/request-logging",
@@ -54,7 +55,24 @@ export function fileMeta(path: string) {
   if (content === undefined) return undefined;
   const size = new TextEncoder().encode(content).length;
   const binary = binarySamples.has(normalize(path));
-  return { path, size, mtime: demoModified, binary, ...(binary ? {} : { content }) };
+  const mtime = modified.get(normalize(path)) ?? demoModified;
+  return { path, size, mtime, etag: `"${size.toString(36)}-${mtime.toString(36)}"`, binary, ...(binary ? {} : { content }) };
+}
+
+export function isDirectory(path: string): boolean {
+  const prefix = `${normalize(path)}/`;
+  return Object.keys(files).some((name) => name.startsWith(prefix));
+}
+
+// Uploaded binaries are kept as decoded text, so the demo previews them only approximately.
+export function writeFile(path: string, bytes: Uint8Array) {
+  const key = normalize(path);
+  const text = new TextDecoder().decode(bytes);
+  files[key] = text;
+  if (bytes.includes(0) || text.includes("\uFFFD")) binarySamples.add(key);
+  else binarySamples.delete(key);
+  modified.set(key, Date.now());
+  return fileMeta(key)!;
 }
 
 export function completePaths(query: string) {

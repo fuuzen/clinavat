@@ -6,7 +6,8 @@
 #     --allow 172.16.0.10/32:tcp:22 --allow 172.16.0.11/32:tcp:2222
 #
 # --storage   lvm:<vg>/<existing thin pool> or dir:<directory> for the LXD storage pool
-# --allow     private development-host endpoints the VMs may reach (public addresses are always allowed)
+# --allow     private development-host endpoints the VMs may reach (public addresses are always allowed); this
+#             host's own sshd is opened by host-commands.sh, which this script runs
 # --max-vms   project quota for slot VMs, default 8. Memory and CPU quotas are sized from it and from this
 #             machine: 75% of RAM, and two vCPUs per VM since vCPUs can be shared.
 # --max-users project quota for workspace containers (one per user with projects), default 32
@@ -14,8 +15,11 @@
 #             machines, so it must not contain the data directory, the environment file or LXD's client key.
 #
 # The script locks the LXD socket to root, then creates a storage pool, an isolated bridge, an
-# egress ACL, a restricted project and a restricted client token for the Hub.
+# egress ACL, a restricted project and a restricted client token for the Hub. Local projects run their shell
+# commands on this host, so it also lets the VMs log in to sshd as the Hub user, with keys only.
 set -euo pipefail
+
+SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 POOL=clinavat
 NETWORK=clinavat-users
@@ -162,6 +166,10 @@ exists profile device get workspace root pool --project "$PROJECT" || \
 exists profile device get workspace eth0 network --project "$PROJECT" || \
   lxc profile device add workspace eth0 nic --project "$PROJECT" network="$NETWORK" name=eth0 \
     security.port_isolation=true security.mac_filtering=true security.ipv4_filtering=true
+
+# After the ACL: editing it above replaces every rule, including the one for this host's sshd.
+echo "== Host commands"
+"$SOURCE/host-commands.sh" apply --hub-user "$hub_user"
 
 echo "== Hub client"
 lxc config set core.https_address "$LISTEN"

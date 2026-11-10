@@ -1,5 +1,5 @@
 import { defaultSiteSettings, type SiteSettings } from "../src/site/settings";
-import type { Approval, DevHost, Message, Project, Session, Slot, Turn, User } from "../src/types";
+import type { Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, User } from "../src/types";
 import { createFixtures } from "./fixtures";
 
 export interface DemoMessage extends Message {
@@ -9,6 +9,9 @@ export interface DemoMessage extends Message {
 export interface DemoQuestion {
   id: string;
   session_id: string;
+  status: "pending";
+  timeout_ms: number;
+  on_timeout: QuestionPolicy["mode"];
   questions: { id: string; header: string; question: string; multiSelect?: boolean; options?: { label: string; description: string }[] }[];
 }
 
@@ -26,6 +29,8 @@ export interface DemoState {
   questions: DemoQuestion[];
   siteSettings: SiteSettings;
   siteAccess: { publicUrls: string[]; localOrigins: string[]; revision: number };
+  siteQuestions: QuestionPolicy;
+  userQuestions: QuestionPreference;
 }
 
 export const db: DemoState = {
@@ -34,6 +39,8 @@ export const db: DemoState = {
   siteAccess: { publicUrls: [location.origin], localOrigins: [], revision: 1 },
   approvals: [],
   questions: [],
+  siteQuestions: { mode: "skip", timeoutMs: 5 * 60_000 },
+  userQuestions: { mode: null, timeoutMs: null },
   ...createFixtures(),
 };
 

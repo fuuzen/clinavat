@@ -1,5 +1,5 @@
 import type { AgentConfig } from './types.js';
-import type { ActiveRun } from './manager.js';
+import type { ActiveRun } from './resident-run.js';
 import type { ResidentUsage, UsageSlot } from '../accounts/usage.js';
 
 /** A live CLI owns its auth and refresh locks; never replace a failed read with a second CLI. */

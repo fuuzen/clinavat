@@ -5,6 +5,8 @@ import { ImageOff, ListTree } from "lucide-react";
 import { rawUrl, resolveProjectPath, type RendererProps } from "../fileKinds";
 import { languageFor } from "../highlight";
 import { CodeBlock } from "./CodeView";
+import DiagramBlock from "../../diagrams/DiagramBlock";
+import { diagramFence } from "../../diagrams/fence";
 
 interface Heading {
   depth: number;
@@ -74,6 +76,8 @@ export default function MarkdownView({ source, expanded, showSource, wrap, onOpe
       h3: heading("h3"),
       h4: heading("h4"),
       pre({ children }) {
+        const diagram = diagramFence(children);
+        if (diagram) return <DiagramBlock {...diagram} />;
         const child = Children.toArray(children)[0];
         if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return <pre>{children}</pre>;
         const language = /language-([\w+-]+)/.exec(child.props.className ?? "")?.[1];

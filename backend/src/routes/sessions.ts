@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
-import { HttpError } from '../models.js';
+import { HttpError, type Slot } from '../models.js';
 import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
 import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
@@ -10,11 +10,13 @@ import { ensureLocalHost } from '../local-host.js';
 import { availableSlots, serializeUserSlot, slotForUser } from '../accounts/access.js';
 import { sessionMessageRoutes, selectedSlotId, selectionFields } from './session-messages.js';
 import { sessionGoalRoutes } from './session-goals.js';
-import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
+import { sessionQuestionRoutes } from './session-questions.js';
+import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
+import { questionTimeout } from '../question-defaults.js';
 
 const identifier = z.object({ id: z.uuid() });
 export function sessionRoutes(app: FastifyInstance, context: Context) {
-  const { store, events, agents, ssh, turns } = context;
+  const { store, events, agents, ssh, turns, questionDefaults } = context;
   app.get('/api/overview', async request => {
     const key = await ssh.ensureUserKey(request.user.id);
     if (request.user.role === 'admin') ensureLocalHost(store, request.user.id);
@@ -27,25 +29,36 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       sessions: store.all(`SELECT sessions.* FROM sessions JOIN projects ON projects.id=sessions.project_id
         JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=?
         AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
+      questionDefaults: questionDefaults.forUser(request.user.id),
+      // Conversations that wait for the user to answer a question asked while nobody was there.
+      deferredQuestions: store.all<{ session_id: string; count: number }>(`SELECT deferred_questions.session_id,COUNT(*) AS count
+        FROM deferred_questions JOIN sessions ON sessions.id=deferred_questions.session_id
+        WHERE sessions.user_id=? GROUP BY deferred_questions.session_id`, request.user.id),
     };
   });
   app.post('/api/sessions', async (request, reply) => {
-    const input = z.object({ projectId: z.uuid(), engine: z.enum(['claude', 'codex']), slotId: selectedSlotId,
+    const input = z.object({ projectId: z.uuid(), engine: z.enum(['claude', 'codex']), slotId: selectedSlotId.optional(),
+      slotMode: z.enum(['manual', 'auto']).default('manual'),
       title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
     return withResourceLocks(context, [], async () => {
       const project = projectFor(context, input.projectId, request.user.id);
-      const slot = slotForUser(store, input.slotId, request.user.id, input.engine);
+      if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
+      if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const permissionMode = validatePermissionMode(input.engine, input.permissionMode ?? 'manual');
       const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
       const id = randomUUID();
-      await validateAgentSelection(context.config, {
+      const validate = (slot: Slot) => validateAgentSelection(context.config, {
         runtime_home: slot.home_dir, runtime_kind: 'probe',
         user: request.user, project, slot,
         session: { id: '', engine: input.engine, model: input.model ?? null, reasoning_effort: input.reasoningEffort ?? null, permission_mode: permissionMode },
       }, input);
+      const slot = input.slotMode === 'auto'
+        ? await context.slots.select({ userId: request.user.id, engine: input.engine, model: input.model }, validate)
+        : slotForUser(store, input.slotId!, request.user.id, input.engine);
+      if (input.slotMode === 'manual') await validate(slot);
       slotForUser(store, slot.id, request.user.id, input.engine);
-      store.run('INSERT INTO sessions(id,project_id,user_id,engine,slot_id,title,model,reasoning_effort,permission_mode,agent_mode,role_preset) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-        id, input.projectId, request.user.id, input.engine, slot.id, input.title, input.model ?? null, input.reasoningEffort ?? null, permissionMode, agentMode, rolePreset);
+      store.run('INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+        id, input.projectId, request.user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null, permissionMode, agentMode, rolePreset);
       return reply.code(201).send(sessionFor(context, id, request.user.id));
     }, [`project:${input.projectId}`]);
   });
@@ -58,6 +71,10 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       agentMode: z.enum(agentModes).optional(),
       rolePreset: z.enum(rolePresets).optional(),
       slotId: selectedSlotId.nullable().optional(),
+      slotMode: z.enum(['manual', 'auto']).optional(),
+      // Read for each question, so these change without restarting the conversation's CLI.
+      questionMode: z.enum(questionModes).nullable().optional(),
+      questionTimeoutMs: questionTimeout.nullable().optional(),
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
       message: '请提供要修改的对话设置',
     }).parse(request.body);
@@ -66,8 +83,12 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       const permissionMode = validatePermissionMode(current.engine, input.permissionMode ?? current.permission_mode);
       const { agentMode, rolePreset } = validateSessionSettings(current.engine,
         input.agentMode ?? current.agent_mode, input.rolePreset ?? current.role_preset);
+      const slotMode = input.slotMode ?? (input.slotId !== undefined ? 'manual' : current.slot_mode);
+      if (slotMode === 'auto' && current.engine !== 'claude') throw new HttpError(409, 'Codex 尚未完成跨账号验证，请选择固定账号');
+      if (slotMode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
-      if (changedSlot || permissionMode !== current.permission_mode || agentMode !== current.agent_mode || rolePreset !== current.role_preset) {
+      const changedMode = slotMode !== current.slot_mode;
+      if (changedSlot || changedMode || permissionMode !== current.permission_mode || agentMode !== current.agent_mode || rolePreset !== current.role_preset) {
         await agents.reclaim(id);
         if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)
           || context.config.credentials.isSessionBusy(id)) {
@@ -75,9 +96,12 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         }
       }
       if (changedSlot && input.slotId) slotForUser(store, input.slotId, request.user.id, current.engine);
-      store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,updated_at=datetime('now') WHERE id=?`,
-        input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId,
-        changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset, id);
+      store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,slot_mode=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,
+        question_mode=?,question_timeout_ms=?,updated_at=datetime('now') WHERE id=?`,
+        input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId, slotMode,
+        changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset,
+        input.questionMode === undefined ? current.question_mode : input.questionMode,
+        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
       return updated;
@@ -127,21 +151,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
   });
   sessionMessageRoutes(app, context);
   sessionGoalRoutes(app, context);
-  app.get('/api/sessions/:id/questions', async request => {
-    const { id } = identifier.parse(request.params);
-    sessionFor(context, id, request.user.id);
-    return agents.questions.list(id);
-  });
-  app.post('/api/sessions/:id/questions/:requestId', async request => {
-    const { id, requestId } = z.object({ id: z.uuid(), requestId: z.uuid() }).parse(request.params);
-    sessionFor(context, id, request.user.id);
-    const input = z.object({
-      answers: z.record(z.string().max(200), z.array(z.string().max(10000)).max(20)).default({}),
-      skip: z.boolean().default(false),
-    }).parse(request.body);
-    agents.questions.answer(id, requestId, input.answers, input.skip);
-    return { ok: true };
-  });
+  sessionQuestionRoutes(app, context);
   app.post('/api/sessions/:id/stop', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);

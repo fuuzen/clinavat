@@ -27,6 +27,16 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     try { return await config.usage!.refresh(slot); }
     catch (error) { throw new HttpError(409, error instanceof Error ? error.message : String(error)); }
   });
+  // Where local projects' commands run; reported only with slot machines.
+  app.get('/api/admin/host-commands', async request => {
+    requireAdmin(request);
+    return context.hostCommands?.status() ?? null;
+  });
+  app.post('/api/admin/host-commands/check', async request => {
+    requireAdmin(request);
+    if (!context.hostCommands) throw new HttpError(409, '当前为宿主机执行模式，本机项目的命令直接在宿主机运行');
+    return context.hostCommands.check();
+  });
   app.get('/api/admin/users', async request => {
     requireAdmin(request);
     return store.all<User>('SELECT * FROM users ORDER BY created_at').map(user => publicUser(user));

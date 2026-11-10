@@ -6,7 +6,7 @@ import { projectInstructions } from './project-instructions.js';
 import { roleInstructions } from './session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './codex-goal.js';
 import type { AgentRun, RunServices } from './types.js';
-import { parseCodexRead } from '../accounts/usage.js';
+import { parseCodexRead } from '../accounts/usage-parsers.js';
 
 export async function startCodex(services: RunServices, prompt: string, signal: AbortSignal): Promise<AgentRun> {
   if (services.context.session.goal && services.context.session.agent_mode === 'plan') {

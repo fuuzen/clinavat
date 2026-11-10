@@ -38,21 +38,23 @@ interface KindInfo {
   hasSource?: boolean;
   // Kinds rendered from /raw rather than the inline text payload.
   raw?: boolean;
+  // Text kinds that can be edited in place.
+  editable?: boolean;
 }
 
 export const kindInfo: Record<FileKind, KindInfo> = {
-  code: { label: "代码", icon: FileCode2, tone: "code" },
-  markdown: { label: "Markdown", icon: BookOpenText, tone: "markdown", hasSource: true },
+  code: { label: "代码", icon: FileCode2, tone: "code", editable: true },
+  markdown: { label: "Markdown", icon: BookOpenText, tone: "markdown", hasSource: true, editable: true },
   image: { label: "图片", icon: FileImage, tone: "image", raw: true },
-  svg: { label: "SVG", icon: FileImage, tone: "image", hasSource: true, raw: true },
+  svg: { label: "SVG", icon: FileImage, tone: "image", hasSource: true, raw: true, editable: true },
   pdf: { label: "PDF", icon: FileText, tone: "pdf", raw: true },
   slides: { label: "演示文稿", icon: Presentation, tone: "slides", raw: true },
   document: { label: "Word 文档", icon: FileText, tone: "document", raw: true },
   sheet: { label: "电子表格", icon: FileSpreadsheet, tone: "sheet", raw: true },
-  csv: { label: "表格数据", icon: FileSpreadsheet, tone: "sheet", hasSource: true },
+  csv: { label: "表格数据", icon: FileSpreadsheet, tone: "sheet", hasSource: true, editable: true },
   audio: { label: "音频", icon: FileAudio, tone: "media", raw: true },
   video: { label: "视频", icon: FileVideo, tone: "media", raw: true },
-  notebook: { label: "Jupyter", icon: NotebookText, tone: "notebook", hasSource: true },
+  notebook: { label: "Jupyter", icon: NotebookText, tone: "notebook", hasSource: true, editable: true },
   archive: { label: "压缩包", icon: FileArchive, tone: "binary", raw: true },
   binary: { label: "文件", icon: File, tone: "binary", raw: true },
 };
@@ -124,6 +126,15 @@ export function resolveProjectPath(fromFile: string, target: string): string | u
     } else parts.push(segment);
   }
   return parts.join("/") || undefined;
+}
+
+export interface FileMeta {
+  path: string;
+  size: number;
+  mtime: number;
+  binary: boolean;
+  content?: string;
+  etag: string;
 }
 
 export interface PreviewSource {

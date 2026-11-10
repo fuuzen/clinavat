@@ -2,7 +2,7 @@ import { access, lstat, mkdir, readdir, realpath, rename, rm, stat } from 'node:
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, childEnvironment, runCommand } from './process.js';
-import { descriptorPath, openContained, type ContainedFile } from './contained-files.js';
+import { descriptorPath, openContained, openContainedDirectory, type ContainedFile } from './contained-files.js';
 import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
@@ -257,6 +257,14 @@ export class WorkspaceManager {
   /** The caller owns the returned handle and must close it. */
   rawFile(project: WorkspaceProject, path: string): Promise<ContainedFile> {
     return this.openProjectPath(project, path);
+  }
+
+  /** The directory a written file goes into; unlike reads, writes never pass through symbolic links. The caller closes it. */
+  async writableDirectory(project: WorkspaceProject, segments: string[], create: boolean): Promise<ContainedFile> {
+    this.validate(project);
+    if (project.execution_mode === 'local') await this.checkLocalDirectory(project);
+    if (segments.includes('.bin')) throw new Error('无法访问运行时内部文件');
+    return openContainedDirectory(project.local_path, segments, create);
   }
 
   async git(userId: string, host: DevHost, project: WorkspaceProject): Promise<{branch: string; status: string; diff: string}> {

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hub-list",
+  "description": "Only the bundled Hub list page may validate and open Hubs. Hub pages are remote and get no native access.",
+  "windows": ["main"],
+  "permissions": ["allow-normalize-hub-url", "allow-open-hub", "allow-close-hub"]
+}
