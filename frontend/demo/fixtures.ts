@@ -42,7 +42,7 @@ function historyTurn(sessionId: string, userMessageId: string, answerId: string,
   return {
     id: userMessageId, session_id: sessionId, user_message_id: userMessageId, assistant_message_id: answerId,
     started_at: ago(minutes), completed_at: ago(minutes - 1), duration_ms: 48_000, paused_at: null, paused_ms: 0,
-    status: "completed", items,
+    status: "completed", items, native_ref: answerId,
   };
 }
 

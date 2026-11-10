@@ -137,6 +137,14 @@ export class Store {
     // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
     this.addColumn('sessions', 'token_usage_cursor', 'TEXT');
     this.addColumn('sessions', 'archived_at', 'TEXT');
+    // Where a turn ends in the CLI's own history: Claude's last assistant message, Codex's last native turn.
+    // Copied turns of a branch keep their source's native session, whose history up to them is the same.
+    this.addColumn('session_turns', 'native_ref', 'TEXT');
+    this.addColumn('session_turns', 'native_session_id', 'TEXT');
+    // A branch starts from its source's native history; fork_native_* apply only until it has its own.
+    for (const column of ['forked_from_session_id', 'forked_from_turn_id', 'fork_native_id', 'fork_native_anchor']) {
+      this.addColumn('sessions', column, 'TEXT');
+    }
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {

@@ -52,7 +52,12 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     '--tools', 'Bash,Read,Edit,Write,Glob,Grep,AskUserQuestion,ExitPlanMode', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
-    ...(services.context.session.native_session_id ? ['--resume', nativeId] : ['--session-id', nativeId])];
+    ...(services.context.session.native_session_id ? ['--resume', nativeId]
+      // A branch's first run copies its source's history up to the anchor into this new native session.
+      : services.context.session.fork_native_id ? ['--resume', services.context.session.fork_native_id, '--fork-session',
+        ...(services.context.session.fork_native_anchor ? ['--resume-session-at', services.context.session.fork_native_anchor] : []),
+        '--session-id', nativeId]
+        : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
     scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
     secrets: await services.config.credentials.secretEnvironment(services.context.slot.id),
@@ -64,6 +69,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   const quota = new ClaudeQuotaTracker();
   const tokenUsage = new ClaudeUsageMeter();
   let messageId = '';
+  // The turn's last transcript message, where a branch from this turn resumes.
+  let lastAssistantUuid = '';
   let activeTextIndex: number | undefined;
   const thinkingBlocks = new Set<number>();
   let textSize = 0;
@@ -179,6 +186,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     if (event.type === 'assistant') {
       quota.observeAssistant(event);
       tokenUsage.observeAssistant(event);
+      if (typeof event.uuid === 'string') lastAssistantUuid = event.uuid;
       const contents = Array.isArray(event.message?.content) ? event.message.content : [];
       const nativeMessageId = String(event.message?.id || messageId || randomUUID());
       for (const [index, entry] of contents.entries()) {
@@ -213,6 +221,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     }
     if (event.type === 'result') {
       services.recordTokenUsage({ records: tokenUsage.finish(event) });
+      if (lastAssistantUuid && nativeSessionReceived) services.event('turn-anchor', { ref: lastAssistantUuid, nativeSessionId: nativeId });
+      lastAssistantUuid = '';
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {
         const errors = Array.isArray(event.errors) ? event.errors.join('\n') : '';
         resultError = errors || String(event.result || event.api_error || event.subtype || 'CLI 返回失败结果');

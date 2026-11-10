@@ -186,6 +186,7 @@ export function startRun(session: Session, content: string) {
     id: request.id, session_id: session.id, user_message_id: request.id, assistant_message_id: null,
     slot_id: session.slot_id, credential_revision: db.slots.find(slot => slot.id === session.slot_id)?.credential_revision ?? null,
     started_at: timestamp(), completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: "running", items: [],
+    native_ref: crypto.randomUUID(),
   };
   db.turns.push(turn);
   const run: Run = { turn, stopped: false, paused: false };

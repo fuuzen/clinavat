@@ -38,6 +38,11 @@ export interface Session {
   question_timeout_ms: number | null;
   /** Archived conversations are hidden from the workspace list and accept no input until restored. */
   archived_at: string | null;
+  forked_from_session_id: string | null;
+  forked_from_turn_id: string | null;
+  /** The source's native session and the point to fork it at, used by the branch's first run. */
+  fork_native_id: string | null;
+  fork_native_anchor: string | null;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

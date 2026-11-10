@@ -21,6 +21,8 @@ export interface ConversationTurn {
   paused_ms: number;
   slot_id: string | null;
   credential_revision: number | null;
+  native_ref: string | null;
+  native_session_id: string | null;
   status: 'running' | 'pausing' | 'paused' | 'completed' | 'interrupted' | 'error';
   items: ActivityItem[];
 }
@@ -47,7 +49,7 @@ export class ConversationStore {
     const turn: ConversationTurn = {
       id: turnId, session_id: sessionId, user_message_id: userMessageId,
       assistant_message_id: null, started_at: new Date().toISOString(),
-      completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: 'running', items: [],
+      completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: 'running', items: [], native_ref: null, native_session_id: null,
       slot_id: authorization.slotId, credential_revision: authorization.credentialRevision,
     };
     this.store.run('INSERT INTO session_turns(id,session_id,user_message_id,started_at,slot_id,credential_revision) VALUES(?,?,?,?,?,?)',
@@ -93,6 +95,39 @@ export class ConversationStore {
     const textSize = this.limitStoredText(pending.turn);
     if (!pending.timer) pending.timer = setTimeout(() => this.flush(sessionId), textSize > 128 * 1024 ? 500 : 250);
     return true;
+  }
+
+  /** Records where the running turn ends in the CLI's history, so that a branch can start there. */
+  anchor(sessionId: string, turnId: string, ref: string, nativeSessionId: string): void {
+    const pending = this.active.get(sessionId);
+    if (pending?.turn.id === turnId) Object.assign(pending.turn, { native_ref: ref, native_session_id: nativeSessionId });
+    this.store.run('UPDATE session_turns SET native_ref=?,native_session_id=? WHERE id=? AND session_id=?', ref, nativeSessionId, turnId, sessionId);
+  }
+
+  /** Copies the messages and turns up to and including `turnId` into another conversation, under new IDs. */
+  copyHistory(sourceId: string, targetId: string, turnId: string): void {
+    const turns = this.store.all<StoredTurn>('SELECT * FROM session_turns WHERE session_id=? ORDER BY rowid', sourceId);
+    const index = turns.findIndex(turn => turn.id === turnId);
+    if (index < 0) throw new Error('轮次不存在');
+    const next = turns[index + 1];
+    const boundary = next ? this.store.get<{ rowid: number }>('SELECT rowid FROM messages WHERE id=?', next.user_message_id)?.rowid ?? null : null;
+    const messages = this.store.all<{ id: string; role: string; content: string; created_at: string }>(`SELECT id,role,content,created_at
+      FROM messages WHERE session_id=? AND (?2 IS NULL OR rowid<?2) ORDER BY rowid`, sourceId, boundary);
+    const copies = new Map<string, string>();
+    for (const message of messages) {
+      copies.set(message.id, randomUUID());
+      this.store.run('INSERT INTO messages(id,session_id,role,content,created_at) VALUES(?,?,?,?,?)',
+        copies.get(message.id)!, targetId, message.role, message.content, message.created_at);
+    }
+    for (const turn of turns.slice(0, index + 1)) {
+      const userMessageId = copies.get(turn.user_message_id);
+      if (!userMessageId) continue;
+      this.store.run(`INSERT INTO session_turns(id,session_id,user_message_id,assistant_message_id,started_at,completed_at,duration_ms,
+        status,items,slot_id,credential_revision,paused_at,paused_ms,native_ref,native_session_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      randomUUID(), targetId, userMessageId, turn.assistant_message_id ? copies.get(turn.assistant_message_id) ?? null : null,
+      turn.started_at, turn.completed_at, turn.duration_ms, turn.status, turn.items, turn.slot_id, turn.credential_revision,
+      turn.paused_at, turn.paused_ms, turn.native_ref, turn.native_session_id);
+    }
   }
 
   attachAnswer(sessionId: string, messageId: string): void {

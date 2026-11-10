@@ -117,7 +117,8 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       turns.start(id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision });
       events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
       try {
-        const previousMessages = !session.native_session_id
+        // A branch's first run forks its source's native history, which already holds the copied messages.
+        const previousMessages = !session.native_session_id && !session.fork_native_id
           ? store.all<{ role: string; content: string }>('SELECT role,substr(content,1,2000) AS content FROM (SELECT rowid,role,content FROM messages WHERE session_id=? AND id<>? ORDER BY rowid DESC LIMIT 12) ORDER BY rowid', id, messageId)
           : [];
         const prompt = previousMessages.length && !expandedContent.startsWith('/')

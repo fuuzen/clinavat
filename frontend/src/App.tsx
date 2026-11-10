@@ -9,6 +9,7 @@ import type {
   Project,
   Session,
   ToolEvent,
+  Turn,
 } from "./types";
 import { useWorkspaceEvents } from "./useWorkspaceEvents";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
@@ -75,6 +76,7 @@ export default function App() {
   const selectedProjectRef = useRef(projectId);
   selectedProjectRef.current = projectId;
   const sendRequestRef = useRef(0);
+  const forking = useRef(false);
   const { messages, turns, reloadMessages, receiveTurn, resetHistory } =
     useConversationHistory(selectedSessionRef);
   const project = overview?.projects.find((item) => item.id === projectId);
@@ -245,6 +247,21 @@ export default function App() {
       notify(errorText(cause));
     }
   }
+  async function fork(turn: Turn) {
+    if (!project || !session || forking.current) return;
+    forking.current = true;
+    try {
+      const created = await post<Session>(`/sessions/${session.id}/fork`, { turnId: turn.id });
+      setOverview((current) => current
+        ? { ...current, sessions: [created, ...current.sessions.filter((item) => item.id !== created.id)] } : current);
+      select(project, created);
+      notify("已创建分支，发送消息后从这一轮继续", "success");
+    } catch (cause) {
+      notify(errorText(cause));
+    } finally {
+      forking.current = false;
+    }
+  }
   async function logout() {
     try {
       await post("/auth/logout");
@@ -379,6 +396,11 @@ export default function App() {
           onPause={runControl.pause}
           onResume={runControl.resume}
           onRestore={(target) => archive(target, false)}
+          onFork={(turn) => void fork(turn)}
+          onOpenSession={(target) => {
+            const owner = overview.projects.find((item) => item.id === target.project_id);
+            if (owner) select(owner, target);
+          }}
           controlPending={runControl.controlPending}
           stopPending={runControl.stopPending}
           onStop={() => void runControl.stop()}

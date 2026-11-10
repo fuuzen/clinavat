@@ -113,6 +113,45 @@
   color: var(--muted);
   margin-left: 4px;
 }
+.message-fork {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+}
+.message:hover .message-fork,
+.message-fork:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .message-fork { opacity: 1; }
+}
+.fork-origin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+}
+.fork-origin > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.fork-origin > span {
+  flex: 1;
+  min-width: 0;
+}
+.fork-origin > .text-button {
+  flex-shrink: 0;
+  font-size: 12px;
+}
 .message-user > .message-author {
   flex-direction: row-reverse;
 }

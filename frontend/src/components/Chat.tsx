@@ -29,6 +29,7 @@ import QuestionPanel from "./chat/native/QuestionPanel";
 import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
 import ArchivedNotice from "./chat/ArchivedNotice";
+import ForkOrigin from "./chat/ForkOrigin";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
 import { useAgentBehavior } from "./chat/native/useAgentBehavior";
 import { useChatCommands } from "./chat/native/useChatCommands";
@@ -79,6 +80,8 @@ interface Props {
   onPause: () => Promise<boolean>;
   onResume: () => Promise<boolean>;
   onRestore: (session: Session) => Promise<void>;
+  onFork: (turn: Turn) => void;
+  onOpenSession: (session: Session) => void;
   controlPending: boolean;
   stopPending: boolean;
   onApproval: (
@@ -344,14 +347,18 @@ export default function Chat(props: Props) {
                 </div>
               </div>
             ) : (
-              <ConversationTurns
-                messages={props.messages}
-                turns={props.turns}
-                streaming={props.streaming}
-                tools={props.tools}
-                username={overview.user.username}
-                engine={session?.engine}
-              />
+              <>
+                {session && <ForkOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
+                <ConversationTurns
+                  messages={props.messages}
+                  turns={props.turns}
+                  streaming={props.streaming}
+                  tools={props.tools}
+                  username={overview.user.username}
+                  engine={session?.engine}
+                  onFork={session ? props.onFork : undefined}
+                />
+              </>
             )}
             {props.approvals
               .filter(

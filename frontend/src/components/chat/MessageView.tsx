@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, GitBranch } from "lucide-react";
 import { formatTime } from "../../api";
 import type { Message } from "../../types";
 import DiagramBlock from "../diagrams/DiagramBlock";
@@ -67,11 +67,14 @@ export default function MessageView({
   username,
   agentName,
   engine,
+  onFork,
 }: {
   message: Message;
   username: string;
   agentName: string;
   engine: "claude" | "codex";
+  /** Present on the answer of a turn that can be branched from. */
+  onFork?: () => void;
 }) {
   const user = message.role === "user";
   return (
@@ -84,6 +87,11 @@ export default function MessageView({
         )}
         <strong>{user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
         <time>{formatTime(message.created_at)}</time>
+        {onFork && (
+          <button type="button" className="icon-button message-fork" onClick={onFork} title="从这一轮创建分支对话" aria-label="从这一轮创建分支对话">
+            <GitBranch size={13} aria-hidden="true" />
+          </button>
+        )}
       </div>
       {user ? (
         <Collapsible>

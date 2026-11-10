@@ -74,6 +74,32 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       return reply.code(201).send(sessionFor(context, id, request.user.id));
     }, [`project:${input.projectId}`]);
   });
+  app.post('/api/sessions/:id/fork', async (request, reply) => {
+    const { id } = identifier.parse(request.params);
+    const { turnId } = z.object({ turnId: z.uuid() }).strict().parse(request.body);
+    const source = sessionFor(context, id, request.user.id);
+    // The source may keep running: only finished turns, whose native history no longer changes, can be branched from.
+    return withResourceLocks(context, [], async () => {
+      const turn = store.get<{ status: string; native_ref: string | null; native_session_id: string | null }>(
+        'SELECT status,native_ref,native_session_id FROM session_turns WHERE id=? AND session_id=?', turnId, id);
+      if (!turn) throw new HttpError(404, '轮次不存在');
+      if (!['completed', 'interrupted', 'error'].includes(turn.status)) throw new HttpError(409, '请等这一轮结束后再从这里分支');
+      if (!turn.native_ref || !turn.native_session_id) throw new HttpError(409, '这一轮没有记录原生会话位置，无法从这里分支');
+      const forkId = randomUUID();
+      store.transaction(() => {
+        store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,
+          agent_mode,role_preset,question_mode,question_timeout_ms,forked_from_session_id,forked_from_turn_id,fork_native_id,fork_native_anchor)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        forkId, source.project_id, request.user.id, source.engine, source.slot_id, source.slot_mode,
+        `${source.title.slice(0, 190)} · 分支`, source.model, source.reasoning_effort, source.permission_mode, source.agent_mode,
+        source.role_preset, source.question_mode, source.question_timeout_ms, id, turnId, turn.native_session_id, turn.native_ref);
+        turns.copyHistory(id, forkId, turnId);
+      });
+      const created = sessionFor(context, forkId, request.user.id);
+      events.emit(request.user.id, { type: 'session', sessionId: forkId, payload: created });
+      return reply.code(201).send(created);
+    }, [`project:${source.project_id}`]);
+  });
   app.patch('/api/sessions/:id', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);

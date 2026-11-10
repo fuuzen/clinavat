@@ -178,6 +178,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     if (message.method === 'turn/started') {
       turnId = String(params.turn?.id ?? turnId);
       activeTurnId = turnId;
+      // A paused turn resumes as a new native turn; the last one is where a branch from this turn ends.
+      if (turnId && threadId) services.event('turn-anchor', { ref: turnId, nativeSessionId: threadId });
     }
     if (message.method === 'error') {
       services.event('error', { message: String(params.error?.message ?? 'Codex 运行错误') });
@@ -259,9 +261,12 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
         ...(effort ? { model_reasoning_effort: effort } : {}) } };
     const nativeId = services.context.session.native_session_id;
     // Each slot indexes the shared history through its own path; native resume resolves that path by ID.
+    const { fork_native_id: forkFrom, fork_native_anchor: forkAt } = services.context.session;
     const result = nativeId
       ? await rpc.request('thread/resume', { ...shared, threadId: nativeId, excludeTurns: true })
-      : await rpc.request('thread/start', shared);
+      // A branch's first run forks its source's thread through the anchored turn.
+      : forkFrom ? await rpc.request('thread/fork', { ...shared, threadId: forkFrom, ...(forkAt ? { lastTurnId: forkAt } : {}), excludeTurns: true })
+        : await rpc.request('thread/start', shared);
     if (!result?.thread?.id) throw new Error('Codex 未返回线程 ID，请确认固定版本的 app-server 协议');
     if (nativeId && result.thread.id !== nativeId) throw new Error('Codex 恢复的会话与当前对话不一致');
     threadId = String(result.thread.id);

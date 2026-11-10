@@ -65,6 +65,8 @@ export interface Session {
   question_timeout_ms?: number | null;
   /** Archived conversations are read-only and listed apart until restored. */
   archived_at?: string | null;
+  forked_from_session_id?: string | null;
+  forked_from_turn_id?: string | null;
 }
 
 /** What happens to a question nobody answers in time. */
@@ -154,6 +156,8 @@ export interface Turn {
   credential_revision?: number | null;
   status: "running" | "pausing" | "paused" | "completed" | "interrupted" | "error";
   items: ActivityItem[];
+  /** Where the turn ends in the CLI's history; only turns that have one can be branched from. */
+  native_ref?: string | null;
 }
 
 export interface Overview {

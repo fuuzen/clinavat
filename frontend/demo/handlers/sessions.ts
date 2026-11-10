@@ -105,6 +105,33 @@ export const sessionHandlers = [
     session.archived_at = action === "archive" ? session.archived_at ?? timestamp() : null;
     return HttpResponse.json(session);
   })),
+  // Mirrors the Hub: a branch copies the messages and turns through the chosen turn under new IDs.
+  http.post("/api/sessions/:id/fork", async ({ params, request }) => {
+    const source = findSession(String(params.id));
+    if (!source) return fail(404, "对话不存在");
+    const { turnId } = await readBody<{ turnId?: string }>(request);
+    const turns = db.turns.filter((turn) => turn.session_id === source.id);
+    const index = turns.findIndex((turn) => turn.id === turnId);
+    if (index < 0) return fail(404, "轮次不存在");
+    if (!["completed", "interrupted", "error"].includes(turns[index].status)) return fail(409, "请等这一轮结束后再从这里分支");
+    const fork: Session = { ...source, id: crypto.randomUUID(), title: `${source.title} · 分支`, status: "idle",
+      updated_at: timestamp(), archived_at: null, forked_from_session_id: source.id, forked_from_turn_id: turns[index].id };
+    const messages = db.messages.filter((message) => message.session_id === source.id);
+    const next = turns[index + 1];
+    const boundary = next ? messages.findIndex((message) => message.id === next.user_message_id) : messages.length;
+    const copies = new Map(messages.slice(0, boundary < 0 ? messages.length : boundary).map((message) => [message.id, crypto.randomUUID()]));
+    for (const message of messages) {
+      if (copies.has(message.id)) db.messages.push({ ...message, id: copies.get(message.id)!, session_id: fork.id });
+    }
+    for (const turn of turns.slice(0, index + 1)) {
+      const userMessageId = copies.get(turn.user_message_id);
+      if (!userMessageId) continue;
+      db.turns.push({ ...turn, id: crypto.randomUUID(), session_id: fork.id, user_message_id: userMessageId,
+        assistant_message_id: turn.assistant_message_id ? copies.get(turn.assistant_message_id) ?? null : null });
+    }
+    db.sessions.unshift(fork);
+    return HttpResponse.json(fork, { status: 201 });
+  }),
   http.get("/api/sessions/:id/messages", ({ params }) =>
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
   http.get("/api/sessions/:id/runtime", () =>

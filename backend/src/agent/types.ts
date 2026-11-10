@@ -41,6 +41,9 @@ export interface AgentContext {
     engine: 'claude' | 'codex';
     slot_mode?: 'manual' | 'auto';
     native_session_id?: string | null;
+    /** Set for a branch whose CLI has not yet forked its source's native session. */
+    fork_native_id?: string | null;
+    fork_native_anchor?: string | null;
     jsonl_file_path?: string | null;
     model?: string | null;
     reasoning_effort?: string | null;

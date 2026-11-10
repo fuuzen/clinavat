@@ -12,7 +12,10 @@ interface Props {
   tools: ToolEvent[];
   username: string;
   engine?: "claude" | "codex";
+  onFork?: (turn: Turn) => void;
 }
+
+const finished = new Set<Turn["status"]>(["completed", "interrupted", "error"]);
 
 export default function ConversationTurns(props: Props) {
   const engine = props.engine ?? "claude";
@@ -30,11 +33,15 @@ export default function ConversationTurns(props: Props) {
     previousByUser.set(turn.user_message_id, turn);
   }
   const liveTurn = props.turns.some((turn) => isActive(turn.status));
+  const forkable = new Map(props.turns.filter((turn) => turn.assistant_message_id && turn.native_ref && finished.has(turn.status))
+    .map((turn) => [turn.assistant_message_id!, turn]));
+  const { onFork } = props;
   return (
     <>
       {props.messages.map((message) => (
         <Fragment key={message.id}>
-          <MessageView message={message} username={props.username} agentName={agentName} engine={engine} />
+          <MessageView message={message} username={props.username} agentName={agentName} engine={engine}
+            onFork={onFork && forkable.has(message.id) ? () => onFork(forkable.get(message.id)!) : undefined} />
           {turnsByMessage.get(message.id)?.map(turn => <TurnProcess key={turn.id} turn={turn} />)}
         </Fragment>
       ))}
