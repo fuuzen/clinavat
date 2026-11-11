@@ -13,6 +13,7 @@ import type { HostCommands } from './execution/host-commands.js';
 import type { TokenUsageLedger } from './token-usage/ledger.js';
 import type { PriceBook } from './token-usage/price-book.js';
 import type { UsageSettingsStore } from './accounts/usage-settings.js';
+import type { AgentDefaults } from './agent-defaults.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -22,6 +23,7 @@ export interface Context {
   turns: ConversationStore;
   slots: SlotSelector;
   questionDefaults: QuestionDefaults;
+  agentDefaults: AgentDefaults;
   tokenUsage: TokenUsageLedger;
   prices: PriceBook;
   usageSettings: UsageSettingsStore;

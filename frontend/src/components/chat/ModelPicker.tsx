@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, LoaderCircle, RotateCw } from "lucide-react";
 import { api, errorText, post } from "../../api";
-import type { AgentModel, AgentSelection, ModelCatalog } from "../../types";
+import type { AgentModel, AgentPreference, AgentSelection, ModelCatalog } from "../../types";
 import SettingsMenu from "./SettingsMenu";
 import ReasoningEffortControl, { effortName } from "./ReasoningEffortControl";
 
@@ -14,6 +14,8 @@ interface Props {
   accountAvailable: boolean;
   disabled: boolean;
   value: AgentSelection;
+  /** The user's own defaults, used for what the conversation leaves open when this slot offers them. */
+  preference?: AgentPreference;
   onChange: (value: AgentSelection) => void;
 }
 
@@ -85,9 +87,13 @@ export default function ModelPicker(props: Props) {
     catch (cause) { setError(errorText(cause)); }
     finally { setRefreshing(false); }
   }
-  const selected = props.value.model
-    ? models.find((model) => model.id === props.value.model)
-    : models.find((model) => model.isDefault);
+  // The same order the Hub resolves in: the conversation's choice, then the user's default, then the CLI's.
+  const personalModel = models.find((model) => model.id === props.preference?.model);
+  const fallback = personalModel || models.find((model) => model.isDefault);
+  const chosen = props.value.model ? models.find((model) => model.id === props.value.model) : fallback;
+  const personalEffort = props.preference?.reasoningEffort;
+  const selected = chosen && personalEffort && chosen.reasoningEfforts.some((effort) => effort.value === personalEffort)
+    ? { ...chosen, defaultReasoningEffort: personalEffort } : chosen;
   const engineName = props.engine === "claude" ? "Claude Code" : "Codex";
   const modelName = selected?.name || props.value.model || `${engineName} 默认`;
   const efforts = selected?.reasoningEfforts || [];
@@ -156,12 +162,12 @@ export default function ModelPicker(props: Props) {
                           key={model.id}
                           name={model.name}
                           // Claude's default alias already names itself "Default (recommended)".
-                          tag={model.isDefault && !/^default\b/i.test(model.name) ? "默认" : undefined}
+                          tag={model === personalModel ? "我的默认" : model.isDefault && !/^default\b/i.test(model.name) ? "默认" : undefined}
                           description={model.description}
-                          selected={props.value.model ? props.value.model === model.id : !!model.isDefault}
+                          selected={props.value.model ? props.value.model === model.id : model === fallback}
                           onSelect={() => {
-                            // Picking the default model follows the CLI default rather than pinning it.
-                            props.onChange({ model: model.isDefault ? null : model.id, reasoningEffort: null });
+                            // Picking the default model follows the default rather than pinning it.
+                            props.onChange({ model: model === fallback ? null : model.id, reasoningEffort: null });
                             close();
                           }}
                         />

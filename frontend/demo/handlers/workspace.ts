@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AgentModel, DevHost, Project, SlotUsage } from "../../src/types";
+import type { AgentModel, AgentPreference, DevHost, Project, SlotUsage } from "../../src/types";
 import { completePaths, fileMeta, gitState, isDirectory, listFiles, readFile, remoteDirectories, writeFile } from "../filesystem";
 import { emit } from "../events";
 import { db, timestamp } from "../store";
@@ -61,6 +61,13 @@ function usage(slotId: string): SlotUsage {
   };
 }
 
+function agentSettings() {
+  const catalog = (engine: "claude" | "codex") => ({ models: models[engine],
+    slots: db.slots.filter((slot) => slot.engine === engine)
+      .map((slot) => ({ id: slot.id, label: slot.label, model_catalog_at: slot.model_catalog_at ?? timestamp(-60) })) });
+  return { defaults: db.agentDefaults, catalogs: { claude: catalog("claude"), codex: catalog("codex") } };
+}
+
 function findProject(id: unknown): Project | undefined {
   return db.projects.find((project) => project.id === id);
 }
@@ -69,7 +76,7 @@ export const workspaceHandlers = [
   http.get("/api/overview", () => db.signedIn
     ? HttpResponse.json({ user: db.user, slots: db.slots, hosts: db.hosts, projects: db.projects, sessions: db.sessions,
       questionDefaults: { mode: db.userQuestions.mode ?? db.siteQuestions.mode, timeoutMs: db.userQuestions.timeoutMs ?? db.siteQuestions.timeoutMs },
-      deferredQuestions: [] })
+      agentDefaults: db.agentDefaults, deferredQuestions: [] })
     : fail(401, "请先登录")),
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),
@@ -78,6 +85,13 @@ export const workspaceHandlers = [
     tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30), db.user.id))),
   http.get("/api/agent/models", ({ request }) =>
     HttpResponse.json({ models: models[new URL(request.url).searchParams.get("engine") || "claude"] || [], refreshedAt: timestamp(-60) })),
+  http.get("/api/settings/agent", () => HttpResponse.json(agentSettings())),
+  http.put("/api/settings/agent/:engine", async ({ params, request }) => {
+    const engine = params.engine === "codex" ? "codex" : "claude";
+    db.agentDefaults = { ...db.agentDefaults, [engine]: await readBody<AgentPreference>(request) };
+    emit({ type: "agent-defaults", payload: {} });
+    return HttpResponse.json(agentSettings());
+  }),
   http.post("/api/slots/:id/models/refresh", ({ params }) => {
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");

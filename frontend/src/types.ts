@@ -113,6 +113,14 @@ export interface AgentModel {
   isDefault?: boolean;
 }
 
+/** A user's own model and reasoning effort for conversations that leave them to the default. */
+export interface AgentPreference {
+  model: string | null;
+  reasoningEffort: string | null;
+}
+
+export type AgentPreferences = Record<"claude" | "codex", AgentPreference>;
+
 /** A slot's saved model list and when it was read from the slot's CLI. */
 export interface ModelCatalog {
   models: AgentModel[];
@@ -176,6 +184,7 @@ export interface Overview {
   projects: Project[];
   sessions: Session[];
   questionDefaults: QuestionPolicy;
+  agentDefaults: AgentPreferences;
   deferredQuestions: { session_id: string; count: number }[];
 }
 

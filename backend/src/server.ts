@@ -24,6 +24,7 @@ import { siteAccessRoutes } from './routes/site-access.js';
 import { siteSettingsRoutes } from './routes/site-settings.js';
 import { questionDefaultsRoutes } from './routes/question-defaults.js';
 import { QuestionDefaults } from './question-defaults.js';
+import { AgentDefaults } from './agent-defaults.js';
 import { tokenUsageRoutes } from './routes/token-usage.js';
 import { TokenUsageLedger } from './token-usage/ledger.js';
 import { PriceBook } from './token-usage/price-book.js';
@@ -91,6 +92,7 @@ const agentConfig = { ...config, credentials, usage, execution, catalogs: new Sl
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };
 const questionDefaults = new QuestionDefaults(store, config.approvalTimeoutMs);
+const agentDefaults = new AgentDefaults(store);
 const prices = new PriceBook(store);
 const tokenUsage = new TokenUsageLedger(store, prices);
 const slots = new SlotSelector(store, agentConfig);
@@ -261,7 +263,7 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, prices, hostCommands,
+const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
   usageSettings };
 resourceRoutes(app, context);
 sessionRoutes(app, context);

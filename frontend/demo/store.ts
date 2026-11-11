@@ -1,5 +1,5 @@
 import { defaultSiteSettings, type SiteSettings } from "../src/site/settings";
-import type { Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, UsageSettings, User } from "../src/types";
+import type { AgentPreferences, Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, UsageSettings, User } from "../src/types";
 import { createFixtures } from "./fixtures";
 
 export interface DemoMessage extends Message {
@@ -32,6 +32,7 @@ export interface DemoState {
   siteQuestions: QuestionPolicy;
   userQuestions: QuestionPreference;
   usageSettings: UsageSettings;
+  agentDefaults: AgentPreferences;
 }
 
 export const db: DemoState = {
@@ -43,6 +44,7 @@ export const db: DemoState = {
   siteQuestions: { mode: "skip", timeoutMs: 5 * 60_000 },
   userQuestions: { mode: null, timeoutMs: null },
   usageSettings: { refreshIntervalMs: 12 * 3_600_000, staleAfterMs: 12 * 3_600_000 },
+  agentDefaults: { claude: { model: null, reasoningEffort: null }, codex: { model: null, reasoningEffort: null } },
   ...createFixtures(),
 };
 

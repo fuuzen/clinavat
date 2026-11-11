@@ -197,17 +197,32 @@ export function refreshModelCatalog(config: AgentConfig, context: CatalogContext
   return probeModels(config, context);
 }
 
-export async function validateAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection): Promise<void> {
-  if (!selection.model && !selection.reasoningEffort) return;
+export interface AgentPreference { model: string | null; reasoningEffort: string | null }
+
+/**
+ * Checks what a conversation chose against the slot's catalog and fills what it leaves to the default with the
+ * user's own default where this slot's catalog offers it; anything left over follows the CLI's default.
+ */
+export async function resolveAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection,
+  preference?: AgentPreference): Promise<AgentPreference> {
+  const chosen = { model: selection.model ?? null, reasoningEffort: selection.reasoningEffort ?? null };
+  if (!chosen.model && !chosen.reasoningEffort && !preference?.model && !preference?.reasoningEffort) return chosen;
   let models: AgentModel[];
   try { models = await loadAgentModels(config, context); }
   catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败');
   }
-  const model = selection.model ? models.find(item => item.id === selection.model) : models.find(item => item.isDefault);
-  if (!model) throw new HttpError(400, '当前 CLI 不支持所选模型，请重新选择');
-  if (selection.reasoningEffort && !model.reasoningEfforts.some(item => item.value === selection.reasoningEffort)) {
-    throw new HttpError(400, '所选模型不支持该思考强度，请重新选择');
-  }
+  const find = (id: string | null) => id ? models.find(item => item.id === id) : models.find(item => item.isDefault);
+  if ((chosen.model || chosen.reasoningEffort) && !find(chosen.model)) throw new HttpError(400, '当前 CLI 不支持所选模型，请重新选择');
+  const model = chosen.model ?? (preference?.model && find(preference.model) ? preference.model : null);
+  const supports = (effort: string) => !!find(model)?.reasoningEfforts.some(item => item.value === effort);
+  if (chosen.reasoningEffort && !supports(chosen.reasoningEffort)) throw new HttpError(400, '所选模型不支持该思考强度，请重新选择');
+  const reasoningEffort = chosen.reasoningEffort
+    ?? (preference?.reasoningEffort && supports(preference.reasoningEffort) ? preference.reasoningEffort : null);
+  return { model, reasoningEffort };
+}
+
+export async function validateAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection): Promise<void> {
+  await resolveAgentSelection(config, context, selection);
 }

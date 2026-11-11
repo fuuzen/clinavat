@@ -112,6 +112,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS question_defaults (
         id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('skip','defer')), timeout_ms INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS user_agent_defaults (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        model TEXT, reasoning_effort TEXT, PRIMARY KEY(user_id,engine)
+      );
       CREATE TABLE IF NOT EXISTS usage_settings (
         id INTEGER PRIMARY KEY CHECK(id=1), refresh_interval_ms INTEGER NOT NULL, stale_after_ms INTEGER NOT NULL
       );

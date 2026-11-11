@@ -5,7 +5,7 @@ import { projectFor, sessionFor, withResourceLocks, type Context } from '../cont
 import { HttpError, type Session } from '../models.js';
 import { slotForUser } from '../accounts/access.js';
 import { accessCodexGoal, type CodexGoal } from '../agent/codex-goal.js';
-import { validateAgentSelection } from '../agent/model-catalog.js';
+import { resolveAgentSelection } from '../agent/model-catalog.js';
 import { validatePermissionMode } from '../agent/permissions.js';
 import { validateSessionSettings } from '../agent/session-settings.js';
 import type { AgentContext } from '../agent/types.js';
@@ -73,7 +73,9 @@ async function startGoal(context: Context, session: Session, action: Extract<Goa
     const existingGoal = session.native_session_id ? await accessCodexGoal(config, runtime) : null;
     if (action.action === 'resume' && !existingGoal) throw new HttpError(409, '当前对话尚未设置 Goal');
     if (action.action === 'create' && existingGoal) throw new HttpError(409, '当前目标已存在，请使用 /goal edit 修改');
-    await validateAgentSelection(config, runtime, { model: session.model, reasoningEffort: session.reasoning_effort });
+    const resolved = await resolveAgentSelection(config, runtime, { model: session.model, reasoningEffort: session.reasoning_effort },
+      context.agentDefaults.forUser(session.user_id, 'codex'));
+    runtime.session = { ...runtime.session, model: resolved.model, reasoning_effort: resolved.reasoningEffort };
     try { await workspaces.flush(project); }
     catch (error) {
       store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", project.id);

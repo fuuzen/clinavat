@@ -1,0 +1,122 @@
+import { useEffect, useState } from "react";
+import { Bot, LoaderCircle, RefreshCw, Save } from "lucide-react";
+import { api, errorText, post } from "../../api";
+import type { AgentModel, AgentPreference, AgentPreferences } from "../../types";
+import { effortName } from "../chat/ReasoningEffortControl";
+import "../../styles/agent-defaults.css";
+
+type Engine = "claude" | "codex";
+interface CatalogSlot { id: string; label: string; model_catalog_at: string | null }
+interface AgentSettingsView {
+  defaults: AgentPreferences;
+  catalogs: Record<Engine, { models: AgentModel[]; slots: CatalogSlot[] }>;
+}
+
+const engineNames: Record<Engine, string> = { claude: "Claude Code", codex: "Codex" };
+
+/** The user's default model and reasoning effort per CLI, chosen from the catalogs of the slots they may use. */
+export default function AgentDefaultsSettings() {
+  const [view, setView] = useState<AgentSettingsView | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    api<AgentSettingsView>("/settings/agent", { signal: controller.signal })
+      .then(setView)
+      .catch((cause) => { if (!controller.signal.aborted) setError(errorText(cause)); });
+    return () => controller.abort();
+  }, []);
+  const engines = view ? (["claude", "codex"] as const).filter((engine) => view.catalogs[engine].slots.length) : [];
+  return (
+    <>
+      <div className="settings-section-heading">
+        <Bot size={17} />
+        <h3>模型与思考强度</h3>
+      </div>
+      <p className="settings-description">
+        你的对话未单独选择模型或思考强度时使用的默认值。所用槽位的模型列表中没有该模型、或模型不支持该强度时，改用 CLI 的默认设置。
+      </p>
+      {!view && !error && <div className="loading-state">正在读取…</div>}
+      {view && !engines.length && <p className="settings-description">你还没有获授权的槽位。</p>}
+      {view && engines.map((engine) => (
+        <EngineDefaults key={engine} engine={engine} view={view} onSaved={setView} />
+      ))}
+      {error && <p className="inline-error" role="alert">{error}</p>}
+    </>
+  );
+}
+
+function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: AgentSettingsView; onSaved: (view: AgentSettingsView) => void }) {
+  const saved = view.defaults[engine];
+  const { models, slots } = view.catalogs[engine];
+  const [draft, setDraft] = useState<AgentPreference>(saved);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const model = models.find((item) => item.id === draft.model);
+  // Without a chosen model, any effort some model offers can apply wherever the CLI's default model supports it.
+  const efforts = model ? model.reasoningEfforts
+    : [...new Map(models.flatMap((item) => item.reasoningEfforts).map((effort) => [effort.value, effort])).values()];
+  const dirty = draft.model !== saved.model || draft.reasoningEffort !== saved.reasoningEffort;
+  async function run(action: string, operation: () => Promise<AgentSettingsView>, done: string) {
+    setBusy(action); setError(""); setMessage("");
+    try { onSaved(await operation()); setMessage(done); }
+    catch (cause) { setError(errorText(cause)); }
+    finally { setBusy(""); }
+  }
+  return (
+    <form className="agent-defaults" onSubmit={(event) => {
+      event.preventDefault();
+      void run("save", () => api<AgentSettingsView>(`/settings/agent/${engine}`, { method: "PUT", body: JSON.stringify(draft) }),
+        "已保存，你之后发送的消息按新默认值运行。");
+    }}>
+      <strong>{engineNames[engine]}</strong>
+      <div className="agent-defaults-fields">
+        <label>
+          默认模型
+          <select value={draft.model ?? ""} disabled={!!busy} onChange={(event) => {
+            const next = models.find((item) => item.id === event.target.value);
+            setDraft({ model: next?.id ?? null,
+              reasoningEffort: next && !next.reasoningEfforts.some((effort) => effort.value === draft.reasoningEffort) ? null : draft.reasoningEffort });
+            setMessage("");
+          }}>
+            <option value="">跟随 CLI 默认</option>
+            {draft.model && !model && <option value={draft.model}>{draft.model}（不在当前模型列表中）</option>}
+            {models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        <label>
+          默认思考强度
+          <select value={draft.reasoningEffort ?? ""} disabled={!!busy || !efforts.length} onChange={(event) => {
+            setDraft({ ...draft, reasoningEffort: event.target.value || null });
+            setMessage("");
+          }}>
+            <option value="">跟随模型默认</option>
+            {draft.reasoningEffort && !efforts.some((effort) => effort.value === draft.reasoningEffort)
+              && <option value={draft.reasoningEffort}>{effortName(draft.reasoningEffort)}</option>}
+            {efforts.map((effort) => <option key={effort.value} value={effort.value}>{effortName(effort.value)}</option>)}
+          </select>
+        </label>
+        <button type="submit" className="button button-primary button-small" disabled={!!busy || !dirty}>
+          {busy === "save" ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}保存
+        </button>
+      </div>
+      <div className="agent-defaults-sources">
+        <small>模型列表来自：</small>
+        {slots.map((slot) => (
+          <span key={slot.id}>
+            <small>{slot.label} · {slot.model_catalog_at ? `更新于 ${new Date(slot.model_catalog_at).toLocaleString("zh-CN")}` : "尚未读取"}</small>
+            <button type="button" className="icon-button" disabled={!!busy} aria-label={`刷新 ${slot.label} 的模型列表`} title={`刷新 ${slot.label} 的模型列表`}
+              onClick={() => void run(`refresh:${slot.id}`, async () => {
+                await post(`/slots/${slot.id}/models/refresh`);
+                return api<AgentSettingsView>("/settings/agent");
+              }, `已刷新 ${slot.label} 的模型列表。`)}>
+              {busy === `refresh:${slot.id}` ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
+            </button>
+          </span>
+        ))}
+      </div>
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      {message && <p className="settings-description" role="status">{message}</p>}
+    </form>
+  );
+}

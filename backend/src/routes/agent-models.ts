@@ -6,16 +6,30 @@ import { HttpError, type Slot } from '../models.js';
 import { slotForUser } from '../accounts/access.js';
 import { announceSlotChange } from '../accounts/assignments.js';
 import { selectedSlotId } from './session-messages.js';
+import { agentPreferenceSchema, userModels } from '../agent-defaults.js';
 
 const catalogError = (error: unknown) => error instanceof HttpError ? error
   : new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败');
 
 export function agentModelRoutes(app: FastifyInstance, context: Context) {
-  const { store, config } = context;
+  const { store, config, agentDefaults, events } = context;
+  const engine = z.enum(['claude', 'codex']);
+  // Only saved catalogs are offered, so opening the settings never starts a CLI.
+  const settingsView = (userId: string) => ({
+    defaults: agentDefaults.user(userId),
+    catalogs: { claude: userModels(store, userId, 'claude'), codex: userModels(store, userId, 'codex') },
+  });
+  app.get('/api/settings/agent', async request => settingsView(request.user.id));
+  app.put('/api/settings/agent/:engine', async request => {
+    const params = z.object({ engine }).parse(request.params);
+    agentDefaults.update(request.user.id, params.engine, agentPreferenceSchema.parse(request.body));
+    events.broadcast(request.user.id, { type: 'agent-defaults', payload: {} });
+    return settingsView(request.user.id);
+  });
   app.get('/api/agent/models', async request => {
-    const { engine, slotId } = z.object({ engine: z.enum(['claude', 'codex']), slotId: selectedSlotId }).parse(request.query);
-    const slot = slotForUser(store, slotId, request.user.id, engine);
-    try { return await loadModelCatalog(config, { user: request.user, slot, session: { engine } }); }
+    const query = z.object({ engine, slotId: selectedSlotId }).parse(request.query);
+    const slot = slotForUser(store, query.slotId, request.user.id, query.engine);
+    try { return await loadModelCatalog(config, { user: request.user, slot, session: { engine: query.engine } }); }
     catch (error) { throw catalogError(error); }
   });
   // The slot's users and administrators decide when its CLI is asked for the catalog again.

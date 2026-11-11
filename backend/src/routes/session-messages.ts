@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type User } from '../models.js';
-import { validateAgentSelection } from '../agent/model-catalog.js';
+import { resolveAgentSelection, validateAgentSelection } from '../agent/model-catalog.js';
 import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
 import { slotForUser } from '../accounts/access.js';
 import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
@@ -60,6 +60,9 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       : input.slotId ?? session.slot_id;
     if (!slotId) throw new HttpError(409, '请先为当前对话选择授权槽位');
     const slot = slotForUser(store, slotId, user.id, session.engine);
+    // The conversation keeps what it chose; the run also applies the user's defaults for what it left open.
+    const resolved = await resolveAgentSelection(config, { user, slot, session: { engine: session.engine } },
+      { model, reasoningEffort }, context.agentDefaults.forUser(user.id, session.engine));
     const compact = /^\/compact(?:\s|$)/i.test(input.content);
     if (compact) input.content = input.content.replace(/^\/compact/i, '/compact');
     if (/^\/[a-z][\w-]*(?:\s|$)/i.test(input.content) && !compact) {
@@ -73,7 +76,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       runtime_home: slot.home_dir,
       runtime_kind: 'conversation' as const,
       user, project, slot,
-      session: { ...session, slot_id: slot.id, model, reasoning_effort: reasoningEffort, permission_mode: permissionMode,
+      session: { ...session, slot_id: slot.id, model: resolved.model, reasoning_effort: resolved.reasoningEffort, permission_mode: permissionMode,
         agent_mode: agentMode, role_preset: rolePreset, ...(compact ? { command: 'compact' as const } : {}) },
     };
     const runtime = agents.view(id);
@@ -97,7 +100,6 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     // Reserve before persisting a turn, including model validation and workspace preparation.
     const release = await config.credentials.acquire(runContext);
     try {
-      await validateAgentSelection(config, runContext, { model, reasoningEffort });
       try { await workspaces.flush(project); }
       catch (error) {
         store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", project.id);

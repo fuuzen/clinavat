@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Context } from '../context.js';
 import { projectFor, sessionFor } from '../context.js';
 import { HttpError } from '../models.js';
-import { validateAgentSelection } from '../agent/model-catalog.js';
+import { resolveAgentSelection, type AgentPreference } from '../agent/model-catalog.js';
 import type { AgentContext, QuotaFailure } from '../agent/types.js';
 import { slotForUser } from './access.js';
 
@@ -25,8 +25,10 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
     signal.throwIfAborted();
     const next: AgentContext = { user: { id: session.user_id }, project, slot, runtime_home: slot.home_dir,
       runtime_kind: 'conversation', session: { ...session } };
+    let resolved: AgentPreference;
     try {
-      await validateAgentSelection(config, next, { model: session.model, reasoningEffort: session.reasoning_effort });
+      resolved = await resolveAgentSelection(config, next, { model: session.model, reasoningEffort: session.reasoning_effort },
+        context.agentDefaults.forUser(session.user_id, session.engine));
     } catch (error) {
       if (signal.aborted || !(error instanceof HttpError) || error.statusCode !== 400) throw error;
       selectionError = error;
@@ -51,7 +53,8 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
     events.emit(session.user_id, { type: 'session', sessionId: session.id, payload: store.get('SELECT * FROM sessions WHERE id=?', session.id) });
     events.emit(session.user_id, { type: 'message', sessionId: session.id, payload: store.get('SELECT * FROM messages WHERE id=?', noteId) });
     const turn = turns.start(session.id, noteId, { slotId: slot.id, credentialRevision: slot.credential_revision }, randomUUID());
-    return { ...next, project: currentProject, session: { ...current, turn_id: turn.id } };
+    return { ...next, project: currentProject,
+      session: { ...current, model: resolved.model, reasoning_effort: resolved.reasoningEffort, turn_id: turn.id } };
   }
   throw selectionError ?? new HttpError(409, '没有支持当前模型和思考强度的可用账号');
 }

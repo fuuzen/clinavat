@@ -42,6 +42,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=?
         AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
       questionDefaults: questionDefaults.forUser(request.user.id),
+      agentDefaults: context.agentDefaults.user(request.user.id),
       // Conversations that wait for the user to answer a question asked while nobody was there.
       deferredQuestions: store.all<{ session_id: string; count: number }>(`SELECT deferred_questions.session_id,COUNT(*) AS count
         FROM deferred_questions JOIN sessions ON sessions.id=deferred_questions.session_id

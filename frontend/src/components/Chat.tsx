@@ -455,6 +455,7 @@ export default function Chat(props: Props) {
             accountAvailable={catalogSlot?.status === "IDLE" && catalogSlot.engine === currentEngine}
             disabled={active || slotSaving || permissionSaving || behaviorSaving || !slotAvailable}
             value={selection}
+            preference={overview.agentDefaults?.[currentEngine]}
             onChange={setSelection}
           />
         </ChatComposer>

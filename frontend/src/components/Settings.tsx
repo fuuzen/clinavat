@@ -11,6 +11,7 @@ import { Modal } from "./Dialogs";
 import AccountSettings from "./settings/AccountSettings";
 import ServiceStatus from "./settings/ServiceStatus";
 import QuestionSettings from "./settings/QuestionSettings";
+import AgentDefaultsSettings from "./settings/AgentDefaultsSettings";
 import TokenUsageSettings from "./settings/TokenUsageSettings";
 
 const AppearanceSettings = lazy(() => import("./settings/AppearanceSettings"));
@@ -79,7 +80,12 @@ export default function Settings({ overview, onClose }: Props) {
             <AccountSettings overview={overview} />
           )}
           {tab === "usage" && <TokenUsageSettings />}
-          {tab === "conversation" && <QuestionSettings />}
+          {tab === "conversation" && (
+            <>
+              <AgentDefaultsSettings />
+              <QuestionSettings />
+            </>
+          )}
           {tab === "system" && <ServiceStatus />}
         </div>
       </div>
