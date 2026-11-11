@@ -1,5 +1,6 @@
 import { HttpError } from '../models.js';
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
+import { agentEnvironment, observeProcessClose, terminateProcess } from './environment.js';
+import type { ExecutionScope } from '../execution/types.js';
 import { readJsonLines } from './ndjson.js';
 import { RpcClient } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
@@ -18,6 +19,10 @@ export interface AgentSelection {
   reasoningEffort?: string | null;
 }
 
+/** The catalog depends only on the account and the user's CLI profile in the slot, never on a project. */
+export type CatalogContext = Pick<AgentContext, 'user' | 'slot'> & { session: Pick<AgentContext['session'], 'engine'> };
+type ProbeContext = Omit<AgentContext, 'project'>;
+
 const cache = new Map<string, { userId: string; expires: number; models: Promise<AgentModel[]> }>();
 
 export function invalidateUserModels(userId: string): void {
@@ -28,11 +33,15 @@ export function invalidateUserModels(userId: string): void {
 const effortLabels: Record<string, string> = { xhigh: 'Extra High' };
 const effortOption = (value: string) => ({ value, label: effortLabels[value] || value.charAt(0).toUpperCase() + value.slice(1) });
 
-async function codexModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
+// Runs in the slot's home, so no project is mounted into the slot machine just to read the catalog.
+const probeScope = (context: ProbeContext): ExecutionScope => ({ userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home] });
+
+async function codexModels(config: AgentConfig, context: ProbeContext): Promise<AgentModel[]> {
   const { execution } = config;
-  const binary = await execution.binary(agentScope(context), 'codex');
-  const child = await execution.spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`, 'app-server'], {
-    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
+  const scope = probeScope(context);
+  const binary = await execution.binary(scope, 'codex');
+  const child = await execution.spawn(binary, ['-c', 'cli_auth_credentials_store="file"', '-c', `projects.${JSON.stringify(context.runtime_home)}.trust_level="untrusted"`, 'app-server'], {
+    scope, cwd: context.runtime_home, env: agentEnvironment(execution, context, scope),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();
@@ -86,15 +95,16 @@ async function codexModels(config: AgentConfig, context: AgentContext): Promise<
   }
 }
 
-async function claudeModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
+async function claudeModels(config: AgentConfig, context: ProbeContext): Promise<AgentModel[]> {
   const { execution } = config;
-  const binary = await execution.binary(agentScope(context), 'claude');
+  const scope = probeScope(context);
+  const binary = await execution.binary(scope, 'claude');
   const child = await execution.spawn(binary, [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--restricted', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--tools', '', '--disable-slash-commands', '--no-session-persistence',
   ], {
-    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
+    scope, cwd: context.runtime_home, env: agentEnvironment(execution, context, scope),
     secrets: await config.credentials.secretEnvironment(context.slot.id),
   });
   const closed = observeProcessClose(child);
@@ -136,29 +146,30 @@ async function claudeModels(config: AgentConfig, context: AgentContext): Promise
   }
 }
 
-export async function loadAgentModels(config: AgentConfig, context: AgentContext): Promise<AgentModel[]> {
-  const probeContext: AgentContext = { ...context, runtime_home: context.slot.home_dir, runtime_kind: 'probe',
-    session: { ...context.session, id: '', native_session_id: undefined, jsonl_file_path: undefined } };
-  const release = await config.credentials.acquire(probeContext);
-  try {
-    const credentialFingerprint = await config.credentials.fingerprint(probeContext);
-    const key = JSON.stringify([context.user.id, probeContext.runtime_home, context.slot.id, context.slot.credential_revision,
-      context.slot.updated_at, credentialFingerprint, context.project.local_path, context.session.engine]);
-    for (const [cachedKey, entry] of cache) if (entry.expires <= Date.now()) cache.delete(cachedKey);
-    const existing = cache.get(key);
-    if (existing) return await existing.models;
-    const models = (async () => {
+export async function loadAgentModels(config: AgentConfig, context: CatalogContext): Promise<AgentModel[]> {
+  const probeContext: ProbeContext = { user: context.user, slot: context.slot, runtime_home: context.slot.home_dir,
+    runtime_kind: 'probe', session: { id: '', engine: context.session.engine } };
+  // The fingerprint checks access without a lease, so a cached catalog never waits for the slot.
+  const credentialFingerprint = await config.credentials.fingerprint(probeContext);
+  const key = JSON.stringify([context.user.id, probeContext.runtime_home, context.slot.id, context.slot.credential_revision,
+    context.slot.updated_at, credentialFingerprint, context.session.engine]);
+  for (const [cachedKey, entry] of cache) if (entry.expires <= Date.now()) cache.delete(cachedKey);
+  const existing = cache.get(key);
+  if (existing) return existing.models;
+  const models = (async () => {
+    const release = await config.credentials.acquire(probeContext);
+    try {
       const result = await (context.session.engine === 'codex' ? codexModels(config, probeContext) : claudeModels(config, probeContext));
       if (!result.length) throw new Error('当前 CLI 未提供可用模型');
       return result;
-    })();
-    cache.set(key, { userId: context.user.id, expires: Date.now() + 300000, models });
-    try { return await models; }
-    catch (error) { if (cache.get(key)?.models === models) cache.delete(key); throw error; }
-  } finally { await release(); }
+    } finally { await release(); }
+  })();
+  cache.set(key, { userId: context.user.id, expires: Date.now() + 300000, models });
+  try { return await models; }
+  catch (error) { if (cache.get(key)?.models === models) cache.delete(key); throw error; }
 }
 
-export async function validateAgentSelection(config: AgentConfig, context: AgentContext, selection: AgentSelection): Promise<void> {
+export async function validateAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection): Promise<void> {
   if (!selection.model && !selection.reasoningEffort) return;
   let models: AgentModel[];
   try { models = await loadAgentModels(config, context); }

@@ -450,7 +450,6 @@ export default function Chat(props: Props) {
             projectId={project.id}
             accountKey={accountKey}
             slotId={catalogSlot?.id || ""}
-            sessionId={session?.id}
             accountAvailable={catalogSlot?.status === "IDLE" && catalogSlot.engine === currentEngine}
             disabled={active || slotSaving || permissionSaving || behaviorSaving || !slotAvailable}
             value={selection}

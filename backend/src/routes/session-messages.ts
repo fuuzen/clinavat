@@ -55,10 +55,8 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       || (!currentRuntime.turnActive && !currentRuntime.tasks.length && !currentRuntime.queue.length);
     const slotId = auto && canSelect
       ? (await context.slots.select({ userId: user.id, engine: session.engine,
-        model, preferredSlotId: session.slot_id }, candidate => validateAgentSelection(config, {
-        user, project, slot: candidate, runtime_home: candidate.home_dir, runtime_kind: 'probe',
-        session: { ...session, model, reasoning_effort: reasoningEffort, permission_mode: permissionMode },
-      }, { model, reasoningEffort }))).id
+        model, preferredSlotId: session.slot_id }, candidate => validateAgentSelection(config,
+        { user, slot: candidate, session: { engine: session.engine } }, { model, reasoningEffort }))).id
       : input.slotId ?? session.slot_id;
     if (!slotId) throw new HttpError(409, '请先为当前对话选择授权槽位');
     const slot = slotForUser(store, slotId, user.id, session.engine);

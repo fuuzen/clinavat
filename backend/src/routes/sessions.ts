@@ -53,17 +53,13 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       slotMode: z.enum(['manual', 'auto']).default('manual'),
       title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
     return withResourceLocks(context, [], async () => {
-      const project = projectFor(context, input.projectId, request.user.id);
+      projectFor(context, input.projectId, request.user.id);
       if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
       if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const permissionMode = validatePermissionMode(input.engine, input.permissionMode ?? 'manual');
       const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
       const id = randomUUID();
-      const validate = (slot: Slot) => validateAgentSelection(context.config, {
-        runtime_home: slot.home_dir, runtime_kind: 'probe',
-        user: request.user, project, slot,
-        session: { id: '', engine: input.engine, model: input.model ?? null, reasoning_effort: input.reasoningEffort ?? null, permission_mode: permissionMode },
-      }, input);
+      const validate = (slot: Slot) => validateAgentSelection(context.config, { user: request.user, slot, session: { engine: input.engine } }, input);
       const slot = input.slotMode === 'auto'
         ? await context.slots.select({ userId: request.user.id, engine: input.engine, model: input.model }, validate)
         : slotForUser(store, input.slotId!, request.user.id, input.engine);

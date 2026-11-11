@@ -11,7 +11,6 @@ interface Props {
   projectId: string;
   accountKey: string;
   slotId: string;
-  sessionId?: string;
   accountAvailable: boolean;
   disabled: boolean;
   value: AgentSelection;
@@ -56,7 +55,7 @@ export default function ModelPicker(props: Props) {
   const catalogRef = useRef<{ key: string; retry: number; models: AgentModel[] } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    const key = JSON.stringify([props.engine, props.projectId, props.accountKey, props.slotId]);
+    const key = JSON.stringify([props.engine, props.accountKey, props.slotId]);
     const cached = catalogRef.current;
     const current = cached?.key === key && cached.retry === retry ? cached.models : null;
     setError("");
@@ -64,12 +63,7 @@ export default function ModelPicker(props: Props) {
     setLoading(false);
     if (!props.accountAvailable || current) return () => controller.abort();
     setLoading(true);
-    const query = new URLSearchParams({
-      engine: props.engine,
-      projectId: props.projectId,
-      slotId: props.slotId,
-      ...(props.sessionId ? { sessionId: props.sessionId } : {}),
-    });
+    const query = new URLSearchParams({ engine: props.engine, slotId: props.slotId });
     void api<{ models: AgentModel[] }>(`/agent/models?${query}`, {
       signal: controller.signal,
     })
@@ -86,7 +80,7 @@ export default function ModelPicker(props: Props) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [props.engine, props.projectId, props.accountKey, props.slotId, props.sessionId, props.accountAvailable, retry]);
+  }, [props.engine, props.accountKey, props.slotId, props.accountAvailable, retry]);
   const selected = props.value.model
     ? models.find((model) => model.id === props.value.model)
     : models.find((model) => model.isDefault);

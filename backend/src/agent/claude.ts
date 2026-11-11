@@ -27,7 +27,8 @@ async function transcriptPath(home: string, nativeId: string): Promise<string | 
 export async function startClaude(services: RunServices, prompt: string, signal?: AbortSignal): Promise<AgentRun> {
   if (signal?.aborted) throw new Error('会话已停止');
   const { execution } = services.config;
-  const binary = await execution.binary(agentScope(services.context), 'claude');
+  const scope = agentScope(services.context);
+  const binary = await execution.binary(scope, 'claude');
   const plansDirectory = path.join(services.context.runtime_home, '.claude', 'plans');
   await mkdir(plansDirectory, { recursive: true, mode: 0o700 });
   if (signal?.aborted) throw new Error('会话已停止');
@@ -59,7 +60,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         '--session-id', nativeId]
         : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope: agentScope(services.context), cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context),
+    scope, cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context, scope),
     secrets: await services.config.credentials.secretEnvironment(services.context.slot.id),
   });
   services.control.track(child);

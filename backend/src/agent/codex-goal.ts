@@ -108,11 +108,12 @@ export async function accessCodexGoal(
     return null;
   }
   const { execution } = config;
-  const binary = await execution.binary(agentScope(context), 'codex');
+  const scope = agentScope(context);
+  const binary = await execution.binary(scope, 'codex');
   const arguments_ = codexServerArguments(context);
   if (signal?.aborted) throw new Error('目标操作已取消');
   const child = await execution.spawn(binary, arguments_, {
-    scope: agentScope(context), cwd: context.project.local_path, env: agentEnvironment(execution, context),
+    scope, cwd: context.project.local_path, env: agentEnvironment(execution, context, scope),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();

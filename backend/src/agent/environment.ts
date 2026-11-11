@@ -8,9 +8,9 @@ import type { AgentContext } from './types.js';
 
 export const quoteShell = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
-export function agentEnvironment(execution: ExecutionHost, context: AgentContext): NodeJS.ProcessEnv {
+export function agentEnvironment(execution: ExecutionHost, context: Omit<AgentContext, 'project'>, scope: ExecutionScope): NodeJS.ProcessEnv {
   return {
-    ...execution.baseEnvironment(agentScope(context)),
+    ...execution.baseEnvironment(scope),
     HOME: context.runtime_home,
     XDG_CONFIG_HOME: path.join(context.runtime_home, '.config'),
     XDG_CACHE_HOME: path.join(context.runtime_home, '.cache'),

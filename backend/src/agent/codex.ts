@@ -13,13 +13,14 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
   }
   const { execution } = services.config;
-  const binary = await execution.binary(agentScope(services.context), 'codex');
+  const scope = agentScope(services.context);
+  const binary = await execution.binary(scope, 'codex');
   const root = services.context.project.local_path;
   const permissions = codexPermissions(services);
   const arguments_ = codexServerArguments(services.context);
   if (signal.aborted) throw new Error('会话已停止');
   const child = await execution.spawn(binary, arguments_, {
-    scope: agentScope(services.context), cwd: root, env: agentEnvironment(execution, services.context),
+    scope, cwd: root, env: agentEnvironment(execution, services.context, scope),
   });
   services.control.track(child);
   const closed = observeProcessClose(child);
