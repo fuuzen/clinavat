@@ -10,6 +10,40 @@ function configQuote(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+interface EndpointConfig {
+  identity: string;
+  knownHosts: string;
+  hostKeyChecking: 'yes' | 'accept-new';
+  controlPath?: string;
+  proxyJump?: string;
+}
+
+function endpointConfig(alias: string, endpoint: DevHost, options: EndpointConfig): string {
+  return [
+    `Host ${alias}`,
+    `  HostName ${endpoint.host}`, `  Port ${endpoint.port}`, `  User ${endpoint.username}`,
+    `  IdentityFile ${configQuote(options.identity)}`, '  IdentitiesOnly yes', '  BatchMode yes',
+    `  UserKnownHostsFile ${configQuote(options.knownHosts)}`, '  GlobalKnownHostsFile /dev/null',
+    `  StrictHostKeyChecking ${options.hostKeyChecking}`, '  HashKnownHosts yes', '  ConnectTimeout 10',
+    ...(options.controlPath
+      ? ['  ControlMaster auto', `  ControlPath ${configQuote(options.controlPath)}`, '  ControlPersist 600']
+      : ['  ControlMaster no', '  ControlPath none']),
+    '  ServerAliveInterval 30', '  ServerAliveCountMax 3', '  LogLevel ERROR',
+    ...(options.proxyJump ? [`  ProxyJump ${options.proxyJump}`] : []), '',
+  ].join('\n');
+}
+
+function endpointAddress(endpoint: DevHost): string {
+  return `${endpoint.username}@${endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}`;
+}
+
+export interface HostProbeKeys {
+  privateKey?: string;
+  jumpPrivateKey?: string;
+  /** A saved host whose stored keys stand in for keys the probe does not replace. */
+  savedHostId?: string;
+}
+
 export class SshManager {
   readonly keys: KeyStore;
   private readonly masters = new Map<string, {userId: string; host: DevHost}>();
@@ -48,19 +82,13 @@ export class SshManager {
       await atomicWrite(this.configPath(userId), `Include ${configQuote(join(configDirectory, '*.conf'))}\n`);
       const blocks = [];
       for (const endpoint of [host, ...(jump ? [jump] : [])]) {
-        const identity = await this.keys.identityPath(userId, endpoint.id);
         const controlPath = join(controlDirectory, createHash('sha256').update(`${userId}:${endpoint.id}`).digest('hex').slice(0, 24));
         if (Buffer.byteLength(controlPath) > 95) throw new Error('DATA_DIR 路径过长，无法创建 SSH 连接复用套接字');
-        blocks.push([
-          `Host ${this.alias(endpoint)}`,
-          `  HostName ${endpoint.host}`, `  Port ${endpoint.port}`, `  User ${endpoint.username}`,
-          `  IdentityFile ${configQuote(identity)}`, '  IdentitiesOnly yes', '  BatchMode yes',
-          `  UserKnownHostsFile ${configQuote(this.knownHostsPath(userId))}`, '  GlobalKnownHostsFile /dev/null',
-          '  StrictHostKeyChecking yes', '  HashKnownHosts yes', '  ConnectTimeout 10',
-          '  ControlMaster auto', `  ControlPath ${configQuote(controlPath)}`, '  ControlPersist 600',
-          '  ServerAliveInterval 30', '  ServerAliveCountMax 3', '  LogLevel ERROR',
-          ...(endpoint.id === host.id && jump ? [`  ProxyJump ${this.alias(jump)}`] : []), '',
-        ].join('\n'));
+        blocks.push(endpointConfig(this.alias(endpoint), endpoint, {
+          identity: await this.keys.identityPath(userId, endpoint.id), knownHosts: this.knownHostsPath(userId),
+          hostKeyChecking: 'yes', controlPath,
+          proxyJump: endpoint.id === host.id && jump ? this.alias(jump) : undefined,
+        }));
       }
       await atomicWrite(join(configDirectory, `${host.id}.conf`), blocks.join('\n'));
     });
@@ -76,16 +104,66 @@ export class SshManager {
       '  StrictHostKeyChecking accept-new', 'Host *', `  Include ${configQuote(this.configPath(userId))}`, '',
     ].join('\n'));
     try {
-      await checkedCommand(this.config.sshBinary ?? 'ssh', ['-F', bootstrapPath, this.alias(host), 'true'], {timeout: jump ? 35_000 : 20_000});
+      await this.handshake(bootstrapPath, host, this.alias(host), jump && this.alias(jump));
     } catch (error) {
       await this.disconnectHost(userId, host);
       throw error;
     } finally { await rm(bootstrapPath, {force: true}); }
     this.masters.set(`${userId}:${host.id}`, {userId, host});
-    const keys = await this.knownHostKeys(userId, host);
+    return {status: 'CONNECTED', ...await this.fingerprints(userId, host)};
+  }
+
+  /** Tests connection settings that may not be saved yet, without touching the host's saved configuration or connection. */
+  async probe(userId: string, host: DevHost, keys: HostProbeKeys): Promise<{fingerprint: string; jumpFingerprint?: string}> {
+    assertHostOwner(userId, host);
+    const jump = this.jumpHost(host);
+    const generated = await this.ensureUserKey(userId);
+    const temporaryFiles: string[] = [];
+    const identity = async (privateKey: string | undefined, savedId: string | undefined) => {
+      if (!privateKey) return savedId ? this.keys.identityPath(userId, savedId) : generated.privateKeyPath;
+      const path = await this.keys.writeTemporaryIdentity(userId, privateKey);
+      temporaryFiles.push(path);
+      return path;
+    };
+    const alias = `probe-${randomUUID()}`;
+    const configPath = join(this.keys.directory(userId), `${alias}.conf`);
+    temporaryFiles.push(configPath);
+    try {
+      const options = {knownHosts: this.knownHostsPath(userId), hostKeyChecking: 'accept-new' as const};
+      await atomicWrite(configPath, [
+        endpointConfig(alias, host, {
+          ...options, identity: await identity(keys.privateKey, keys.savedHostId), proxyJump: jump && `${alias}-jump`,
+        }),
+        ...(jump ? [endpointConfig(`${alias}-jump`, jump, {
+          ...options, identity: await identity(keys.jumpPrivateKey, keys.savedHostId && `${keys.savedHostId}-jump`),
+        })] : []),
+      ].join('\n'));
+      await this.handshake(configPath, host, alias, jump && `${alias}-jump`);
+    } finally { await Promise.all(temporaryFiles.map(path => rm(path, {force: true}))); }
+    return this.fingerprints(userId, host);
+  }
+
+  /** Reaches the jump host on its own first, so a failure names the machine that refused the connection. */
+  private async handshake(configPath: string, host: DevHost, alias: string, jumpAlias?: string): Promise<void> {
+    const jump = this.jumpHost(host);
+    const attempt = async (target: string, heading: string, timeout: number) => {
+      try { await checkedCommand(this.config.sshBinary ?? 'ssh', ['-F', configPath, target, 'true'], {timeout}); }
+      catch (error) {
+        const output = error instanceof Error ? error.message : String(error);
+        // At LogLevel ERROR the jump host's refusal to open the forwarded connection is reported only as this line.
+        const hint = jump && output.includes('stdio forwarding failed') ? '\n跳板机已连接，但无法访问开发机地址和端口，请确认开发机地址填写的是跳板机可访问的地址，且端口已开放。' : '';
+        throw new Error(`${heading}：\n${output}${hint}`);
+      }
+    };
+    if (jump && jumpAlias) await attempt(jumpAlias, `跳板机 ${endpointAddress(jump)} 连接失败`, 20_000);
+    await attempt(alias, `开发机 ${endpointAddress(host)} ${jump ? '经跳板机连接失败' : '连接失败'}`, jump ? 35_000 : 20_000);
+  }
+
+  private async fingerprints(userId: string, host: DevHost): Promise<{fingerprint: string; jumpFingerprint?: string}> {
+    const jump = this.jumpHost(host);
     const fingerprint = (values: Buffer[]) => values.map(key => `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`).join(', ');
     return {
-      status: 'CONNECTED', fingerprint: fingerprint(keys),
+      fingerprint: fingerprint(await this.knownHostKeys(userId, host)),
       ...(jump ? {jumpFingerprint: fingerprint(await this.knownHostKeys(userId, jump))} : {}),
     };
   }
@@ -96,13 +174,14 @@ export class SshManager {
     return runCommand(this.config.sshBinary ?? 'ssh', ['-F', this.configPath(userId), this.alias(host), remoteBash(command)], {timeout, maxBytes});
   }
 
-  async listDirectories(userId: string, host: DevHost, path = '/'): Promise<{path: string; entries: {name: string; path: string; type: 'directory'}[]}> {
-    assertRemotePath(path);
-    const command = `cd -- ${shellQuote(path)} && printf '%s\\0' "$PWD" && find . -mindepth 1 -maxdepth 1 -type d -print0`;
+  /** Lists subdirectories of the path, or of the login user's home directory when no path is given. */
+  async listDirectories(userId: string, host: DevHost, path?: string): Promise<{path: string; entries: {name: string; path: string; type: 'directory'}[]}> {
+    if (path !== undefined) assertRemotePath(path);
+    const command = `cd -- ${path === undefined ? '"$HOME"' : shellQuote(path)} && printf '%s\\0' "$PWD" && find . -mindepth 1 -maxdepth 1 -type d -print0`;
     const result = await this.exec(userId, host, command);
     if (result.code !== 0) throw new Error(result.stderr.trim() || '无法读取远端目录');
     const [canonicalPath, ...names] = result.stdout.split('\0');
-    return {path: canonicalPath || path, entries: names.filter(Boolean).map(name => ({
+    return {path: canonicalPath || path || '/', entries: names.filter(Boolean).map(name => ({
       name: name.replace(/^\.\//, ''), path: `${canonicalPath === '/' ? '' : canonicalPath}/${name.replace(/^\.\//, '')}`, type: 'directory' as const,
     })).sort((left, right) => left.name.localeCompare(right.name))};
   }

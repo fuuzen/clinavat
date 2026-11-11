@@ -12,6 +12,7 @@ import { localProjectPath } from './local-projects.js';
 import { workspaceFileRoutes } from './workspace-files.js';
 
 const identifier = z.object({ id: z.uuid() });
+const firstSyncTimeout = 30 * 60_000;
 const projectInput = z.object({
   name: z.string().trim().min(1).max(100), devHostId: z.uuid(),
   source: z.enum(['existing', 'new']).default('existing'),
@@ -30,35 +31,63 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
   app.post('/api/projects', async (request, reply) => {
     const input = projectInput.parse(request.body);
     const id = randomUUID();
-    return withResourceLocks(context, [`host:${input.devHostId}`, `project:${id}`], async () => {
-      const host = hostFor(context, input.devHostId, request.user.id);
+    const userId = request.user.id;
+    const created = await withResourceLocks(context, [`host:${input.devHostId}`, `project:${id}`], async () => {
+      const host = hostFor(context, input.devHostId, userId);
       const local = host.kind === 'local';
       const localPath = local ? await localProjectPath(input.remotePath, input.source) : join(config.workspaceDir, `proj_${id}`);
       const remotePath = local ? localPath : input.source === 'new' ? localPath : input.remotePath!;
       if (store.get('SELECT id FROM projects WHERE dev_host_id=? AND remote_path=?', host.id, remotePath)) throw new HttpError(409, '该远端目录已创建项目');
       if (input.ignorePaths.length) {
         if (local || input.source === 'new') throw new HttpError(400, '仅连接已有远端目录时可以添加同步排除规则');
-        try { await appendIgnoreRules(ssh, request.user.id, host, remotePath, input.ignorePaths); }
+        try { await appendIgnoreRules(ssh, userId, host, remotePath, input.ignorePaths); }
         catch (error) { throw new HttpError(502, error instanceof Error ? error.message : String(error)); }
       }
       if (!local && input.source === 'new') {
-        const created = await ssh.exec(request.user.id, host, `set -e; umask 077; if [ -L ${shellQuote(config.workspaceDir)} ]; then printf '%s\\n' '远端工作区根目录不能是软链接' >&2; exit 73; fi; if [ ! -d ${shellQuote(config.workspaceDir)} ]; then mkdir -m 1777 -- ${shellQuote(config.workspaceDir)}; fi; mkdir -m 700 -- ${shellQuote(remotePath)}`);
+        const created = await ssh.exec(userId, host, `set -e; umask 077; if [ -L ${shellQuote(config.workspaceDir)} ]; then printf '%s\\n' '远端工作区根目录不能是软链接' >&2; exit 73; fi; if [ ! -d ${shellQuote(config.workspaceDir)} ]; then mkdir -m 1777 -- ${shellQuote(config.workspaceDir)}; fi; mkdir -m 700 -- ${shellQuote(remotePath)}`);
         if (created.code !== 0) throw new HttpError(502, `无法新建远端项目目录：${created.stderr.trim()}`);
       }
-      const project: Project = { id, user_id: request.user.id, dev_host_id: host.id, name: input.name, remote_path: remotePath, local_path: localPath, sync_name: `proj-${id}`, sync_status: 'CREATING', created_at: new Date().toISOString(), path_mode: local || input.source === 'new' ? 'direct' : input.pathMode, execution_mode: local ? 'local' : null };
+      const project: Project = { id, user_id: userId, dev_host_id: host.id, name: input.name, remote_path: remotePath, local_path: localPath, sync_name: `proj-${id}`, sync_status: 'CREATING', created_at: new Date().toISOString(), path_mode: local || input.source === 'new' ? 'direct' : input.pathMode, execution_mode: local ? 'local' : null };
       store.run('INSERT INTO projects(id,user_id,dev_host_id,name,remote_path,local_path,sync_name,path_mode,execution_mode) VALUES(?,?,?,?,?,?,?,?,?)', id, project.user_id, host.id, project.name, project.remote_path, project.local_path, project.sync_name, project.path_mode, project.execution_mode);
+      if (!local) return { host, project };
       try {
-        await workspaces.create(request.user.id, host, project);
-        store.run('UPDATE projects SET sync_status=?,execution_mode=? WHERE id=?', local ? 'LOCAL' : 'WATCHING', project.execution_mode, id);
+        await workspaces.create(userId, host, project);
+        store.run("UPDATE projects SET sync_status='LOCAL' WHERE id=?", id);
       } catch (error) {
         store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", id);
-        events.emit(request.user.id, { type: 'project', payload: { id, sync_status: 'ERROR' } });
-        throw new HttpError(502, `${local ? '本机项目初始化失败，可检查目录后重试' : '项目同步初始化失败，可重试同步'}：${error instanceof Error ? error.message : String(error)}`);
+        events.emit(userId, { type: 'project', payload: { id, sync_status: 'ERROR' } });
+        throw new HttpError(502, `本机项目初始化失败，可检查目录后重试：${error instanceof Error ? error.message : String(error)}`);
       }
-      const ready = projectFor(context, id, request.user.id);
-      events.emit(request.user.id, { type: 'project', payload: ready });
-      return reply.code(201).send(ready);
+      return { host, project };
     });
+    const { host, project } = created;
+    if (project.execution_mode === 'local') {
+      const ready = projectFor(context, id, userId);
+      events.emit(userId, { type: 'project', payload: ready });
+      return reply.code(201).send(ready);
+    }
+    // The first sync of a large directory can take minutes, so it continues after the response under the project lock.
+    // The id is new and not yet known to any client, so no other request can take that lock in between.
+    void withResourceLocks(context, [`project:${id}`], async () => {
+      try {
+        await workspaces.create(userId, host, project, firstSyncTimeout);
+        store.run("UPDATE projects SET sync_status='WATCHING',execution_mode=? WHERE id=?", project.execution_mode, id);
+        events.emit(userId, { type: 'project', payload: projectFor(context, id, userId) });
+      } catch (error) {
+        store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", id);
+        events.emit(userId, { type: 'project', payload: { id, sync_status: 'ERROR' } });
+        events.emit(userId, { type: 'error', payload: { message: `项目「${project.name}」首次同步失败，可在工作区重试同步：${error instanceof Error ? error.message : String(error)}` } });
+      }
+    }).catch(error => request.log.error({ err: error, projectId: id }, '无法开始项目首次同步'));
+    events.emit(userId, { type: 'project', payload: project });
+    return reply.code(202).send(project);
+  });
+  app.get('/api/projects/:id/sync-progress', async request => {
+    const { id } = identifier.parse(request.params);
+    const project = projectFor(context, id, request.user.id);
+    if (project.sync_status !== 'CREATING' || project.execution_mode === 'local') return null;
+    try { return await workspaces.progress(project); }
+    catch (error) { throw new HttpError(502, error instanceof Error ? error.message : String(error)); }
   });
   app.post('/api/projects/:id/sync', async request => {
     const { id } = identifier.parse(request.params);

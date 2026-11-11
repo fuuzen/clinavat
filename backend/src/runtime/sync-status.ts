@@ -1,5 +1,11 @@
 interface SyncProblem { path?: string; error?: string }
 
+interface StagingProgress {
+  receivedFiles?: number;
+  expectedFiles?: number;
+  totalReceivedSize?: number;
+}
+
 interface SyncEndpoint {
   connected?: boolean;
   scanned?: boolean;
@@ -10,6 +16,7 @@ interface SyncEndpoint {
   excludedScanProblems?: number;
   transitionProblems?: SyncProblem[];
   excludedTransitionProblems?: number;
+  stagingProgress?: StagingProgress;
 }
 
 interface SyncSession {
@@ -108,4 +115,33 @@ export function parseSyncStatus(stdout: string): { status: 'WATCHING' | 'PAUSED'
 
 export function summarizeSyncFailure(stdout: string): string {
   return parseSyncStatus(stdout).detail;
+}
+
+export interface SyncProgress {
+  description: string;
+  /** Completed share between 0 and 1, or null while the amount of work is still unknown. */
+  ratio: number | null;
+  receivedFiles?: number;
+  expectedFiles?: number;
+  receivedBytes?: number;
+  totalBytes?: number;
+}
+
+// The mirror starts empty, so the first sync stages every remote file into it.
+export function parseSyncProgress(stdout: string): SyncProgress {
+  const session = readSession(stdout);
+  const description = statusDescriptions[session.status] ?? compact(session.status);
+  const totalBytes = session.alpha.scanned ? session.alpha.totalFileSize ?? 0 : undefined;
+  if (session.status === 'staging-beta') {
+    const staging = session.beta.stagingProgress ?? {};
+    const receivedBytes = staging.totalReceivedSize ?? 0;
+    const ratio = totalBytes ? receivedBytes / totalBytes
+      : staging.expectedFiles ? (staging.receivedFiles ?? 0) / staging.expectedFiles : null;
+    return {
+      description, ratio: ratio === null ? null : Math.min(1, ratio),
+      receivedFiles: staging.receivedFiles ?? 0, expectedFiles: staging.expectedFiles, receivedBytes, totalBytes,
+    };
+  }
+  const applied = ['transitioning', 'saving', 'watching'].includes(session.status);
+  return { description, ratio: applied ? 1 : null, totalBytes };
 }

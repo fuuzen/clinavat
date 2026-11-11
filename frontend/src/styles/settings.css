@@ -260,6 +260,7 @@
   line-height: 1.8;
   flex: 1;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 .notice .icon-button {
   height: 21px;

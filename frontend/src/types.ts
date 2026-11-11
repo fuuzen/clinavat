@@ -270,6 +270,16 @@ export interface SyncScan {
   truncated: boolean;
 }
 
+export interface SyncProgress {
+  description: string;
+  /** Completed share between 0 and 1, or null while the amount of work is still unknown. */
+  ratio: number | null;
+  receivedFiles?: number;
+  expectedFiles?: number;
+  receivedBytes?: number;
+  totalBytes?: number;
+}
+
 export interface ProjectUsage {
   mirrorBytes: number | null;
   backupBytes: number;

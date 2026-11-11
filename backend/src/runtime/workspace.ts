@@ -7,7 +7,7 @@ import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
-import { parseSyncStatus, summarizeSyncFailure } from './sync-status.js';
+import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, type SyncProgress } from './sync-status.js';
 import { assertHostOwner, assertIdentifier, assertRemotePath, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 
@@ -49,10 +49,11 @@ export class WorkspaceManager {
     return { userId: project.user_id, paths: [project.local_path] };
   }
 
-  async create(userId: string, host: DevHost, project: WorkspaceProject): Promise<void> {
+  /** `flushTimeout` bounds the wait for the first full sync of a new session, in milliseconds. */
+  async create(userId: string, host: DevHost, project: WorkspaceProject, flushTimeout = 120_000): Promise<void> {
     const existing = this.initializations.get(project.id);
     if (existing) return existing;
-    const task = this.initialize(userId, host, project);
+    const task = this.initialize(userId, host, project, flushTimeout);
     this.initializations.set(project.id, task);
     try { await task; } finally { this.initializations.delete(project.id); }
   }
@@ -92,7 +93,7 @@ export class WorkspaceManager {
     }
   }
 
-  private async initialize(userId: string, host: DevHost, project: WorkspaceProject): Promise<void> {
+  private async initialize(userId: string, host: DevHost, project: WorkspaceProject, flushTimeout: number): Promise<void> {
     this.validate(project);
     assertHostOwner(userId, host);
     if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
@@ -141,15 +142,15 @@ export class WorkspaceManager {
         `${this.ssh.alias(host)}:${policy.remotePath}`, project.local_path,
       ], 120_000);
       created = true;
-      await this.flush(project);
+      await this.flush(project, flushTimeout);
     } catch (error) {
       if (created) await this.mutagen(project, ['sync', 'terminate', project.sync_name], 15_000).catch(() => undefined);
       throw error;
     }
   }
 
-  private async flushBarrier(project: WorkspaceProject): Promise<void> {
-    try { await this.mutagen(project, ['sync', 'flush', project.sync_name], 120_000); }
+  private async flushBarrier(project: WorkspaceProject, timeout = 120_000): Promise<void> {
+    try { await this.mutagen(project, ['sync', 'flush', project.sync_name], timeout); }
     catch (error) {
       const diagnosis = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}'], 10_000)
         .then(result => summarizeSyncFailure(result.stdout)).catch(() => '');
@@ -157,9 +158,9 @@ export class WorkspaceManager {
     }
   }
 
-  async flush(project: WorkspaceProject): Promise<void> {
+  async flush(project: WorkspaceProject, timeout?: number): Promise<void> {
     if (project.execution_mode === 'local') { await this.checkLocalDirectory(project); return; }
-    await this.flushBarrier(project);
+    await this.flushBarrier(project, timeout);
     const health = await this.status(project);
     if (health.status === 'ERROR') throw new Error(`项目同步存在未解决的问题：\n${health.detail}`);
   }
@@ -177,6 +178,17 @@ export class WorkspaceManager {
     }
     const result = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}']);
     return parseSyncStatus(result.stdout);
+  }
+
+  /** Progress of a sync session that is still being set up; before the session exists the remote side is being prepared. */
+  async progress(project: WorkspaceProject): Promise<SyncProgress> {
+    try {
+      const result = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}'], 10_000);
+      return parseSyncProgress(result.stdout);
+    } catch (error) {
+      if (this.missingSession(error, project)) return { description: '正在准备远端目录和同步规则', ratio: null };
+      throw error;
+    }
   }
 
   async remove(project: WorkspaceProject): Promise<void> {

@@ -110,6 +110,8 @@ for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
   try { await ssh.addHost(host.user_id, host); }
   catch (error) { app.log.error({ err: error, hostId: host.id }, '无法恢复开发机运行时密钥'); }
 }
+// A first sync runs after its request returns, so a restart can interrupt it; the user retries it from the workspace.
+store.run("UPDATE projects SET sync_status='ERROR' WHERE sync_status='CREATING'");
 for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_status='WATCHING' AND execution_mode IS NOT NULL")) {
   const host = store.get<Host>('SELECT * FROM dev_hosts WHERE id=?', project.dev_host_id);
   if (!host) continue;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { type Context, assertProjectIdle, hostFor, withResourceLocks } from '../context.js';
@@ -22,6 +23,12 @@ const hostInput = z.object({
   jumpHost: z.object(endpointFields).nullable().optional(),
 });
 const hostPatch = hostInput.partial().extend({ port: portInput.optional() });
+const hostTestInput = hostInput.omit({ name: true }).extend({ hostId: z.uuid().optional() });
+
+// Connection failures are reported as 422 so reverse proxies pass the SSH output through instead of their own 5xx pages.
+function connectionFailure(error: unknown): HttpError {
+  return new HttpError(422, error instanceof Error ? error.message : String(error));
+}
 
 function jumpFields(jump: z.infer<typeof hostInput>['jumpHost']): Pick<Host, 'jump_host' | 'jump_port' | 'jump_username'> {
   return {
@@ -121,16 +128,32 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         return result;
       } catch (error) {
         store.run("UPDATE dev_hosts SET status='ERROR' WHERE id=?", id);
-        throw new HttpError(502, `SSH 连接失败：${error instanceof Error ? error.message : String(error)}`);
+        throw connectionFailure(error);
       }
     });
   });
+  // Tests the settings in the host dialog before they are saved; a saved host lends the keys the dialog keeps.
+  app.post('/api/hosts/test', async request => {
+    const input = hostTestInput.parse(request.body);
+    const saved = input.hostId ? hostFor(context, input.hostId, request.user.id) : undefined;
+    if (saved?.kind === 'local') throw new HttpError(400, '本机开发机为固定连接，无需测试');
+    await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
+    const host = {
+      id: saved?.id ?? randomUUID(), user_id: request.user.id, name: saved?.name ?? '连接测试',
+      host: input.host, port: input.port, username: input.username, ...jumpFields(input.jumpHost),
+    };
+    try {
+      return { status: 'CONNECTED', ...await ssh.probe(request.user.id, host, {
+        privateKey: input.privateKey, jumpPrivateKey: input.jumpHost?.privateKey, savedHostId: saved?.id,
+      }) };
+    } catch (error) { throw connectionFailure(error); }
+  });
   app.get('/api/hosts/:id/directories', async request => {
     const { id } = identifier.parse(request.params);
-    const { path } = z.object({ path: z.string().max(4096).default('/') }).parse(request.query);
+    const { path } = z.object({ path: z.string().min(1).max(4096).optional() }).parse(request.query);
     return withResourceLocks(context, [`host:${id}`], () => {
       const host = hostFor(context, id, request.user.id);
-      return host.kind === 'local' ? localDirectories(path) : ssh.listDirectories(request.user.id, host, path);
+      return host.kind === 'local' ? localDirectories(path ?? homedir()) : ssh.listDirectories(request.user.id, host, path);
     });
   });
   app.post('/api/hosts/:id/sync-scan', async request => {

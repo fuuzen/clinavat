@@ -1,0 +1,128 @@
+.directory-combobox {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.directory-combobox > input {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.directory-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px var(--shadow);
+}
+.directory-suggestions > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 7px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  color: var(--text-secondary);
+}
+.directory-suggestions > button > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.directory-suggestions > button > svg {
+  flex: none;
+  color: var(--muted);
+}
+.directory-suggestions > button:hover,
+.directory-suggestions > button.active {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.directory-suggestions > p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.directory-suggestions > p.directory-suggestions-error {
+  color: var(--danger);
+}
+.modal-actions > .modal-action-start {
+  margin-right: auto;
+}
+.connection-test-result {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sync-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: min(100%, 420px);
+  margin: 26px auto 0;
+  text-align: left;
+}
+.sync-progress-compact {
+  width: auto;
+  margin: 1px 8px 5px 24px;
+}
+.sync-progress-track {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.sync-progress-compact .sync-progress-track {
+  height: 2px;
+}
+.sync-progress-track > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.6s ease;
+}
+.sync-progress-track > span.sync-progress-indeterminate {
+  width: 35%;
+  animation: sync-progress-slide 1.4s ease-in-out infinite;
+}
+.sync-progress-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sync-progress-text > span:last-child {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@keyframes sync-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-progress-track > span { transition: none; }
+  .sync-progress-track > span.sync-progress-indeterminate { animation: none; width: 100%; opacity: 0.4; }
+}

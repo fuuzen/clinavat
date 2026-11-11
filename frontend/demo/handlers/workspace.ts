@@ -7,6 +7,10 @@ import { tokenUsageReport } from "../token-usage";
 import { fail, ok, readBody } from "./respond";
 
 const transfers = new Map<string, Uint8Array[]>();
+// Start times of simulated first syncs, which finish after firstSyncDuration.
+const firstSyncs = new Map<string, number>();
+const firstSyncDuration = 9000;
+const firstSyncBytes = 48_600_000;
 
 // Mirrors the Hub's conditional writes: If-None-Match: * creates only, If-Match replaces only an unchanged file.
 function refusedWrite(request: Request, path: string) {
@@ -127,8 +131,20 @@ export const workspaceHandlers = [
     if (host.kind !== "local") Object.assign(host, { status: "CONNECTED", fingerprint: "SHA256:demo+fingerprint+for+preview" });
     return HttpResponse.json({ status: host.status, fingerprint: host.fingerprint });
   }),
-  http.get("/api/hosts/:id/directories", ({ request }) => {
-    const path = new URL(request.url).searchParams.get("path") || "/";
+  http.post("/api/hosts/test", async ({ request }) => {
+    const input = await readBody<{ host?: string; jumpHost?: { host?: string } | null }>(request);
+    if (input.jumpHost?.host?.includes("fail"))
+      return fail(422, `跳板机 developer@${input.jumpHost.host}:22 连接失败：\nssh: connect to host ${input.jumpHost.host} port 22: Connection refused`);
+    if (input.host?.includes("fail"))
+      return fail(422, `开发机 developer@${input.host}:22 连接失败：\ndeveloper@${input.host}: Permission denied (publickey).`);
+    return HttpResponse.json({
+      status: "CONNECTED", fingerprint: "SHA256:demo+fingerprint+for+preview",
+      ...(input.jumpHost ? { jumpFingerprint: "SHA256:demo+jump+fingerprint" } : {}),
+    });
+  }),
+  http.get("/api/hosts/:id/directories", ({ params, request }) => {
+    const host = db.hosts.find((item) => item.id === params.id);
+    const path = new URL(request.url).searchParams.get("path") || (host?.kind === "local" ? "/srv" : `/home/${host?.username || "developer"}`);
     return HttpResponse.json({ path, entries: remoteDirectories(path) });
   }),
   http.post("/api/hosts/:id/sync-scan", async ({ request }) => {
@@ -153,11 +169,31 @@ export const workspaceHandlers = [
     const project: Project = {
       id: crypto.randomUUID(), name, dev_host_id: host.id, remote_path: input.remotePath || `/home/${host.username}/${name}`,
       local_path: local ? input.remotePath || `/srv/${name}` : `/data/mirrors/${name}`, path_mode: "auto",
-      execution_mode: local ? "local" : "direct", sync_status: local ? "LOCAL" : "WATCHING",
+      execution_mode: local ? "local" : null, sync_status: local ? "LOCAL" : "CREATING",
     };
     db.projects.push(project);
     emit({ type: "project", payload: { id: project.id } });
-    return HttpResponse.json(project, { status: 201 });
+    if (local) return HttpResponse.json(project, { status: 201 });
+    firstSyncs.set(project.id, Date.now());
+    setTimeout(() => {
+      firstSyncs.delete(project.id);
+      Object.assign(project, { sync_status: "WATCHING", execution_mode: "direct" });
+      emit({ type: "project", payload: { id: project.id } });
+    }, firstSyncDuration);
+    return HttpResponse.json(project, { status: 202 });
+  }),
+  http.get("/api/projects/:id/sync-progress", ({ params }) => {
+    const started = firstSyncs.get(String(params.id));
+    if (started === undefined) return HttpResponse.json(null);
+    const elapsed = (Date.now() - started) / firstSyncDuration;
+    if (elapsed < 0.2) return HttpResponse.json({ description: "正在准备远端目录和同步规则", ratio: null });
+    if (elapsed < 0.35) return HttpResponse.json({ description: "正在扫描文件", ratio: null });
+    const ratio = Math.min(1, (elapsed - 0.35) / 0.55);
+    return HttpResponse.json({
+      description: ratio < 1 ? "正在向镜像传输文件" : "正在应用文件变更", ratio,
+      receivedFiles: Math.round(ratio * 1284), expectedFiles: 1284,
+      receivedBytes: Math.round(ratio * firstSyncBytes), totalBytes: firstSyncBytes,
+    });
   }),
   http.patch("/api/projects/:id", async ({ params, request }) => {
     const project = findProject(params.id);

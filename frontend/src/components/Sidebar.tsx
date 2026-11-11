@@ -23,8 +23,9 @@ import Brand from "./Brand";
 import ArchivedSessions from "./sidebar/ArchivedSessions";
 import SessionRow from "./sidebar/SessionRow";
 import ClientHubSwitch from "./ClientHubSwitch";
+import SyncProgressBar from "./projects/SyncProgressBar";
 import { statusLabel } from "../api";
-import type { DevHost, Overview, Project, Session } from "../types";
+import type { DevHost, Overview, Project, Session, SyncProgress } from "../types";
 
 interface Props {
   overview: Overview;
@@ -33,6 +34,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSelect: (project: Project, session?: Session) => void;
+  syncProgress: Record<string, SyncProgress>;
   onNewHost: () => void;
   onEditHost: (host: DevHost) => void;
   onNewProject: (host?: DevHost) => void;
@@ -283,6 +285,9 @@ export default function Sidebar(props: Props) {
                               )}
                             </div>
                           </div>
+                          {project.sync_status === "CREATING" && (
+                            <SyncProgressBar compact progress={props.syncProgress[project.id]} />
+                          )}
                           {!collapsed.has(project.id) && (
                             <div className="project-sessions">
                               {sessions

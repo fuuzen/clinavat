@@ -79,6 +79,14 @@ export class KeyStore {
     } finally { await rm(temporary, {force: true}); }
   }
 
+  /** Writes a private key that is not saved yet, for a one-off connection; the caller removes the returned file. */
+  async writeTemporaryIdentity(userId: string, privateKey: string): Promise<string> {
+    await this.validatePrivateKey(userId, privateKey);
+    const path = join(this.runtimeDirectory(userId), `probe-${randomBytes(8).toString('hex')}`);
+    await writeFile(path, `${privateKey.trim()}\n`, {mode: 0o600, flag: 'wx'});
+    return path;
+  }
+
   async importHostKey(userId: string, hostId: string, privateKey: string): Promise<void> {
     assertIdentifier(hostId);
     await this.validatePrivateKey(userId, privateKey);

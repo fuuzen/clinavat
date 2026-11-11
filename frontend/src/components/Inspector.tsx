@@ -327,9 +327,9 @@ export default function Inspector({
               )}
               {showSyncAction && (
                 <button
-                  disabled={syncing}
+                  disabled={syncing || project.sync_status === "CREATING"}
                   onClick={() => void sync()}
-                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : "强制同步"}
+                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : project.sync_status === "CREATING" ? "首次同步完成后可用" : "强制同步"}
                 >
                   {syncing ? (
                     <LoaderCircle size={12} className="spin" />

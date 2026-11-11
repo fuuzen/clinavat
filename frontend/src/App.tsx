@@ -18,7 +18,9 @@ import { useSessionBehavior, useSessionPermissions, useSessionQuestions, useSess
 import { useSessionRunControl } from "./useSessionRunControl";
 import { usePendingSends } from "./components/chat/usePendingSends";
 import { createMessageSender } from "./components/chat/send-message";
-import { HostDialog, ProjectDialog } from "./components/ResourceDialogs";
+import HostDialog from "./components/hosts/HostDialog";
+import ProjectDialog from "./components/projects/ProjectDialog";
+import { useSyncProgress } from "./components/projects/useSyncProgress";
 import { hostConnectionMessage, type HostConnection } from "./components/hosts/host-connection";
 import Auth from "./components/Auth";
 import Brand from "./components/Brand";
@@ -97,6 +99,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
+  const syncProgress = useSyncProgress(overview?.projects, notify);
   const changePermission = useSessionPermissions(setOverview, notify);
   const changeSlot = useSessionSlot(setOverview, notify);
   const changeBehavior = useSessionBehavior(setOverview, notify);
@@ -345,6 +348,7 @@ export default function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onSelect={select}
+        syncProgress={syncProgress}
         onNewHost={() => setDialog({ type: "host" })}
         onEditHost={(host) => setDialog({ type: "host", host })}
         onNewProject={createProject}
@@ -371,6 +375,7 @@ export default function App() {
           overview={overview}
           project={project}
           session={session}
+          syncProgress={project && syncProgress[project.id]}
           messages={messages}
           turns={turns}
           streaming={streaming}
@@ -451,7 +456,13 @@ export default function App() {
           overview={overview}
           initialHost={dialog.host}
           onClose={closeDialog}
-          onCreated={refresh}
+          onCreated={async (created) => {
+            notify(created.sync_status === "CREATING"
+              ? `项目「${created.name}」已创建，正在后台进行首次同步`
+              : `项目「${created.name}」已创建`, "success");
+            await refresh().catch((cause) => notify(errorText(cause)));
+            select(created);
+          }}
         />
       )}
       {dialog?.type === "delete" && (
