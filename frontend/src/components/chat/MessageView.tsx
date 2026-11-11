@@ -119,8 +119,9 @@ export default function MessageView({
         )}
       </div>
       {user ? (
+        // Shown as typed, like the CLIs do: Markdown would turn an unclosed fence or __init__ into something else.
         <Collapsible>
-          <Markdown text={message.content} />
+          <div className="message-plain">{message.content}</div>
         </Collapsible>
       ) : (
         <Markdown text={message.content} />

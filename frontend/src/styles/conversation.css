@@ -206,6 +206,13 @@
   color: var(--text);
   overflow-wrap: anywhere;
 }
+.message-plain {
+  font-size: 14px;
+  line-height: 1.95;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .markdown > *:first-child {
   margin-top: 0;
 }

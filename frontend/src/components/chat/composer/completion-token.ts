@@ -1,3 +1,5 @@
+import { blankMarkdownCode } from './markdown-code';
+
 export interface CompletionToken {
   kind: 'command' | 'path';
   query: string;
@@ -14,13 +16,15 @@ export function completionToken(text: string, cursor: number): CompletionToken |
   }
   const reference = /(?:^|\s)@(?:"((?:[^"\\\n]|\\.)*)|([^\s"'<>`]*))$/.exec(before);
   if (!reference) return null;
+  const start = reference.index + reference[0].indexOf('@');
+  if (blankMarkdownCode(text)[start] !== '@') return null;
   const quoted = reference[1] !== undefined;
   const suffix = quoted ? /^(?:[^"\\\n]|\\.)*"?/.exec(text.slice(cursor))![0]
     : /^[^\s"'<>`]*/.exec(text.slice(cursor))![0];
   return {
     kind: 'path',
     query: (reference[1] ?? reference[2]).replace(/\\(["\\])/g, '$1'),
-    start: reference.index + reference[0].indexOf('@'),
+    start,
     end: cursor + suffix.length,
   };
 }
