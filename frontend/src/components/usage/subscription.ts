@@ -1,4 +1,4 @@
-import type { Slot, SlotSubscription, SlotUsage } from "../../types";
+import type { Slot, SlotLogin, SlotSubscription, SlotUsage } from "../../types";
 
 const codexPlans: Record<string, string> = {
   free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", promax: "Pro Max", team: "Team",
@@ -35,4 +35,23 @@ export function subscriptionStatus(subscription: SlotSubscription | null, now: n
     return { text: `${day(subscription.expiresAt)} 到期 · 剩余 ${days} 天`, level: days <= 7 ? "warning" : "" };
   }
   return subscription.startedAt ? { text: `订阅始于 ${day(subscription.startedAt)} · 未提供到期日`, level: "" } : null;
+}
+
+const moment = (timestamp: string) => new Date(timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+export function loginStatus(login: SlotLogin | null, now: number): SubscriptionStatus | null {
+  if (!login) return null;
+  if (login.method === "none") return { text: "尚未登录", level: "critical" };
+  if (login.method === "apikey") return { text: "API key 登录，无到期时间", level: "" };
+  if (login.method === "token") {
+    if (!login.expiresAt) return { text: "长期令牌 · 到期时间未记录", level: "" };
+    const days = Math.ceil((Date.parse(login.expiresAt) - now) / DAY);
+    return days <= 0 ? { text: `长期令牌已于 ${day(login.expiresAt)} 到期，请重新生成`, level: "critical" }
+      : { text: `长期令牌 ${day(login.expiresAt)} 到期 · 剩余 ${days} 天`, level: days <= 30 ? "warning" : "" };
+  }
+  const parts = ["浏览器登录，无固定到期时间"];
+  if (login.accessExpiresAt) parts.push(Date.parse(login.accessExpiresAt) > now
+    ? `访问令牌有效至 ${moment(login.accessExpiresAt)}` : "访问令牌已过期，下次使用时由 CLI 续期");
+  if (login.refreshedAt) parts.push(`上次续期 ${moment(login.refreshedAt)}`);
+  return { text: parts.join(" · "), level: "" };
 }

@@ -38,6 +38,7 @@ function LoginCommand({ slot }: { slot: Slot }) {
 
 function SetupToken({ slot, disabled, onChanged }: Props) {
   const [token, setToken] = useState("");
+  const [validDays, setValidDays] = useState("365");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const path = `/admin/slots/${encodeURIComponent(slot.id)}/setup-token`;
@@ -45,7 +46,7 @@ function SetupToken({ slot, disabled, onChanged }: Props) {
     setSaving(true);
     setError("");
     try {
-      const updated = await api<Slot>(path, method === "PUT" ? { method, body: JSON.stringify({ token }) } : { method });
+      const updated = await api<Slot>(path, method === "PUT" ? { method, body: JSON.stringify({ token, validDays: Number(validDays) }) } : { method });
       setToken("");
       await onChanged(updated, message);
     } catch (cause) { setError(errorText(cause)); }
@@ -63,6 +64,12 @@ function SetupToken({ slot, disabled, onChanged }: Props) {
       </p>
       <input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off"
         placeholder="sk-ant-oat…" aria-label="长期令牌" disabled={disabled || saving} required />
+      <label className="slot-token-validity">
+        有效期（天）
+        <input type="number" min={1} max={3650} value={validDays} onChange={(event) => setValidDays(event.target.value)}
+          disabled={disabled || saving} required />
+        <small>setup-token 默认 1 年，CLI 不记录到期时间，按此计算</small>
+      </label>
       <div className="slot-token-actions">
         <button className="button-secondary" disabled={disabled || saving || !token.trim()}>
           {saving && <LoaderCircle className="spin" size={13} aria-hidden="true" />}

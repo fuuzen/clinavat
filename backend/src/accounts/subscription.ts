@@ -53,3 +53,30 @@ export async function readSubscription(home: string, engine: AccountEngine): Pro
   try { return await (engine === 'claude' ? claudeSubscription(home) : codexSubscription(home)); }
   catch { return null; }
 }
+
+/** How a slot's CLI authenticates and when that ends, as far as its login files state it. */
+export interface SlotLogin {
+  method: 'oauth' | 'token' | 'apikey' | 'none';
+  /** A fixed end, known only for long-lived tokens, from the validity the administrator entered. */
+  expiresAt: string | null;
+  /** The short-lived access token of a browser login, which the CLI renews by itself while the login lasts. */
+  accessExpiresAt: string | null;
+  /** When the CLI last renewed the access token; only Codex records it. */
+  refreshedAt: string | null;
+}
+
+const noLogin: SlotLogin = { method: 'none', expiresAt: null, accessExpiresAt: null, refreshedAt: null };
+
+export async function readLogin(home: string, engine: AccountEngine): Promise<SlotLogin> {
+  try {
+    const document = await readDocument(home, credentialPath(home, engine));
+    if (engine === 'claude') {
+      const oauth = document?.claudeAiOauth;
+      return typeof oauth?.accessToken === 'string' ? { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(oauth.expiresAt) } : noLogin;
+    }
+    const token = text(document?.tokens?.access_token);
+    if (!token) return text(document?.OPENAI_API_KEY) ? { ...noLogin, method: 'apikey' } : noLogin;
+    const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
+    return { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(claims?.exp), refreshedAt: timestamp(document?.last_refresh) };
+  } catch { return noLogin; }
+}

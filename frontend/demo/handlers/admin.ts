@@ -62,15 +62,16 @@ export const adminHandlers = [
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");
     if (slot.engine !== "claude") return fail(400, "只有 Claude Code 槽位支持长期令牌");
-    const { token } = await readBody<{ token?: string }>(request);
+    const { token, validDays = 365 } = await readBody<{ token?: string; validDays?: number }>(request);
     if (!/^sk-ant-oat[A-Za-z0-9_-]{20,500}$/.test(token?.trim() || "")) return fail(400, "请粘贴 claude setup-token 输出的完整令牌（以 sk-ant-oat 开头）");
-    Object.assign(slot, { auth_method: "token", credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
+    Object.assign(slot, { auth_method: "token", token_expires_at: timestamp(validDays * 24 * 60),
+      credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
     return HttpResponse.json(slot);
   }),
   http.delete("/api/admin/slots/:id/setup-token", ({ params }) => {
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");
-    Object.assign(slot, { auth_method: "oauth", credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
+    Object.assign(slot, { auth_method: "oauth", token_expires_at: null, credential_revision: slot.credential_revision + 1, updated_at: timestamp() });
     return HttpResponse.json(slot);
   }),
   http.patch("/api/admin/slots/:id", async ({ params, request }) => {

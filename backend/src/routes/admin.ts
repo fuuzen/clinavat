@@ -124,8 +124,11 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
   app.put('/api/admin/slots/:id/setup-token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
     requireAdmin(request);
     const { id } = z.object({ id: slotId }).parse(request.params);
-    const { token } = z.object({ token: z.string().max(1000) }).strict().parse(request.body);
-    return serializeAdminSlot(context, await setSlotToken(context, id, parseSetupToken(token)));
+    // `claude setup-token` issues one-year tokens unless the account's policy sets another validity.
+    const { token, validDays } = z.object({ token: z.string().max(1000), validDays: z.number().int().min(1).max(3650).default(365) })
+      .strict().parse(request.body);
+    return serializeAdminSlot(context, await setSlotToken(context, id,
+      { value: parseSetupToken(token), expiresAt: new Date(Date.now() + validDays * 86_400_000).toISOString() }));
   });
   app.delete('/api/admin/slots/:id/setup-token', async request => {
     requireAdmin(request);

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { errorText } from "../../api";
 import type { Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow } from "../../useSlotUsage";
-import { planName, subscriptionStatus } from "./subscription";
+import { loginStatus, planName, subscriptionStatus } from "./subscription";
 
 interface Props {
   slotId: string;
@@ -52,6 +52,7 @@ export default function SlotUsageMeter({ slotId, engine, usage, compact = false,
   const now = useNow();
   const plan = planName(engine, usage);
   const subscription = subscriptionStatus(usage?.subscription ?? null, now);
+  const login = loginStatus(usage?.login ?? null, now);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const windows = usage?.state === "ok" ? usage.windows : [];
@@ -84,6 +85,7 @@ export default function SlotUsageMeter({ slotId, engine, usage, compact = false,
           {subscription.text}
         </small>
       )}
+      {!compact && login && <small className={`usage-subscription ${login.level}`}>{login.text}</small>}
       {windows.map((window) => {
         const used = window.usedPercent;
         const remaining = used === null ? null : Math.max(0, 100 - used);

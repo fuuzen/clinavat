@@ -42,11 +42,13 @@ function usage(slotId: string): SlotUsage {
   if (slot?.auth_method === "token") {
     return { slotId, state: "unavailable", plan: null, credits: null, limited: null, observedAt: now, checkedAt: null,
       source: "query", stale: false, refreshing: false, windows: [], subscription: null,
+      login: { method: "token", expiresAt: slot.token_expires_at ?? null, accessExpiresAt: null, refreshedAt: null },
       error: "长期令牌（setup-token）没有额度查询权限，额度只在对话运行时更新" };
   }
   return {
     slotId, state: "ok", plan: "Max", credits: null, limited: false, observedAt: now, checkedAt: now,
     source: "query", stale: false, refreshing: false, error: null,
+    login: { method: "oauth", expiresAt: null, accessExpiresAt: inHours(5), refreshedAt: slot?.engine === "codex" ? inHours(-30) : null },
     subscription: slot?.engine === "codex"
       ? { plan: "pro", tier: null, startedAt: inHours(-24 * 340), expiresAt: inHours(24 * 25), verifiedAt: inHours(-30) }
       : { plan: "max", tier: "default_claude_max_20x", startedAt: inHours(-24 * 200), expiresAt: null, verifiedAt: null },

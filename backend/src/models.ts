@@ -10,6 +10,7 @@ export interface Slot {
   status: 'IDLE' | 'RATE_LIMITED' | 'DISABLED';
   /** `token` slots authenticate with a long-lived `claude setup-token` token instead of a browser login. */
   auth_method: 'oauth' | 'token';
+  token_expires_at: string | null;
   credential_revision: number;
   updated_at: string;
 }

@@ -47,7 +47,7 @@ export async function updateSlot(context: Context, slotId: string, input: SlotUp
 }
 
 /** Switches a Claude slot between a browser login and a long-lived token from `claude setup-token`. */
-export async function setSlotToken(context: Context, slotId: string, token: string | null): Promise<Slot> {
+export async function setSlotToken(context: Context, slotId: string, token: { value: string; expiresAt: string } | null): Promise<Slot> {
   const { store, config } = context;
   return withResourceLocks(context, [`slot-config:${slotId}`], async () => {
     await context.agents.reclaimWhere({ slotId });
@@ -56,9 +56,9 @@ export async function setSlotToken(context: Context, slotId: string, token: stri
     if (slot.engine !== 'claude') throw new HttpError(400, '只有 Claude Code 槽位支持长期令牌');
     const switched = await config.credentials.whileIdle(slotId, async () => {
       await config.execution.assertReleased(slot.home_dir);
-      if (token) await config.credentials.tokens.write(slotId, token);
-      store.run(`UPDATE account_slots SET auth_method=?,credential_revision=credential_revision+1,updated_at=datetime('now') WHERE id=?`,
-        token ? 'token' : 'oauth', slotId);
+      if (token) await config.credentials.tokens.write(slotId, token.value);
+      store.run(`UPDATE account_slots SET auth_method=?,token_expires_at=?,credential_revision=credential_revision+1,
+        updated_at=datetime('now') WHERE id=?`, token ? 'token' : 'oauth', token?.expiresAt ?? null, slotId);
       // A leftover browser login would stay readable to agents although the slot no longer uses it.
       if (token) await clearClaudeLogin(slot.home_dir);
       else await config.credentials.tokens.remove(slotId);

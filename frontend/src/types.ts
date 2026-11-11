@@ -12,6 +12,7 @@ export interface Slot {
   engine: "claude" | "codex";
   status: "IDLE" | "RATE_LIMITED" | "DISABLED";
   auth_method: "oauth" | "token";
+  token_expires_at?: string | null;
   allowed_user_ids?: string[];
   max_concurrent_users: 1;
   in_use: boolean;
@@ -206,6 +207,15 @@ export interface SlotUsage {
   refreshing: boolean;
   error: string | null;
   subscription: SlotSubscription | null;
+  login: SlotLogin | null;
+}
+
+/** Only long-lived tokens have a fixed end; a browser login's access token is renewed by the CLI while the login lasts. */
+export interface SlotLogin {
+  method: "oauth" | "token" | "apikey" | "none";
+  expiresAt: string | null;
+  accessExpiresAt: string | null;
+  refreshedAt: string | null;
 }
 
 /** Read from the slot's login files: Codex states when the paid period ends, Claude only when it began. */

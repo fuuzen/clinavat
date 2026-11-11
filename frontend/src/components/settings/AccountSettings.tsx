@@ -7,7 +7,7 @@ import { statusLabel } from "../../api";
 import type { Overview } from "../../types";
 import { useNow, useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
-import { planName, subscriptionStatus } from "../usage/subscription";
+import { loginStatus, planName, subscriptionStatus } from "../usage/subscription";
 
 export default function AccountSettings({
   overview,
@@ -39,6 +39,7 @@ export default function AccountSettings({
       {overview.slots.length ? overview.slots.map((slot) => {
         const plan = planName(slot.engine, usage[slot.id]);
         const status = subscriptionStatus(usage[slot.id]?.subscription ?? null, now);
+        const login = loginStatus(usage[slot.id]?.login ?? null, now);
         return (
           <div className="settings-detail-card" key={slot.id}>
             <div>
@@ -49,6 +50,7 @@ export default function AccountSettings({
             </div>
             <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}{plan && ` · ${plan}`}</p>
             {status && <small className={`usage-subscription ${status.level}`}>{status.text}</small>}
+            {login && <small className={`usage-subscription ${login.level}`}>{login.text}</small>}
             <small>不同对话可同时使用不同槽位，切换仅影响当前对话；此槽位同时限 1 位用户。</small>
           </div>
         );

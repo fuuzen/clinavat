@@ -9,7 +9,7 @@ import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 import { claudeProbe, codexProbe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
-import { readSubscription, type SlotSubscription } from './subscription.js';
+import { readLogin, readSubscription, type SlotLogin, type SlotSubscription } from './subscription.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
 
@@ -40,9 +40,12 @@ export interface SlotUsageView {
   refreshing: boolean;
   error: string | null;
   subscription: SlotSubscription | null;
+  login: SlotLogin | null;
 }
 
-export interface UsageSlot { id: string; home_dir: string; engine: AccountEngine; status: string; auth_method?: SlotAuthMethod }
+export interface UsageSlot {
+  id: string; home_dir: string; engine: AccountEngine; status: string; auth_method?: SlotAuthMethod; token_expires_at?: string | null;
+}
 export interface ResidentUsage { update: UsageUpdate; identity: string | null }
 
 interface Snapshot {
@@ -61,6 +64,7 @@ interface Snapshot {
 interface SlotState {
   snapshot?: Snapshot; checkedAt?: number; error?: string; failures?: number; inflight?: Promise<void>;
   subscription?: SlotSubscription | null;
+  login?: SlotLogin;
 }
 
 const AUTO_INTERVAL = 60_000;
@@ -233,6 +237,9 @@ export class SlotUsage {
       this.bindIdentity(slot.id, identity);
       // A long-lived token has no account details; any login files left in the slot are not its account.
       state.subscription = slot.auth_method === 'token' ? null : await readSubscription(slot.home_dir, slot.engine);
+      state.login = slot.auth_method === 'token'
+        ? { method: 'token', expiresAt: slot.token_expires_at ?? null, accessExpiresAt: null, refreshedAt: null }
+        : await readLogin(slot.home_dir, slot.engine);
       if (slot.auth_method === 'token') {
         // Only live rate-limit events carry this account's windows; there is nothing to query.
         if (!state.snapshot || state.snapshot.unavailable) state.snapshot = { accountKey: identity, plan: null, windows: new Map(),
@@ -282,6 +289,7 @@ export class SlotUsage {
       refreshing: !!state.inflight,
       error: failedLater || !snapshot ? state.error ?? null : snapshot.unavailable ?? null,
       subscription: state.subscription ?? null,
+      login: state.login ?? null,
     };
   }
 
