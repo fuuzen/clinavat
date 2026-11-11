@@ -17,6 +17,7 @@ import { AgentManager } from './agent/manager.js';
 import { resourceRoutes } from './routes/resources.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { agentModelRoutes } from './routes/agent-models.js';
+import { SlotModelCatalogs } from './agent/model-catalog.js';
 import { completionRoutes } from './routes/completions.js';
 import { adminRoutes } from './routes/admin.js';
 import { siteAccessRoutes } from './routes/site-access.js';
@@ -85,7 +86,7 @@ await usage.init();
 const slotMachines = config.executionHost === 'lxd' ? machines : undefined;
 let gateway: GatewayService | undefined;
 const hostCommands = execution.kind === 'vm' ? new HostCommands(config, ssh.keys) : undefined;
-const agentConfig = { ...config, credentials, usage, execution,
+const agentConfig = { ...config, credentials, usage, execution, catalogs: new SlotModelCatalogs(store),
   egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } },
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };

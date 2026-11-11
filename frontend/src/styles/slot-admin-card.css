@@ -35,6 +35,10 @@
 .slot-admin-card .admin-mobile-details-content:not([hidden]) { display: flex; flex-direction: column; flex: 1; gap: 14px; }
 .slot-admin-card .usage-meter { flex: 1; margin: 0; }
 .slot-admin-card .usage-meter-status { margin-top: auto; }
+.slot-models { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+.slot-models .usage-meter-status { display: flex; align-items: center; gap: 6px; }
+.slot-models .icon-button { width: 22px; height: 22px; color: var(--muted); }
+.slot-models .usage-warning { color: var(--warning); }
 .slot-assignee-warning { color: var(--warning); }
 .slot-login-note { font-size: 11px; color: var(--muted); margin: 10px 0 0; line-height: 1.6; }
 .slot-admin-card details { border-top: 1px solid var(--line-strong); margin-top: auto; padding-top: 12px; }

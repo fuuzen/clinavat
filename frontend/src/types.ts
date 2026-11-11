@@ -13,6 +13,8 @@ export interface Slot {
   status: "IDLE" | "RATE_LIMITED" | "DISABLED";
   auth_method: "oauth" | "token";
   token_expires_at?: string | null;
+  /** When the slot's model catalog was last read from its CLI. */
+  model_catalog_at?: string | null;
   allowed_user_ids?: string[];
   max_concurrent_users: 1;
   in_use: boolean;
@@ -109,6 +111,12 @@ export interface AgentModel {
   reasoningEfforts: { value: string; label: string }[];
   defaultReasoningEffort?: string;
   isDefault?: boolean;
+}
+
+/** A slot's saved model list and when it was read from the slot's CLI. */
+export interface ModelCatalog {
+  models: AgentModel[];
+  refreshedAt: string;
 }
 
 export interface Message {

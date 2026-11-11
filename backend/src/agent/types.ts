@@ -8,6 +8,7 @@ import type { RunControl } from './run-control.js';
 import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
 import type { ExecutionHost } from '../execution/types.js';
 import type { TokenUsageUpdate, UsageOwner } from '../token-usage/ledger.js';
+import type { SlotModelCatalogs } from './model-catalog.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -18,6 +19,7 @@ export interface AgentConfig {
   credentials: AccountCredentials;
   execution: ExecutionHost;
   usage?: SlotUsage;
+  catalogs: SlotModelCatalogs;
   /** Refuses a run whose slot has no egress yet, instead of letting the CLI fail on network errors. */
   egress?: { assertBound(slotId: string): Promise<void> };
   /** The wrapper that runs a local project's shell commands on the host; null where they run beside the CLI. */

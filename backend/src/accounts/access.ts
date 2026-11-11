@@ -18,7 +18,7 @@ export function slotForUser(store: Store, slotId: string, userId: string, engine
 }
 
 export function serializeSlot(slot: Slot) {
-  const { home_dir: _home, ...publicSlot } = slot;
+  const { home_dir: _home, model_catalog: _catalog, ...publicSlot } = slot;
   return { ...publicSlot, max_concurrent_users: 1 as const };
 }
 

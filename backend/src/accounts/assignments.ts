@@ -1,5 +1,4 @@
 import { withResourceLocks, type Context } from '../context.js';
-import { invalidateUserModels } from '../agent/model-catalog.js';
 import { availableSlots, serializeUserSlot } from './access.js';
 import { clearClaudeLogin } from './credential-files.js';
 import { HttpError, type Slot } from '../models.js';
@@ -73,11 +72,10 @@ export async function setSlotToken(context: Context, slotId: string, token: { va
   });
 }
 
-function announceSlotChange(context: Context, userIds: string[]): void {
+export function announceSlotChange(context: Context, userIds: string[]): void {
   const { store, events } = context;
   const administrators = store.all<{ id: string }>("SELECT id FROM users WHERE role='admin'").map(user => user.id);
   for (const userId of new Set([...userIds, ...administrators])) {
-    invalidateUserModels(userId);
     events.emit(userId, { type: 'slot', payload: { slots: availableSlots(store, userId).map(item => serializeUserSlot(context, item, userId)) } });
   }
 }

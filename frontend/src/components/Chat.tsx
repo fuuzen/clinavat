@@ -140,8 +140,10 @@ export default function Chat(props: Props) {
     },
   });
   const occupied = !!slot?.in_use && !slot.in_use_by_you;
-  const accountKey = catalogSlot ? `${catalogSlot.id}:${catalogSlot.credential_revision}:${catalogSlot.updated_at}` : "unselected";
-  const selectionAccountKey = accountSelection.slotMode === "auto" ? "auto" : accountKey;
+  const slotKey = catalogSlot ? `${catalogSlot.id}:${catalogSlot.credential_revision}:${catalogSlot.updated_at}` : "unselected";
+  // A refreshed catalog reloads the model list but keeps the selection being made.
+  const accountKey = `${slotKey}:${catalogSlot?.model_catalog_at ?? ""}`;
+  const selectionAccountKey = accountSelection.slotMode === "auto" ? "auto" : slotKey;
   useEffect(() => {
     setStickToBottom(true);
   }, [session?.id, project?.id]);

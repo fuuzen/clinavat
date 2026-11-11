@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, LoaderCircle, RotateCw } from "lucide-react";
-import { api, errorText } from "../../api";
-import type { AgentModel, AgentSelection } from "../../types";
+import { api, errorText, post } from "../../api";
+import type { AgentModel, AgentSelection, ModelCatalog } from "../../types";
 import SettingsMenu from "./SettingsMenu";
 import ReasoningEffortControl, { effortName } from "./ReasoningEffortControl";
 
@@ -49,38 +49,42 @@ function SelectionItem(props: {
 
 export default function ModelPicker(props: Props) {
   const [models, setModels] = useState<AgentModel[]>([]);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [retry, setRetry] = useState(0);
-  const catalogRef = useRef<{ key: string; retry: number; models: AgentModel[] } | null>(null);
+  const catalogRef = useRef<{ key: string; catalog: ModelCatalog } | null>(null);
+  const key = JSON.stringify([props.engine, props.accountKey, props.slotId]);
+  function show(catalog: ModelCatalog) {
+    catalogRef.current = { key, catalog };
+    setModels(catalog.models);
+    setRefreshedAt(catalog.refreshedAt);
+  }
   useEffect(() => {
     const controller = new AbortController();
-    const key = JSON.stringify([props.engine, props.accountKey, props.slotId]);
-    const cached = catalogRef.current;
-    const current = cached?.key === key && cached.retry === retry ? cached.models : null;
+    const cached = catalogRef.current?.key === key ? catalogRef.current.catalog : null;
     setError("");
-    setModels(current || []);
+    setModels(cached?.models || []);
+    setRefreshedAt(cached?.refreshedAt || null);
     setLoading(false);
-    if (!props.accountAvailable || current) return () => controller.abort();
+    if (!props.accountAvailable || cached) return () => controller.abort();
     setLoading(true);
     const query = new URLSearchParams({ engine: props.engine, slotId: props.slotId });
-    void api<{ models: AgentModel[] }>(`/agent/models?${query}`, {
-      signal: controller.signal,
-    })
-      .then((result) => {
-        if (!controller.signal.aborted) {
-          catalogRef.current = { key, retry, models: result.models };
-          setModels(result.models);
-        }
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorText(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
+    // The Hub answers from the slot's saved catalog; only a slot never read before starts its CLI.
+    void api<ModelCatalog>(`/agent/models?${query}`, { signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) show(result); })
+      .catch((cause) => { if (!controller.signal.aborted) setError(errorText(cause)); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [props.engine, props.accountKey, props.slotId, props.accountAvailable, retry]);
+  }, [key, props.accountAvailable]);
+  async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError("");
+    try { show(await post<ModelCatalog>(`/slots/${props.slotId}/models/refresh`)); }
+    catch (cause) { setError(errorText(cause)); }
+    finally { setRefreshing(false); }
+  }
   const selected = props.value.model
     ? models.find((model) => model.id === props.value.model)
     : models.find((model) => model.isDefault);
@@ -95,7 +99,7 @@ export default function ModelPicker(props: Props) {
     <div className="agent-settings">
       <SettingsMenu
         openRequest={props.openRequest}
-        key={`${props.projectId}:${props.accountKey}:${props.engine}`}
+        key={`${props.projectId}:${props.slotId}:${props.engine}`}
         label="模型与思考强度"
         role="dialog"
         align="end"
@@ -107,7 +111,7 @@ export default function ModelPicker(props: Props) {
           <>
             <span className="settings-trigger-label">{modelName}</span>
             {(efforts.length > 0 || props.value.reasoningEffort) && <span className="model-trigger-effort">{currentEffort}</span>}
-            {loading ? <LoaderCircle size={12} className="spin" aria-label="正在加载模型" /> : <ChevronDown size={12} aria-hidden="true" />}
+            {loading || refreshing ? <LoaderCircle size={12} className="spin" aria-label="正在加载模型" /> : <ChevronDown size={12} aria-hidden="true" />}
           </>
         )}
       >
@@ -174,20 +178,22 @@ export default function ModelPicker(props: Props) {
                       )}
                     </div>
                     {loading && <div className="settings-menu-status" role="status">正在加载模型…</div>}
-                    {error && (
-                      <>
-                        <div className="settings-menu-status settings-menu-error" role="status">{error}</div>
-                        <button className="settings-menu-item" type="button" role="menuitem" tabIndex={-1} onClick={() => setRetry((value) => value + 1)}>
-                          <RotateCw size={14} />
-                          重新加载模型
-                        </button>
-                      </>
+                    {error && <div className="settings-menu-status settings-menu-error" role="status">{error}</div>}
+                    {props.accountAvailable && !loading && (
+                      <button className="settings-menu-item" type="button" role="menuitem" tabIndex={-1} disabled={refreshing}
+                        title="从当前槽位的 CLI 重新读取模型列表" onClick={() => void refresh()}>
+                        {refreshing ? <LoaderCircle size={14} className="spin" /> : <RotateCw size={14} />}
+                        <span className="settings-item-copy">
+                          <span className="settings-item-name">{refreshing ? "正在刷新模型列表…" : "刷新模型列表"}</span>
+                          {refreshedAt && <small>更新于 {new Date(refreshedAt).toLocaleString("zh-CN")}</small>}
+                        </span>
+                      </button>
                     )}
                   </>
                 )}
               </SettingsMenu>
             </ReasoningEffortControl>
-            {error && <div className="settings-menu-status settings-menu-error" role="status">模型列表加载失败，请点击模型名称重试。</div>}
+            {error && <div className="settings-menu-status settings-menu-error" role="status">模型列表加载失败，请点击模型名称后刷新模型列表。</div>}
           </>
         )}
       </SettingsMenu>

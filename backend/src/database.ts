@@ -157,6 +157,9 @@ export class Store {
     }
     // `claude setup-token` does not record its validity anywhere; the administrator states it with the token.
     this.addColumn('account_slots', 'token_expires_at', 'TEXT');
+    // The catalog last read from the slot's CLI; read again only when someone asks to refresh it.
+    this.addColumn('account_slots', 'model_catalog', 'TEXT');
+    this.addColumn('account_slots', 'model_catalog_at', 'TEXT');
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {

@@ -1,5 +1,7 @@
-import { ShieldCheck } from "lucide-react";
-import type { Slot, SlotUsage, User } from "../../types";
+import { useState } from "react";
+import { LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { errorText, post } from "../../api";
+import type { ModelCatalog, Slot, SlotUsage, User } from "../../types";
 import SlotUsageMeter from "../usage/SlotUsageMeter";
 import MobileCardDetails from "../admin/MobileCardDetails";
 import SlotLogin from "./SlotLogin";
@@ -45,8 +47,45 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginCh
           disabled={busy || running} onSave={(userId) => onUpdate(slot, { allowedUserIds: userId ? [userId] : [] })} />
         {assignmentError && <p className="slot-user-error">{assignmentError}</p>}
         {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={usage} refreshable={slot.auth_method !== "token"} />}
+        {slot.status !== "DISABLED" && <SlotModels slot={slot} />}
         {slot.home_dir && <SlotLogin slot={slot} disabled={busy || running} onChanged={onLoginChanged} />}
       </MobileCardDetails>
     </article>
+  );
+}
+
+/** The slot's saved model list, read from its CLI again only on request. */
+function SlotModels({ slot }: { slot: Slot }) {
+  const [catalog, setCatalog] = useState<{ count: number | null; refreshedAt: string | null }>({ count: null, refreshedAt: slot.model_catalog_at ?? null });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function refresh() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await post<ModelCatalog>(`/slots/${slot.id}/models/refresh`);
+      setCatalog({ count: result.models.length, refreshedAt: result.refreshedAt });
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const label = `刷新 ${slot.label} 的模型列表`;
+  return (
+    <span className="slot-models">
+      <span className="usage-meter-status">
+        <small>
+          模型列表：{catalog.refreshedAt
+            ? `${catalog.count === null ? "" : `${catalog.count} 个模型 · `}更新于 ${new Date(catalog.refreshedAt).toLocaleString("zh-CN")}`
+            : "尚未读取，首次使用时自动读取"}
+        </small>
+        <button type="button" className="icon-button" disabled={busy} aria-busy={busy} aria-label={label} title={label}
+          onClick={() => void refresh()}>
+          {busy ? <LoaderCircle size={12} className="spin" aria-hidden="true" /> : <RefreshCw size={12} aria-hidden="true" />}
+        </button>
+      </span>
+      {error && <small className="usage-warning" role="status">{error}</small>}
+    </span>
   );
 }

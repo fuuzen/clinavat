@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 import type { AgentModel, DevHost, Project, SlotUsage } from "../../src/types";
 import { completePaths, fileMeta, gitState, isDirectory, listFiles, readFile, remoteDirectories, writeFile } from "../filesystem";
 import { emit } from "../events";
-import { db } from "../store";
+import { db, timestamp } from "../store";
 import { tokenUsageReport } from "../token-usage";
 import { fail, ok, readBody } from "./respond";
 
@@ -77,7 +77,13 @@ export const workspaceHandlers = [
   http.get("/api/token-usage", ({ request }) => HttpResponse.json(
     tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30), db.user.id))),
   http.get("/api/agent/models", ({ request }) =>
-    HttpResponse.json({ models: models[new URL(request.url).searchParams.get("engine") || "claude"] || [] })),
+    HttpResponse.json({ models: models[new URL(request.url).searchParams.get("engine") || "claude"] || [], refreshedAt: timestamp(-60) })),
+  http.post("/api/slots/:id/models/refresh", ({ params }) => {
+    const slot = db.slots.find((item) => item.id === params.id);
+    if (!slot) return fail(404, "槽位不存在");
+    slot.model_catalog_at = timestamp();
+    return HttpResponse.json({ models: models[slot.engine] || [], refreshedAt: slot.model_catalog_at });
+  }),
 
   http.get("/api/hosts", () => HttpResponse.json(db.hosts)),
   http.post("/api/hosts", async ({ request }) => {

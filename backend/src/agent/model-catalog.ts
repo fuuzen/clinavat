@@ -1,3 +1,4 @@
+import type { Store } from '../database.js';
 import { HttpError } from '../models.js';
 import { agentEnvironment, observeProcessClose, terminateProcess } from './environment.js';
 import type { ExecutionScope } from '../execution/types.js';
@@ -19,14 +20,37 @@ export interface AgentSelection {
   reasoningEffort?: string | null;
 }
 
-/** The catalog depends only on the account and the user's CLI profile in the slot, never on a project. */
+/** The catalog depends only on the account and the slot's CLI, never on a project. */
 export type CatalogContext = Pick<AgentContext, 'user' | 'slot'> & { session: Pick<AgentContext['session'], 'engine'> };
 type ProbeContext = Omit<AgentContext, 'project'>;
 
-const cache = new Map<string, { userId: string; expires: number; models: Promise<AgentModel[]> }>();
+export interface SlotModelCatalog { models: AgentModel[]; refreshedAt: string }
 
-export function invalidateUserModels(userId: string): void {
-  for (const [key, entry] of cache) if (entry.userId === userId) cache.delete(key);
+/** Each slot's last catalog, kept until someone with access to the slot asks to read it again. */
+export class SlotModelCatalogs {
+  private reading = new Map<string, Promise<SlotModelCatalog>>();
+
+  constructor(private readonly store: Store) {}
+
+  read(slotId: string): SlotModelCatalog | undefined {
+    const row = this.store.get<{ model_catalog: string | null; model_catalog_at: string | null }>(
+      'SELECT model_catalog,model_catalog_at FROM account_slots WHERE id=?', slotId);
+    if (!row?.model_catalog || !row.model_catalog_at) return undefined;
+    return { models: JSON.parse(row.model_catalog) as AgentModel[], refreshedAt: row.model_catalog_at };
+  }
+
+  /** Concurrent requests for one slot share a single CLI start. */
+  probe(slotId: string, read: () => Promise<AgentModel[]>): Promise<SlotModelCatalog> {
+    const pending = this.reading.get(slotId);
+    if (pending) return pending;
+    const request = read().then(models => {
+      const refreshedAt = new Date().toISOString();
+      this.store.run('UPDATE account_slots SET model_catalog=?,model_catalog_at=? WHERE id=?', JSON.stringify(models), refreshedAt, slotId);
+      return { models, refreshedAt };
+    }).finally(() => this.reading.delete(slotId));
+    this.reading.set(slotId, request);
+    return request;
+  }
 }
 
 // Effort names stay in the CLIs' own English terms.
@@ -146,27 +170,31 @@ async function claudeModels(config: AgentConfig, context: ProbeContext): Promise
   }
 }
 
-export async function loadAgentModels(config: AgentConfig, context: CatalogContext): Promise<AgentModel[]> {
+async function probeModels(config: AgentConfig, context: CatalogContext): Promise<SlotModelCatalog> {
   const probeContext: ProbeContext = { user: context.user, slot: context.slot, runtime_home: context.slot.home_dir,
     runtime_kind: 'probe', session: { id: '', engine: context.session.engine } };
-  // The fingerprint checks access without a lease, so a cached catalog never waits for the slot.
-  const credentialFingerprint = await config.credentials.fingerprint(probeContext);
-  const key = JSON.stringify([context.user.id, probeContext.runtime_home, context.slot.id, context.slot.credential_revision,
-    context.slot.updated_at, credentialFingerprint, context.session.engine]);
-  for (const [cachedKey, entry] of cache) if (entry.expires <= Date.now()) cache.delete(cachedKey);
-  const existing = cache.get(key);
-  if (existing) return existing.models;
-  const models = (async () => {
+  return config.catalogs.probe(context.slot.id, async () => {
     const release = await config.credentials.acquire(probeContext);
     try {
       const result = await (context.session.engine === 'codex' ? codexModels(config, probeContext) : claudeModels(config, probeContext));
       if (!result.length) throw new Error('当前 CLI 未提供可用模型');
       return result;
     } finally { await release(); }
-  })();
-  cache.set(key, { userId: context.user.id, expires: Date.now() + 300000, models });
-  try { return await models; }
-  catch (error) { if (cache.get(key)?.models === models) cache.delete(key); throw error; }
+  });
+}
+
+/** The slot's saved catalog; only a slot that has never been read starts its CLI here. */
+export async function loadModelCatalog(config: AgentConfig, context: CatalogContext): Promise<SlotModelCatalog> {
+  return config.catalogs.read(context.slot.id) ?? probeModels(config, context);
+}
+
+export async function loadAgentModels(config: AgentConfig, context: CatalogContext): Promise<AgentModel[]> {
+  return (await loadModelCatalog(config, context)).models;
+}
+
+/** Reads the catalog from the slot's CLI again, as `context.user`, who must have access to the slot. */
+export function refreshModelCatalog(config: AgentConfig, context: CatalogContext): Promise<SlotModelCatalog> {
+  return probeModels(config, context);
 }
 
 export async function validateAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection): Promise<void> {
