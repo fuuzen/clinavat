@@ -406,6 +406,15 @@
   line-height: 1.9;
   overflow-wrap: anywhere;
 }
+.danger-dialog-body {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.danger-dialog-body > p { margin: 0; }
+.danger-dialog-body > ul { margin: 6px 0; padding-left: 20px; }
+.danger-dialog-body > * + p { margin-top: 6px; }
 .confirm-copy > strong {
   font-weight: 500;
   color: var(--text);

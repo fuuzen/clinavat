@@ -3,6 +3,7 @@ import type { AgentMode, QuestionMode, RolePreset } from './agent/session-settin
 
 export interface User {
   id: string; username: string; password_hash: string; role: 'admin' | 'user'; created_at: string;
+  suspended_at?: string | null;
   question_mode?: QuestionMode | null; question_timeout_ms?: number | null;
 }
 export interface Slot {

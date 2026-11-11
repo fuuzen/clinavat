@@ -415,6 +415,26 @@ export class LxdExecutionHost implements ExecutionHost {
     }
   }
 
+  async retire(kind: MachineKind, owner: string, remove: boolean): Promise<void> {
+    await this.load();
+    const name = machineName(kind, owner);
+    const operation = async () => {
+      const result = await this.lxc([remove ? 'delete' : 'stop', '--force', this.target(name)], this.config.vmStartTimeoutMs);
+      if (result.code !== 0 && !/not found|already stopped|not running/i.test(result.stderr)) {
+        throw new Error(`LXD 操作失败：${(result.stderr || result.stdout).trim().slice(0, 500)}`);
+      }
+    };
+    const machine = this.machines.get(name);
+    if (machine) {
+      await this.serialized(machine, async () => {
+        await operation();
+        this.barriers.close(machine);
+        machine.prepared = false;
+        if (remove) this.machines.delete(name);
+      });
+    } else await operation();
+  }
+
   async health() {
     const image = async (alias: string) => (await this.lxc(['image', 'info', this.target(alias)], 15_000).catch(() => undefined))?.code === 0;
     const [agent, workspace] = await Promise.all([image(this.config.lxdImage), image(this.config.lxdWorkspaceImage)]);

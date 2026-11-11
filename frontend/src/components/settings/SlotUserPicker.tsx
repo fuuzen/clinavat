@@ -21,7 +21,9 @@ export default function SlotUserPicker({ slot, users, disabled, onSave }: Props)
   const saveRef = useRef(false);
   const options: UserSelectOption[] = [
     { value: "", label: "未分配", description: "解除此槽位的用户分配", unassigned: true },
-    ...users.map((user) => ({ value: user.id, label: user.username, description: user.role === "admin" ? "管理员" : "成员" })),
+    // Suspended users cannot take slots until they are restored.
+    ...users.filter((user) => !user.suspended_at)
+      .map((user) => ({ value: user.id, label: user.username, description: user.role === "admin" ? "管理员" : "成员" })),
   ];
 
   async function select(userId: string) {

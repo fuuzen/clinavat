@@ -49,6 +49,8 @@ export class ProcessExecutionHost implements ExecutionHost {
 
   async revoke(): Promise<void> { /* Host processes already share one filesystem view. */ }
 
+  async retire(): Promise<void> { /* Host processes have no machine of their own. */ }
+
   async health() {
     const available = (binary: string) => findExecutable(binary).then(() => true, () => false);
     const [claude, codex, mutagen, ssh] = await Promise.all((['claude', 'codex', 'mutagen', 'ssh'] as const)

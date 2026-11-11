@@ -117,7 +117,7 @@ export default function AdminPanel(props: Props) {
             {id === "gateway" && gatewayVisited && <GatewayManagement />}
             {id === "host" && tab === id && <HostManagement health={health} loading={loading} error={healthError} onRefresh={() => void load()} />}
             {(id === "workspaces" || id === "connections") && tab === id && <ResourceManagement kind={id} overview={props.overview} users={users} selectedUserId={resourceUserId} onSelectUser={setResourceUserId} onOpenProject={props.onOpenProject} onNewProject={props.onNewProject} onNewHost={props.onNewHost} onEditHost={props.onEditHost} onConnect={props.onConnect} onRefresh={refresh} refreshing={loading} />}
-            {id === "users" && tab === id && <div className="admin-existing-module"><UserManagement onRefresh={refresh} onSlots={() => selectTab("slots")} /></div>}
+            {id === "users" && tab === id && <div className="admin-existing-module"><UserManagement currentUserId={props.overview.user.id} onRefresh={refresh} onSlots={() => selectTab("slots")} /></div>}
             {id === "slots" && tab === id && <div className="admin-existing-module"><SlotManagement onRefresh={refresh} /></div>}
             {id === "questions" && tab === id && <QuestionDefaults />}
             {id === "usage" && tab === id && <TokenUsageReport />}

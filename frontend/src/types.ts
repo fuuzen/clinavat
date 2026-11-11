@@ -3,6 +3,8 @@ export interface User {
   username: string;
   role: "admin" | "user";
   created_at: string;
+  /** Set while an administrator has suspended the account. */
+  suspended_at?: string | null;
   ssh_public_key?: string;
 }
 

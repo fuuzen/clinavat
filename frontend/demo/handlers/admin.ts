@@ -30,6 +30,31 @@ export const adminHandlers = [
     db.users.push(user);
     return HttpResponse.json({ user }, { status: 201 });
   }),
+  http.patch("/api/admin/users/:id", async ({ params, request }) => {
+    const user = db.users.find((item) => item.id === params.id);
+    if (!user) return fail(404, "用户不存在");
+    const { username = "" } = await readBody<{ username?: string }>(request);
+    if (db.users.some((item) => item.username === username.trim() && item.id !== user.id)) return fail(409, "用户名已存在");
+    user.username = username.trim();
+    return HttpResponse.json(user);
+  }),
+  http.put("/api/admin/users/:id/password", () => HttpResponse.json({ ok: true })),
+  ...(["suspend", "restore"] as const).map((action) => http.post(`/api/admin/users/:id/${action}`, ({ params }) => {
+    const user = db.users.find((item) => item.id === params.id);
+    if (!user) return fail(404, "用户不存在");
+    if (user.id === db.user.id) return fail(409, "不能停用或删除自己的账号");
+    user.suspended_at = action === "suspend" ? timestamp() : null;
+    if (action === "suspend") {
+      for (const slot of db.slots) slot.allowed_user_ids = slot.allowed_user_ids?.filter((id) => id !== user.id);
+    }
+    return HttpResponse.json(user);
+  })),
+  http.delete("/api/admin/users/:id", ({ params }) => {
+    if (params.id === db.user.id) return fail(409, "不能停用或删除自己的账号");
+    db.users = db.users.filter((user) => user.id !== params.id);
+    for (const slot of db.slots) slot.allowed_user_ids = slot.allowed_user_ids?.filter((id) => id !== params.id);
+    return HttpResponse.json({ ok: true });
+  }),
   http.get("/api/admin/resources", ({ request }) => {
     const userId = new URL(request.url).searchParams.get("userId");
     const user = db.users.find((item) => item.id === userId);
@@ -84,6 +109,13 @@ export const adminHandlers = [
     });
     slot.credential_revision += 1;
     return HttpResponse.json(slot);
+  }),
+  http.delete("/api/admin/slots/:id", ({ params }) => {
+    const slot = db.slots.find((item) => item.id === params.id);
+    if (!slot) return fail(404, "槽位不存在");
+    if (slot.status !== "DISABLED") return fail(409, "请先停用槽位，再删除");
+    db.slots = db.slots.filter((item) => item.id !== slot.id);
+    return HttpResponse.json({ ok: true });
   }),
   http.get("/api/admin/token-usage", ({ request }) => HttpResponse.json(
     tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30)))),

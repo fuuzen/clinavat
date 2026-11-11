@@ -19,7 +19,8 @@ declare module 'fastify' {
 }
 
 export function publicUser(user: User, sshPublicKey = '') {
-  return { id: user.id, username: user.username, role: user.role, created_at: user.created_at, ssh_public_key: sshPublicKey };
+  return { id: user.id, username: user.username, role: user.role, created_at: user.created_at,
+    suspended_at: user.suspended_at ?? null, ssh_public_key: sshPublicKey };
 }
 
 export function registerAuth(app: FastifyInstance, store: Store, config: Config, ssh: SshManager, connections: ConnectionRegistry, siteAccess: SiteAccess) {
@@ -50,7 +51,8 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     if (['/api/health', '/api/site/settings', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register'].includes(path)) return;
     const token = request.cookies[cookieName];
     const user = token && store.get<User & { auth_session_expires_at: number }>(
-      'SELECT users.*,auth_sessions.expires_at AS auth_session_expires_at FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id WHERE token_hash=? AND expires_at>?',
+      `SELECT users.*,auth_sessions.expires_at AS auth_session_expires_at FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id
+        WHERE token_hash=? AND expires_at>? AND users.suspended_at IS NULL`,
       tokenHash(token), Date.now(),
     );
     if (!user) throw new HttpError(401, '请先登录');
@@ -83,6 +85,7 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     const user = store.get<User>('SELECT * FROM users WHERE username=?', input.username);
     const validPassword = await verifyPassword(input.password, user?.password_hash);
     if (!user || !validPassword) throw new HttpError(401, '用户名或密码错误');
+    if (user.suspended_at) throw new HttpError(403, '账号已停用，请联系管理员');
     createSession(user, reply);
     return { user: await describe(user) };
   });

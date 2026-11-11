@@ -9,6 +9,7 @@ import {
 import { api, errorText, post } from "../../api";
 import type { Slot, User } from "../../types";
 import SlotCard from "./SlotCard";
+import DangerDialog from "./DangerDialog";
 import SlotUsageSettings from "./SlotUsageSettings";
 import { useSlotUsage } from "../../useSlotUsage";
 
@@ -28,6 +29,7 @@ export default function SlotManagement({
   const [success, setSuccess] = useState("");
   const [assignmentVersions, setAssignmentVersions] = useState<Record<string, number>>({});
   const [assignmentErrors, setAssignmentErrors] = useState<Record<string, string>>({});
+  const [deleting, setDeleting] = useState<Slot | null>(null);
   const updating = useRef(false);
   const load = useCallback(async () => {
     const [newSlots, newUsers] = await Promise.all([
@@ -83,7 +85,8 @@ export default function SlotManagement({
       }
       setSlots((current) => current.map((item) => item.id === updated.id ? updated : item));
       setAssignmentVersions((current) => ({ ...current, [slot.id]: (current[slot.id] || 0) + 1 }));
-      setSuccess(values.allowedUserIds !== undefined ? `「${slot.label}」的用户分配已保存` : "槽位配置已更新");
+      setSuccess(values.allowedUserIds !== undefined ? `「${slot.label}」的用户分配已保存`
+        : values.label !== undefined ? `已将「${slot.label}」改名为「${updated.label}」` : "槽位配置已更新");
       const [reloadResult, overviewResult] = await Promise.allSettled([load(), onRefresh()]);
       if (reloadResult.status === "rejected") {
         setRequiresReload(true);
@@ -106,6 +109,18 @@ export default function SlotManagement({
       setError(`登录方式已更新，但列表刷新失败：${errorText(reloadResult.reason)}。请刷新后再操作。`);
     } else if (overviewResult.status === "rejected") {
       setError(`登录方式已更新，但工作台刷新失败：${errorText(overviewResult.reason)}。`);
+    }
+  }
+  async function remove(slot: Slot) {
+    await api(`/admin/slots/${slot.id}`, { method: "DELETE", body: JSON.stringify({ confirm: slot.id }) });
+    setError("");
+    setSuccess(`槽位「${slot.label}」已删除`);
+    const [reloadResult, overviewResult] = await Promise.allSettled([load(), onRefresh()]);
+    if (reloadResult.status === "rejected") {
+      setRequiresReload(true);
+      setError(`槽位已删除，但列表刷新失败：${errorText(reloadResult.reason)}。请刷新后再操作。`);
+    } else if (overviewResult.status === "rejected") {
+      setError(`槽位已删除，但工作台刷新失败：${errorText(overviewResult.reason)}。`);
     }
   }
   async function create(event: FormEvent<HTMLFormElement>) {
@@ -221,6 +236,7 @@ export default function SlotManagement({
                 busy={busy || requiresReload}
                 onUpdate={update}
                 onLoginChanged={loginChanged}
+                onDelete={(target) => { setSuccess(""); setDeleting(target); }}
                 assignmentVersion={assignmentVersions[slot.id] || 0}
                 assignmentError={assignmentErrors[slot.id]}
               />
@@ -228,6 +244,18 @@ export default function SlotManagement({
           </div>
         )}
       </>
+      {deleting && (
+        <DangerDialog title="删除槽位" subtitle={`${deleting.label} · ${deleting.id}`} actionLabel="永久删除" confirmText={deleting.id}
+          onClose={() => setDeleting(null)} onConfirm={() => remove(deleting)}>
+          <p>删除后无法恢复，将一并移除：</p>
+          <ul>
+            <li>槽位的 CLI 登录凭据或长期令牌、额度记录和模型列表；</li>
+            <li>槽位目录及其虚拟机，以及用户分配。</li>
+          </ul>
+          <p>虚拟机的固定地址和出口绑定保留，在「网关 → 出口绑定」中显示为已删除，可在那里解除。</p>
+          <p>选用过此槽位的对话会保留，下次发送时需改选其他槽位。用量统计中仍按槽位 ID 保留历史记录。</p>
+        </DangerDialog>
+      )}
     </>
   );
 }

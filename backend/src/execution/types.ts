@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { CommandResult } from '../runtime/types.js';
+import type { MachineKind } from './machine-plan.js';
 
 export type ExecutionKind = 'process' | 'vm';
 export type ExecutionBinary = 'claude' | 'codex' | 'mutagen' | 'ssh';
@@ -63,5 +64,10 @@ export interface ExecutionHost {
   loginCommand(slotId: string, home: string, argv: string[], env: Record<string, string>): Promise<string>;
   /** Revokes a user's access to paths that can be handed to another user or moved, such as slot homes. */
   revoke(userId: string, paths: string[]): Promise<void>;
+  /**
+   * Stops a user's workspace or a slot's machine, or with `remove` deletes it. Its address and identity stay reserved:
+   * the gateway binds egress by address, and a reused address would inherit another account's egress.
+   */
+  retire(kind: MachineKind, owner: string, remove: boolean): Promise<void>;
   health(): Promise<ExecutionHealth>;
 }

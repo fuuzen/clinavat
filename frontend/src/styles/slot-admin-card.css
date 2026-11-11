@@ -73,3 +73,9 @@
 @media (prefers-reduced-motion: reduce) {
   .slot-enabled-switch, .slot-enabled-thumb { transition: none; }
 }
+.slot-label { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.slot-label > strong { min-width: 0; }
+.slot-label .icon-button { width: 22px; height: 22px; flex-shrink: 0; color: var(--muted); }
+.slot-label-editing input { flex: 1; min-width: 0; padding: 4px 7px; font-size: 13px; }
+.slot-admin-card .slot-delete { align-self: flex-start; gap: 5px; font-size: 11px; }
+.slot-admin-card .slot-delete:disabled { color: var(--muted); }

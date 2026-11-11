@@ -7,13 +7,13 @@ export class ConnectionRegistry {
   constructor(private store: Store) {
     this.timer = setInterval(() => {
       for (const hash of this.connections.keys()) {
-        if (!this.store.get('SELECT token_hash FROM auth_sessions WHERE token_hash=? AND expires_at>?', hash, Date.now())) this.revoke(hash);
+        if (!this.active(hash)) this.revoke(hash);
       }
     }, 15000);
     this.timer.unref();
   }
   watch(hash: string, close: () => void): () => void {
-    if (!this.store.get('SELECT token_hash FROM auth_sessions WHERE token_hash=? AND expires_at>?', hash, Date.now())) {
+    if (!this.active(hash)) {
       close(); return () => {};
     }
     const connections = this.connections.get(hash) ?? new Set<() => void>();
@@ -23,6 +23,10 @@ export class ConnectionRegistry {
       connections.delete(close);
       if (!connections.size) this.connections.delete(hash);
     };
+  }
+  private active(hash: string): boolean {
+    return !!this.store.get(`SELECT token_hash FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id
+      WHERE token_hash=? AND expires_at>? AND users.suspended_at IS NULL`, hash, Date.now());
   }
   revoke(hash: string) {
     const connections = this.connections.get(hash);

@@ -151,6 +151,8 @@ export class Store {
     // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
     this.addColumn('sessions', 'token_usage_cursor', 'TEXT');
     this.addColumn('sessions', 'archived_at', 'TEXT');
+    // A suspended user keeps every record but can neither sign in nor hold slots, sync or machines.
+    this.addColumn('users', 'suspended_at', 'TEXT');
     // Where a turn ends in the CLI's own history: Claude's last assistant message, Codex's last native turn.
     // Copied turns of a branch keep their source's native session, whose history up to them is the same.
     this.addColumn('session_turns', 'native_ref', 'TEXT');

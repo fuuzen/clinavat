@@ -191,7 +191,8 @@ export class WorkspaceManager {
     }
   }
 
-  async remove(project: WorkspaceProject): Promise<void> {
+  /** `withBackups` also deletes the mirror backups kept after rule changes, which a deleted user leaves no use for. */
+  async remove(project: WorkspaceProject, withBackups = false): Promise<void> {
     this.validate(project);
     // Local projects refer to source directories; removing a project never removes its source.
     if (project.execution_mode === 'local') return;
@@ -200,6 +201,23 @@ export class WorkspaceManager {
     catch (error) { if (!this.missingSession(error, project)) throw error; }
     await this.execution.revoke(project.user_id, [project.local_path]);
     await rm(project.local_path, {recursive: true, force: true});
+    if (!withBackups) return;
+    const backupRoot = join(this.config.dataDir, 'backups', 'workspaces');
+    const backups = (await readdir(backupRoot).catch(() => [] as string[])).filter(name => name.startsWith(`${project.id}-`));
+    await Promise.all(backups.map(name => rm(join(backupRoot, name), {recursive: true, force: true})));
+  }
+
+  /**
+   * Stops a user's Mutagen daemon; any later sync command starts it again. Only host processes need this:
+   * in a VM the daemon lives and ends with the user's workspace machine.
+   */
+  async stopDaemon(userId: string): Promise<void> {
+    if (this.execution.kind !== 'process') return;
+    const scope: ExecutionScope = { userId, paths: [] };
+    // A daemon that is not running makes the command fail, which is the state we want.
+    await this.execution.run(await this.execution.binary(scope, 'mutagen'), ['daemon', 'stop'], {
+      scope, env: await this.ssh.mutagenEnvironment(userId), timeout: 30_000,
+    });
   }
 
   // Disk usage of the local mirror and of mirror backups kept after rule changes, in bytes.
