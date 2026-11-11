@@ -53,6 +53,8 @@ function usage(slotId: string): SlotUsage {
     windows: [
       { key: "five_hour", label: "5 小时", usedPercent: 37, resetsAt: inHours(3), windowMinutes: 300 },
       { key: "seven_day", label: "7 天", usedPercent: 62, resetsAt: inHours(80), windowMinutes: 10_080 },
+      ...(slot?.engine === "claude"
+        ? [{ key: "model:Fable", label: "每周 · Fable", usedPercent: 48, resetsAt: inHours(80), windowMinutes: 10_080 }] : []),
     ],
   };
 }

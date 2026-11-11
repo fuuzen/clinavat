@@ -16,11 +16,14 @@ interface Props {
 export default function SlotUsageRing({ engine, usage, now, slotLimited, saving, plain }: Props) {
   const { rings, limited, description } = slotUsageRings(engine, usage, now, slotLimited);
   const label = `${engine === "claude" ? "Claude Code" : "Codex"}；${description}`;
+  // A third, per-model window needs the rings drawn closer together around a smaller mark.
+  const three = !plain && rings.some((item) => item.position === "core");
+  const radii = three ? { outer: 15, inner: 12.4, core: 9.8 } : { outer: 14.5, inner: 11, core: 0 };
   return (
-    <span className="slot-usage-ring" role="img" aria-label={label} title={label}>
+    <span className={`slot-usage-ring${three ? " slot-usage-ring-three" : ""}`} role="img" aria-label={label} title={label}>
       {!plain && <svg className="slot-usage-ring-chart" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
         {rings.map(({ position, used, level }) => {
-          const radius = position === "outer" ? 14.5 : 11;
+          const radius = radii[position];
           return <g key={position} className={`slot-usage-ring-${position} slot-usage-ring-${level}`}>
             <circle className={`slot-usage-ring-track${used === null ? " slot-usage-ring-unknown" : ""}`}
               cx="16" cy="16" r={radius} />

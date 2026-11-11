@@ -3,7 +3,7 @@ import { useState } from "react";
 import { errorText } from "../../api";
 import type { Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow } from "../../useSlotUsage";
-import { subscriptionLabel, subscriptionStatus } from "./subscription";
+import { planName, subscriptionStatus } from "./subscription";
 
 interface Props {
   slotId: string;
@@ -37,11 +37,6 @@ function resetText(window: UsageWindow, now: number): string {
   return remaining > 0 ? `${duration(remaining)}后重置` : "已到重置时间，待刷新确认";
 }
 
-function planLabel(plan: string | null): string | null {
-  if (!plan) return null;
-  return plan.charAt(0).toUpperCase() + plan.slice(1);
-}
-
 function statusText(usage: SlotUsage | undefined, now: number): string {
   if (!usage || (usage.state === "pending" && !usage.refreshing)) return "尚未查询额度";
   if (usage.state === "pending") return "正在查询额度…";
@@ -55,7 +50,7 @@ function statusText(usage: SlotUsage | undefined, now: number): string {
 export default function SlotUsageMeter({ slotId, engine, usage, compact = false, refreshable = false,
   refreshRole, refreshLabel = "刷新额度" }: Props) {
   const now = useNow();
-  const plan = subscriptionLabel(engine, usage?.subscription ?? null) ?? planLabel(usage?.plan ?? null);
+  const plan = planName(engine, usage);
   const subscription = subscriptionStatus(usage?.subscription ?? null, now);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

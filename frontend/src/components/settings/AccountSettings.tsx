@@ -7,7 +7,7 @@ import { statusLabel } from "../../api";
 import type { Overview } from "../../types";
 import { useNow, useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
-import { subscriptionLabel, subscriptionStatus } from "../usage/subscription";
+import { planName, subscriptionStatus } from "../usage/subscription";
 
 export default function AccountSettings({
   overview,
@@ -37,9 +37,8 @@ export default function AccountSettings({
         <h3>获授权的账号槽位</h3>
       </div>
       {overview.slots.length ? overview.slots.map((slot) => {
-        const subscription = usage[slot.id]?.subscription ?? null;
-        const plan = subscriptionLabel(slot.engine, subscription);
-        const status = subscriptionStatus(subscription, now);
+        const plan = planName(slot.engine, usage[slot.id]);
+        const status = subscriptionStatus(usage[slot.id]?.subscription ?? null, now);
         return (
           <div className="settings-detail-card" key={slot.id}>
             <div>

@@ -5,6 +5,7 @@ import type { AccountSelection, Slot, SlotUsage, UsageWindow } from "../../types
 import { refreshSlotUsage, useNow, useSlotUsage } from "../../useSlotUsage";
 import SlotUsageRing from "../usage/SlotUsageRing";
 import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
+import { planName } from "../usage/subscription";
 import SettingsHelp from "./SettingsHelp";
 import SettingsMenu from "./SettingsMenu";
 
@@ -27,7 +28,8 @@ export default function SlotPicker({ slots, slotId, selection, engine, disabled,
     : selected?.label || (slotId ? "槽位不可用" : "选择账号");
   const usageDescription = selected
     ? slotUsageRings(selected.engine, usage[selected.id], now, selected.status === "RATE_LIMITED").description : "";
-  const title = `当前对话的授权槽位：${name}${selected ? ` · ${selected.engine === "claude" ? "Claude Code" : "Codex"}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
+  const plan = selected ? planName(selected.engine, usage[selected.id]) : null;
+  const title = `当前对话的授权槽位：${name}${selected ? ` · ${selected.engine === "claude" ? "Claude Code" : "Codex"}${plan ? ` ${plan}` : ""}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
   return (
     <SettingsMenu
       label="授权槽位"
@@ -51,6 +53,8 @@ export default function SlotPicker({ slots, slotId, selection, engine, disabled,
 }
 
 function windowName(window: UsageWindow): string {
+  // Per-model windows are weekly too; their model name tells them apart from the account's week.
+  if (window.key.startsWith("model:")) return window.key.slice(6, 9);
   const minutes = window.windowMinutes;
   if (!minutes) return window.label;
   return minutes % 1440 === 0 ? `${minutes / 1440}d` : minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
@@ -65,12 +69,12 @@ function untilReset(window: UsageWindow, now: number): string {
   return days ? `${days}d${hours ? `${hours}h` : ""}` : hours ? `${hours}h${minutes % 60 ? `${minutes % 60}m` : ""}` : `${minutes}m`;
 }
 
-// The same windows the trigger ring draws: the account total first, then the 5-hour window when present.
+// The same windows the trigger ring draws: the account total, the 5-hour window and a per-model window when present.
 function SlotQuota({ slot, usage, now }: { slot: Slot; usage?: SlotUsage; now: number }) {
   if (!usage || usage.state === "pending") return <span className="slot-menu-quota"><small>{usage?.refreshing ? "查询中…" : "未查询"}</small></span>;
   if (usage.state !== "ok") return <span className="slot-menu-quota"><small>无额度数据</small></span>;
-  const { main, fiveHour } = accountWindows(slot.engine, usage.windows);
-  const windows = [main, fiveHour].filter((window): window is UsageWindow => !!window);
+  const { main, fiveHour, model } = accountWindows(slot.engine, usage.windows);
+  const windows = [main, fiveHour, model].filter((window): window is UsageWindow => !!window);
   if (!windows.length) return <span className="slot-menu-quota"><small>无额度窗口</small></span>;
   return (
     <span className={`slot-menu-quota${usage.stale ? " stale" : ""}`}>
@@ -78,7 +82,7 @@ function SlotQuota({ slot, usage, now }: { slot: Slot; usage?: SlotUsage; now: n
         const used = window.usedPercent;
         const level = used === null ? "" : used >= 90 || window.limited ? "critical" : used >= 70 ? "warning" : "";
         return (
-          <span className="slot-menu-window" key={window.key}>
+          <span className="slot-menu-window" key={window.key} title={window.label}>
             <span>{windowName(window)}</span>
             <span className={`usage-bar ${level}`}>
               <span style={{ width: `${Math.min(100, Math.max(0, used ?? 0))}%` }} />
@@ -150,7 +154,10 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
                         onClick={() => { onChange({ engine: slot.engine, slotMode: "manual", slotId: slot.id }); close(); }}
                       >
                         <SlotUsageRing engine={slot.engine} usage={slotUsage} now={now} slotLimited={limited} plain />
-                        <span className="slot-menu-label">{slot.label}</span>
+                        <span className="slot-menu-label">
+                          {slot.label}
+                          {planName(slot.engine, slotUsage) && <small>{planName(slot.engine, slotUsage)}</small>}
+                        </span>
                         {slot.status !== "IDLE" && <span className="badge">{statusLabel(slot.status)}</span>}
                         {slot.auth_method === "token" && <span className="badge" title="长期令牌账号不参与自动选择，额度只在对话运行时更新">令牌</span>}
                         {slot.status !== "DISABLED" && <SlotQuota slot={slot} usage={slotUsage} now={now} />}

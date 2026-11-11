@@ -29,6 +29,16 @@
 .slot-usage-ring-inner .slot-usage-ring-value {
   stroke: var(--success);
 }
+.slot-usage-ring-core .slot-usage-ring-value {
+  stroke: var(--accent);
+}
+.slot-usage-ring-three .slot-usage-ring-chart {
+  stroke-width: 1.6px;
+}
+.slot-usage-ring-three .engine-logo {
+  width: 13px;
+  height: 13px;
+}
 .slot-usage-ring-warning .slot-usage-ring-value {
   stroke: var(--warning);
 }

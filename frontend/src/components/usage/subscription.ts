@@ -1,4 +1,4 @@
-import type { Slot, SlotSubscription } from "../../types";
+import type { Slot, SlotSubscription, SlotUsage } from "../../types";
 
 const codexPlans: Record<string, string> = {
   free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", promax: "Pro Max", team: "Team",
@@ -14,6 +14,11 @@ export function subscriptionLabel(engine: Slot["engine"], subscription: SlotSubs
   // Claude's tier names the Max multiplier, such as `default_claude_max_20x`.
   const multiplier = subscription.tier?.match(/_(\d+x)$/)?.[1];
   return `${titleCase(subscription.plan)}${multiplier ? ` ${multiplier}` : ""}`;
+}
+
+/** The plan from the login files, or else the plan the last quota reading named. */
+export function planName(engine: Slot["engine"], usage: SlotUsage | undefined): string | null {
+  return subscriptionLabel(engine, usage?.subscription ?? null) ?? (usage?.plan ? titleCase(usage.plan) : null);
 }
 
 const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("zh-CN");

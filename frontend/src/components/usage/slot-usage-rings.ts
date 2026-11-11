@@ -1,7 +1,8 @@
 import type { SlotUsage, UsageWindow } from "../../types";
 
 export interface UsageRing {
-  position: "outer" | "inner";
+  /** Outer: the account's main allowance; inner: the 5-hour window; core: a per-model weekly window such as Fable. */
+  position: "outer" | "inner" | "core";
   used: number | null;
   level: "normal" | "warning" | "critical";
   description: string;
@@ -11,9 +12,13 @@ const STALE_AFTER = 15 * 60_000;
 
 export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[]) {
   if (engine === "claude") {
+    // Per-model weekly windows, such as Fable's, have their own allowance; the busiest one is drawn.
+    const model = windows.filter((window) => window.key.startsWith("model:"))
+      .sort((left, right) => (right.usedPercent ?? -1) - (left.usedPercent ?? -1))[0];
     return {
       main: windows.find((window) => window.key === "seven_day"),
       fiveHour: windows.find((window) => window.key === "five_hour"),
+      model,
     };
   }
   // Model-specific Codex buckets are not the account's total allowance.
@@ -24,6 +29,7 @@ export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[
     main: remaining.find((window) => window.windowMinutes === 10080)
       || remaining.find((window) => window.key === "codex:primary") || remaining[0],
     fiveHour,
+    model: undefined as UsageWindow | undefined,
   };
 }
 
@@ -39,26 +45,28 @@ function unavailableReason(usage: SlotUsage | undefined, now: number): string | 
   return null;
 }
 
-function ring(window: UsageWindow, position: UsageRing["position"], reason: string | null, now: number): UsageRing {
+function ring(window: UsageWindow, position: UsageRing["position"], circle: string, reason: string | null, now: number): UsageRing {
   const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
   const unknown = reason || (reset <= now ? "已到重置时间，待刷新确认" : null);
   const percent = window.usedPercent;
   const used = unknown || percent === null || !Number.isFinite(percent) || percent < 0 ? null : percent;
-  const period = position === "inner" ? "5 小时" : window.windowMinutes === 10080 ? "每周总额度" : `主额度（${window.label}）`;
+  const period = position === "inner" ? "5 小时" : position === "core" ? window.label
+    : window.windowMinutes === 10080 ? "每周总额度" : `主额度（${window.label}）`;
   return {
     position,
     used,
     level: window.limited || (used !== null && used >= 90) ? "critical" : used !== null && used >= 70 ? "warning" : "normal",
-    description: `${position === "outer" ? "外圈" : "内圈"} ${period}：${used === null ? unknown || "已用比例未知" : `已用 ${used}%`}${window.limited ? "，服务端报告此窗口受限" : ""}`,
+    description: `${circle} ${period}：${used === null ? unknown || "已用比例未知" : `已用 ${used}%`}${window.limited ? "，服务端报告此窗口受限" : ""}`,
   };
 }
 
 export function slotUsageRings(engine: "claude" | "codex", usage: SlotUsage | undefined, now: number, slotLimited = false) {
-  const { main, fiveHour } = accountWindows(engine, usage?.windows || []);
+  const { main, fiveHour, model } = accountWindows(engine, usage?.windows || []);
   const reason = unavailableReason(usage, now);
   const rings: UsageRing[] = [];
-  if (main) rings.push(ring(main, "outer", reason, now));
-  if (fiveHour) rings.push(ring(fiveHour, "inner", reason, now));
+  if (main) rings.push(ring(main, "outer", "外圈", reason, now));
+  if (fiveHour) rings.push(ring(fiveHour, "inner", model ? "中圈" : "内圈", reason, now));
+  if (model) rings.push(ring(model, "core", "内圈", reason, now));
   if (!rings.length) rings.push({
     position: "outer", used: null, level: "normal",
     description: reason || "未返回账号总额度窗口，其他额度请查看菜单",
