@@ -9,6 +9,7 @@ import {
 import { api, errorText, post } from "../../api";
 import type { Slot, User } from "../../types";
 import SlotCard from "./SlotCard";
+import SlotUsageSettings from "./SlotUsageSettings";
 import { useSlotUsage } from "../../useSlotUsage";
 
 export default function SlotManagement({
@@ -165,6 +166,7 @@ export default function SlotManagement({
             </button>
           </div>
         </div>
+        <SlotUsageSettings />
         {adding && (
           <form className="slot-create" onSubmit={create}>
             <div className="form-row">

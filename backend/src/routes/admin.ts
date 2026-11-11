@@ -10,6 +10,7 @@ import { availableSlots, serializeAdminSlot, serializeUserSlot } from '../accoun
 import { privateDirectory } from '../accounts/credential-files.js';
 import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
 import { parseSetupToken } from '../accounts/slot-tokens.js';
+import { usageSettingsSchema } from '../accounts/usage-settings.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export function adminRoutes(app: FastifyInstance, context: Context) {
@@ -27,6 +28,14 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     if (!slot) throw new HttpError(404, '槽位不存在或无权查看');
     try { return await config.usage!.refresh(slot); }
     catch (error) { throw new HttpError(409, error instanceof Error ? error.message : String(error)); }
+  });
+  app.get('/api/admin/settings/usage', async request => {
+    requireAdmin(request);
+    return context.usageSettings.view();
+  });
+  app.put('/api/admin/settings/usage', async request => {
+    requireAdmin(request);
+    return context.usageSettings.update(usageSettingsSchema.parse(request.body));
   });
   // Where local projects' commands run; reported only with slot machines.
   app.get('/api/admin/host-commands', async request => {

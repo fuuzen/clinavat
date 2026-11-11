@@ -201,6 +201,8 @@ export interface SlotUsage {
   credits: { balance: string | null; unlimited: boolean } | null;
   limited: boolean | null;
   observedAt: string | null;
+  /** When the reading stops counting as current; set by the administrator's validity period. */
+  expiresAt: string | null;
   checkedAt: string | null;
   source: "query" | "event" | null;
   stale: boolean;
@@ -208,6 +210,12 @@ export interface SlotUsage {
   error: string | null;
   subscription: SlotSubscription | null;
   login: SlotLogin | null;
+}
+
+/** How often idle slots are queried, and how long a reading stays current. */
+export interface UsageSettings {
+  refreshIntervalMs: number;
+  staleAfterMs: number;
 }
 
 /** Only long-lived tokens have a fixed end; a browser login's access token is renewed by the CLI while the login lasts. */

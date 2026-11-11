@@ -37,6 +37,7 @@ import { AccountCredentials } from './accounts/credentials.js';
 import { SlotTokens } from './accounts/slot-tokens.js';
 import { ensureClaudeSlotIdentity } from './accounts/claude-identity.js';
 import { SlotUsage } from './accounts/usage.js';
+import { UsageSettingsStore } from './accounts/usage-settings.js';
 import { SlotSelector } from './accounts/selection.js';
 import { prepareSlotFailover } from './accounts/failover.js';
 import { slotForUser } from './accounts/access.js';
@@ -74,7 +75,8 @@ const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
 const slotRecipients = (slotId: string) => store.all<{ user_id: string }>(`SELECT user_id FROM slot_user_access WHERE slot_id=?
     UNION SELECT id AS user_id FROM users WHERE role='admin'`, slotId).map(row => row.user_id);
-const usage = new SlotUsage({ dataDir: config.dataDir, execution }, credentials, slotId => {
+const usageSettings = new UsageSettingsStore(store);
+const usage = new SlotUsage({ dataDir: config.dataDir, execution, settings: () => usageSettings.view() }, credentials, slotId => {
   const payload = { slotId, usage: usage.view(slotId) };
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot-usage', payload });
 });
@@ -258,7 +260,8 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, prices, hostCommands };
+const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, prices, hostCommands,
+  usageSettings };
 resourceRoutes(app, context);
 sessionRoutes(app, context);
 agentModelRoutes(app, context);

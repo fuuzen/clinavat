@@ -40,13 +40,13 @@ function usage(slotId: string): SlotUsage {
   const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
   const slot = db.slots.find((item) => item.id === slotId);
   if (slot?.auth_method === "token") {
-    return { slotId, state: "unavailable", plan: null, credits: null, limited: null, observedAt: now, checkedAt: null,
+    return { slotId, state: "unavailable", plan: null, credits: null, limited: null, observedAt: now, expiresAt: inHours(12), checkedAt: null,
       source: "query", stale: false, refreshing: false, windows: [], subscription: null,
       login: { method: "token", expiresAt: slot.token_expires_at ?? null, accessExpiresAt: null, refreshedAt: null },
       error: "长期令牌（setup-token）没有额度查询权限，额度只在对话运行时更新" };
   }
   return {
-    slotId, state: "ok", plan: "Max", credits: null, limited: false, observedAt: now, checkedAt: now,
+    slotId, state: "ok", plan: "Max", credits: null, limited: false, observedAt: now, expiresAt: inHours(12), checkedAt: now,
     source: "query", stale: false, refreshing: false, error: null,
     login: { method: "oauth", expiresAt: null, accessExpiresAt: inHours(5), refreshedAt: slot?.engine === "codex" ? inHours(-30) : null },
     subscription: slot?.engine === "codex"

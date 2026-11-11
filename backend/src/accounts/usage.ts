@@ -10,6 +10,7 @@ import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } f
 import { claudeProbe, codexProbe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
 import { readLogin, readSubscription, type SlotLogin, type SlotSubscription } from './subscription.js';
+import type { UsageSettings } from './usage-settings.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
 
@@ -33,6 +34,8 @@ export interface SlotUsageView {
   limited: boolean | null;
   limitingWindow?: string | null;
   observedAt: string | null;
+  /** When the reading stops counting as current. */
+  expiresAt: string | null;
   queriedAt: string | null;
   checkedAt: string | null;
   source: 'query' | 'event' | null;
@@ -67,9 +70,8 @@ interface SlotState {
   login?: SlotLogin;
 }
 
-const AUTO_INTERVAL = 60_000;
+const RETRY_INTERVAL = 60_000;
 const FORCE_INTERVAL = 15_000;
-const STALE_AFTER = 15 * 60_000;
 const MAX_PROBES = 2;
 // Probes on busy slots must not rotate refresh tokens that a running CLI still holds.
 const TOKEN_MARGIN = 15 * 60_000;
@@ -151,7 +153,7 @@ export class SlotUsage {
   private saveTimer?: NodeJS.Timeout;
   private saving = Promise.resolve();
 
-  constructor(private config: { dataDir: string; execution: ExecutionHost },
+  constructor(private config: { dataDir: string; execution: ExecutionHost; settings: () => UsageSettings },
     private credentials: AccountCredentials, private notify: (slotId: string) => void) {
     this.root = join(config.dataDir, 'run', 'usage-probes');
     this.cacheFile = join(config.dataDir, 'cache', 'slot-usage.json');
@@ -247,7 +249,9 @@ export class SlotUsage {
         result[slot.id] = this.view(slot.id);
         continue;
       }
-      const interval = Math.min(AUTO_INTERVAL * 2 ** (state.failures ?? 0), STALE_AFTER);
+      // A failed query is retried sooner, backing off up to the regular interval.
+      const { refreshIntervalMs } = this.config.settings();
+      const interval = state.failures ? Math.min(RETRY_INTERVAL * 2 ** (state.failures - 1), refreshIntervalMs) : refreshIntervalMs;
       const lastUpdate = Math.max(state.checkedAt ?? 0, state.snapshot?.observedAt ?? 0);
       if (refresh && slot.status !== 'DISABLED' && !state.inflight && Date.now() - lastUpdate >= interval) {
         void this.query(slot);
@@ -273,6 +277,7 @@ export class SlotUsage {
     const snapshot = state.snapshot && (identity === undefined || reusableSnapshot(state.snapshot, identity))
       ? state.snapshot : undefined;
     const failedLater = !!state.error && (state.checkedAt ?? 0) > (snapshot?.observedAt ?? 0);
+    const expiresAt = snapshot ? snapshot.observedAt + this.config.settings().staleAfterMs : null;
     return {
       slotId,
       state: snapshot?.unavailable ? failedLater ? 'error' : 'unavailable' : snapshot ? 'ok' : state.error ? 'error' : 'pending',
@@ -282,10 +287,11 @@ export class SlotUsage {
       limited: snapshot?.limited ?? null,
       limitingWindow: snapshot?.limitingWindow ?? null,
       observedAt: snapshot ? new Date(snapshot.observedAt).toISOString() : null,
+      expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(),
       queriedAt: snapshot?.queriedAt ? new Date(snapshot.queriedAt).toISOString() : null,
       checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
       source: snapshot?.source ?? null,
-      stale: !!snapshot && (Date.now() - snapshot.observedAt > STALE_AFTER || failedLater),
+      stale: expiresAt !== null && (Date.now() > expiresAt || failedLater),
       refreshing: !!state.inflight,
       error: failedLater || !snapshot ? state.error ?? null : snapshot.unavailable ?? null,
       subscription: state.subscription ?? null,

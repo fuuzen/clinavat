@@ -1,5 +1,5 @@
 import { defaultSiteSettings, type SiteSettings } from "../src/site/settings";
-import type { Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, User } from "../src/types";
+import type { Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, UsageSettings, User } from "../src/types";
 import { createFixtures } from "./fixtures";
 
 export interface DemoMessage extends Message {
@@ -31,6 +31,7 @@ export interface DemoState {
   siteAccess: { publicUrls: string[]; localOrigins: string[]; revision: number };
   siteQuestions: QuestionPolicy;
   userQuestions: QuestionPreference;
+  usageSettings: UsageSettings;
 }
 
 export const db: DemoState = {
@@ -41,6 +42,7 @@ export const db: DemoState = {
   questions: [],
   siteQuestions: { mode: "skip", timeoutMs: 5 * 60_000 },
   userQuestions: { mode: null, timeoutMs: null },
+  usageSettings: { refreshIntervalMs: 12 * 3_600_000, staleAfterMs: 12 * 3_600_000 },
   ...createFixtures(),
 };
 

@@ -112,6 +112,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS question_defaults (
         id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('skip','defer')), timeout_ms INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS usage_settings (
+        id INTEGER PRIMARY KEY CHECK(id=1), refresh_interval_ms INTEGER NOT NULL, stale_after_ms INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS deferred_questions (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         questions TEXT NOT NULL, created_at TEXT NOT NULL, deferred_at TEXT NOT NULL DEFAULT (datetime('now'))

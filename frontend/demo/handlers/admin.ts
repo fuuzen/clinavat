@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { withSiteDefaults, type SiteSettings } from "../../src/site/settings";
-import type { ModelPrice, ModelPriceList, QuestionPolicy, QuestionPreference, Slot, User } from "../../src/types";
+import type { ModelPrice, ModelPriceList, QuestionPolicy, QuestionPreference, Slot, UsageSettings, User } from "../../src/types";
 import { db, timestamp } from "../store";
 import { tokenUsageReport } from "../token-usage";
 import { fail, readBody, unavailable } from "./respond";
@@ -107,6 +107,11 @@ export const adminHandlers = [
   http.put("/api/admin/settings/questions", async ({ request }) => {
     db.siteQuestions = await readBody<QuestionPolicy>(request);
     return HttpResponse.json(db.siteQuestions);
+  }),
+  http.get("/api/admin/settings/usage", () => HttpResponse.json(db.usageSettings)),
+  http.put("/api/admin/settings/usage", async ({ request }) => {
+    db.usageSettings = await readBody<UsageSettings>(request);
+    return HttpResponse.json(db.usageSettings);
   }),
   http.get("/api/settings/questions", () => HttpResponse.json({ site: db.siteQuestions, user: db.userQuestions })),
   http.put("/api/settings/questions", async ({ request }) => {

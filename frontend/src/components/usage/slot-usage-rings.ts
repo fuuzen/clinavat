@@ -10,8 +10,6 @@ export interface UsageRing {
   description: string;
 }
 
-const STALE_AFTER = 15 * 60_000;
-
 export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[]) {
   if (engine === "claude") {
     // Per-model weekly windows, such as Fable's, have their own allowance; the busiest one is drawn.
@@ -48,8 +46,9 @@ function unavailableReason(usage: SlotUsage | undefined): string | null {
 function staleReason(usage: SlotUsage | undefined, now: number): string | null {
   if (usage?.state !== "ok") return null;
   if (usage.error) return `额度查询失败，显示上次数据：${usage.error}`;
-  const observed = usage.observedAt ? Date.parse(usage.observedAt) : NaN;
-  if (usage.stale || now - observed > STALE_AFTER) return "额度数据已过期，显示上次数据";
+  // The backend marks staleness when asked; between polls the expiry it sent decides.
+  const expires = usage.expiresAt ? Date.parse(usage.expiresAt) : NaN;
+  if (usage.stale || now > expires) return "额度数据已过期，显示上次数据";
   return null;
 }
 
