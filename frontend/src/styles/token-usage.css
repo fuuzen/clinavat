@@ -22,7 +22,24 @@
 .token-usage-model td { color: var(--text-secondary); background: var(--panel); }
 .token-usage-model td:first-child { padding-left: 29px; overflow-wrap: anywhere; }
 .token-usage-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; }
+.model-prices { margin-top: 18px; display: flex; flex-direction: column; gap: 12px; }
+.model-prices .admin-card-heading { margin-bottom: 0; flex-wrap: wrap; }
+.model-prices-actions,
+.model-prices-toolbar,
+.model-price-form-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.model-prices-toolbar { justify-content: space-between; }
+.model-prices-search { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.model-prices-search input { width: 220px; font-size: 12px; }
+.model-prices-missing { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--warning); }
+.model-price-form { display: grid; grid-template-columns: minmax(160px, 2fr) repeat(4, minmax(70px, 1fr)); gap: 8px; align-items: end; }
+.model-price-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+.model-price-form input { font-size: 12px; }
+.model-price-form-actions { grid-column: 1 / -1; }
+.model-price-row-actions { display: flex; justify-content: flex-end; gap: 2px; }
+.model-prices .token-usage-table td:first-child { overflow-wrap: anywhere; }
 @media (max-width: 700px) {
+  .model-price-form { grid-template-columns: 1fr 1fr; }
+  .model-price-form > label:first-child { grid-column: 1 / -1; }
   .token-usage-secondary { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

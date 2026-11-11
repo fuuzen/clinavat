@@ -1,9 +1,24 @@
 import { http, HttpResponse } from "msw";
 import { withSiteDefaults, type SiteSettings } from "../../src/site/settings";
-import type { QuestionPolicy, QuestionPreference, Slot, User } from "../../src/types";
+import type { ModelPrice, ModelPriceList, QuestionPolicy, QuestionPreference, Slot, User } from "../../src/types";
 import { db, timestamp } from "../store";
 import { tokenUsageReport } from "../token-usage";
 import { fail, readBody, unavailable } from "./respond";
+
+const snapshotPrices: Record<string, ModelPrice> = {
+  "claude-haiku-5-5": [0.1, 0.01, 0.125, 0.5], "claude-opus-5-5": [4, 0.2, 5, 20],
+  "claude-sonnet-5-5": [2, 0.1, 2.5, 10], "gpt-6-sol": [2, 0.2, 2.5, 10],
+};
+const customPrices: Record<string, ModelPrice> = {};
+
+function priceList(): ModelPriceList {
+  const models = [...new Set([...Object.keys(snapshotPrices), ...Object.keys(customPrices)])].sort();
+  return {
+    snapshot: { source: "bundled", date: "2026-11-11", models: Object.keys(snapshotPrices).length },
+    entries: models.map((model) => ({ model, price: customPrices[model] ?? snapshotPrices[model], snapshot: snapshotPrices[model] ?? null, custom: model in customPrices })),
+    unpricedModels: [],
+  };
+}
 
 export const adminHandlers = [
   http.get("/api/admin/users", () => HttpResponse.json(db.users)),
@@ -71,6 +86,17 @@ export const adminHandlers = [
   }),
   http.get("/api/admin/token-usage", ({ request }) => HttpResponse.json(
     tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30)))),
+  http.get("/api/admin/model-prices", () => HttpResponse.json(priceList())),
+  http.put("/api/admin/model-prices/overrides", async ({ request }) => {
+    const input = await readBody<{ model: string; input: number; cacheRead: number | null; cacheWrite: number | null; output: number }>(request);
+    customPrices[input.model.trim().toLowerCase()] = [input.input, input.cacheRead, input.cacheWrite, input.output];
+    return HttpResponse.json(priceList());
+  }),
+  http.delete("/api/admin/model-prices/overrides", ({ request }) => {
+    delete customPrices[new URL(request.url).searchParams.get("model") ?? ""];
+    return HttpResponse.json(priceList());
+  }),
+  http.all("/api/admin/model-prices/snapshot", () => unavailable("导入价格快照")),
   http.get("/api/admin/site/settings", () => HttpResponse.json(db.siteSettings)),
   http.put("/api/admin/site/settings", async ({ request }) => {
     db.siteSettings = withSiteDefaults(await readBody<SiteSettings>(request));

@@ -126,7 +126,14 @@ Hub 记录每一轮对话消耗的 Token，按用户、槽位和模型汇总：
 - Claude Code：每个 `result` 事件中的 `model_usage_since_last_result`，即自上一个结果以来每个模型的 Token 数和 CLI 自己估算的金额。这是 CLI 的内部字段；缺少它时改为累加本轮各条 API 消息的 `usage`，按价格快照折算。
 - Codex：app-server 的 `thread/tokenUsage/updated` 通知。通知给出的是线程累计值，而且会重复发送未变化的累计值，所以每个对话保存上次计入的累计值，只计入增长的部分。
 
-**金额**：Claude 用 CLI 的估算；Codex 按 `backend/src/token-usage/model-prices.ts` 中的价格快照折算。快照取自 LiteLLM 的公开价格表，用 `npm run prices:update -w backend` 更新，运行时不联网。订阅账号的金额只是按 API 标价折算的等价值，不是实际扣费；快照中没有的模型不计金额，合计金额后会带 `+`。
+**金额**：Claude 默认用 CLI 自己的估算；Codex，以及 Claude 缺少 CLI 估算的记录，按价格表折算。价格表默认是打包时的 LiteLLM 价格快照（`backend/src/token-usage/model-prices.ts`，用 `npm run prices:update -w backend` 更新），运行时不联网。订阅账号的金额只是按 API 标价折算的等价值，不是实际扣费；没有价格的模型不计金额，合计金额后会带 `+`。
+
+**调整价格**：管理员在「管理面板 → 用量统计 → 模型价格」中：
+
+- **导入新快照**：上传 LiteLLM 的 [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)，替换打包的快照；可以随时恢复内置快照。网页只上传其中 OpenAI 和 Anthropic 的条目，不受 Web 入口 1 MiB 请求大小的限制。
+- **自定义价格**：编辑某个模型的输入、缓存读取、缓存写入和输出价格（美元 / 百万 Token），或为快照中没有的模型添加价格；有用量但缺少价格的模型会列在上方。自定义价格优先于快照，也会替代 Claude CLI 自己估算的金额，撤销后恢复原来的计算方式。
+
+报表在查询时按当前价格表计算，所以导入和修改都会应用到已记录的用量；Claude 的 CLI 估算保存在记录中，不受快照变化影响。
 
 **限制**：
 

@@ -25,6 +25,7 @@ import { questionDefaultsRoutes } from './routes/question-defaults.js';
 import { QuestionDefaults } from './question-defaults.js';
 import { tokenUsageRoutes } from './routes/token-usage.js';
 import { TokenUsageLedger } from './token-usage/ledger.js';
+import { PriceBook } from './token-usage/price-book.js';
 import { gatewayRoutes } from './routes/gateway.js';
 import { GatewayClient } from './gateway/client.js';
 import { GatewayService } from './gateway/service.js';
@@ -87,7 +88,8 @@ const agentConfig = { ...config, credentials, usage, execution,
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };
 const questionDefaults = new QuestionDefaults(store, config.approvalTimeoutMs);
-const tokenUsage = new TokenUsageLedger(store);
+const prices = new PriceBook(store);
+const tokenUsage = new TokenUsageLedger(store, prices);
 const slots = new SlotSelector(store, agentConfig);
 onSlotActivity = slotId => {
   for (const userId of slotRecipients(slotId)) events.broadcast(userId, { type: 'slot', payload: { id: slotId } });
@@ -256,7 +258,7 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, hostCommands };
+const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, tokenUsage, prices, hostCommands };
 resourceRoutes(app, context);
 sessionRoutes(app, context);
 agentModelRoutes(app, context);

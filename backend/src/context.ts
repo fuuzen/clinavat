@@ -11,6 +11,7 @@ import type { SlotSelector } from './accounts/selection.js';
 import type { QuestionDefaults } from './question-defaults.js';
 import type { HostCommands } from './execution/host-commands.js';
 import type { TokenUsageLedger } from './token-usage/ledger.js';
+import type { PriceBook } from './token-usage/price-book.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -21,6 +22,7 @@ export interface Context {
   slots: SlotSelector;
   questionDefaults: QuestionDefaults;
   tokenUsage: TokenUsageLedger;
+  prices: PriceBook;
   /** Only with slot machines; otherwise a local project's commands already run on the host. */
   hostCommands?: HostCommands;
 }

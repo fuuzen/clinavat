@@ -124,6 +124,13 @@ export class Store {
         cost_usd REAL, cost_source TEXT CHECK(cost_source IN ('cli','prices')),
         recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS model_price_snapshot (
+        id INTEGER PRIMARY KEY CHECK(id=1), prices TEXT NOT NULL, imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS model_price_overrides (
+        model TEXT PRIMARY KEY, input REAL NOT NULL, cache_read REAL, cache_write REAL, output REAL NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS token_usage_user ON token_usage(user_id,recorded_at);
       CREATE INDEX IF NOT EXISTS token_usage_recorded ON token_usage(recorded_at);

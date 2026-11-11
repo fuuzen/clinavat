@@ -1,10 +1,10 @@
-import { estimateCost, type TokenCounts } from './prices.js';
+import type { TokenCounts } from './prices.js';
 
 export interface UsageRecord extends TokenCounts {
   model: string;
+  /** The CLI's own estimate; without one, reports price the tokens with the current price book. */
   costUsd: number | null;
-  /** `cli` when the CLI estimated the cost itself, `prices` for the bundled price snapshot. */
-  costSource: 'cli' | 'prices' | null;
+  costSource: 'cli' | null;
 }
 
 export interface CodexTotals {
@@ -24,9 +24,8 @@ const hasTokens = (counts: TokenCounts): boolean =>
   counts.inputTokens + counts.cacheReadTokens + counts.cacheWriteTokens + counts.outputTokens > 0;
 
 function priced(model: string, counts: TokenCounts, cliCost?: unknown): UsageRecord {
-  if (typeof cliCost === 'number' && Number.isFinite(cliCost) && cliCost >= 0) return { model, ...counts, costUsd: cliCost, costSource: 'cli' };
-  const costUsd = estimateCost(model, counts);
-  return { model, ...counts, costUsd, costSource: costUsd === null ? null : 'prices' };
+  const stated = typeof cliCost === 'number' && Number.isFinite(cliCost) && cliCost >= 0;
+  return { model, ...counts, costUsd: stated ? cliCost : null, costSource: stated ? 'cli' : null };
 }
 
 /** Claude states every API call once, on the next result, keyed by model and with the CLI's own cost estimate. */
@@ -47,7 +46,7 @@ export class ClaudeUsageMeter {
         inputTokens: count(usage?.inputTokens), cacheReadTokens: count(usage?.cacheReadInputTokens),
         cacheWriteTokens: count(usage?.cacheCreationInputTokens), outputTokens: count(usage?.outputTokens), reasoningTokens: 0,
       }, usage?.costUSD))
-      // A CLI without that internal field still reports each API message's usage; price those locally.
+      // A CLI without that internal field still reports each API message's usage; reports price those.
       : [...this.messages.values()].map(({ model, usage }) => priced(model, {
         inputTokens: count(usage.input_tokens), cacheReadTokens: count(usage.cache_read_input_tokens),
         cacheWriteTokens: count(usage.cache_creation_input_tokens), outputTokens: count(usage.output_tokens), reasoningTokens: 0,

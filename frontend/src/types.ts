@@ -280,3 +280,13 @@ export interface TokenUsageReport {
   priceSnapshotDate: string;
   rows: TokenUsageRow[];
 }
+
+/** USD per million tokens: input, cache read, cache write, output; a missing cache price uses the input price. */
+export type ModelPrice = [number, number | null, number | null, number];
+
+export interface ModelPriceList {
+  snapshot: { source: "bundled" | "imported"; date: string; models: number };
+  entries: { model: string; price: ModelPrice; snapshot: ModelPrice | null; custom: boolean }[];
+  /** Models used without a CLI estimate that no price covers. */
+  unpricedModels: string[];
+}
