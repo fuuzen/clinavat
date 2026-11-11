@@ -17,10 +17,12 @@ interface CredentialContext {
 }
 interface SlotJournal {
   version: 3; userId: string; slotId: string; engine: AccountEngine; revision: number;
-  home: string; phase: 'preparing' | 'active' | 'releasing';
+  home: string; phase: 'preparing' | 'active' | 'parked' | 'releasing';
 }
 interface SlotLease {
   journal: SlotJournal; count: number; ready: Promise<void>; finishing?: Promise<void>; failure?: Error;
+  /** No run holds the slot, but its last user's state stays in place until someone else or an administrator needs it. */
+  parked?: boolean;
 }
 interface SessionLease { slotId: string; userId: string; count: number }
 interface LeaseRelease {
@@ -43,11 +45,30 @@ export class AccountCredentials {
   constructor(private dataDir: string, private store: Store, private execution: ExecutionHost,
     readonly tokens: SlotTokens, private onSlotActivity?: (slotId: string) => void) {}
 
-  isUserBusy(userId: string): boolean { return [...this.leases.values()].some(lease => lease.journal.userId === userId); }
+  isUserBusy(userId: string): boolean { return [...this.leases.values()].some(lease => !lease.parked && lease.journal.userId === userId); }
+  /** Includes parked slots; call `releaseParked` first when the change must not keep the last user's state. */
   isSlotBusy(slotId: string): boolean { return this.leases.has(slotId); }
   isSessionBusy(sessionId: string): boolean { return this.sessions.has(sessionId); }
   isProjectBusy(projectId: string): boolean { return this.projects.has(projectId); }
-  activeUserId(slotId: string): string | null { return this.leases.get(slotId)?.journal.userId ?? null; }
+  activeUserId(slotId: string): string | null {
+    const lease = this.leases.get(slotId);
+    return lease && !lease.parked ? lease.journal.userId : null;
+  }
+
+  /** Saves the state a parked slot still holds for its last user; a slot in use stays as it is. */
+  async releaseParked(slotId: string): Promise<void> {
+    const lease = this.leases.get(slotId);
+    if (!lease?.parked) return;
+    try { await this.vacate(lease); }
+    catch (error) {
+      throw new HttpError(409, `槽位的用户状态回收尚未完成：${error instanceof Error ? error.message : '请稍后重试'}`);
+    }
+  }
+
+  /** Leaves no parked slot behind a stopped Hub; a failure stays in the journal for `recover`. */
+  async close(): Promise<void> {
+    await Promise.allSettled([...this.leases.values()].filter(lease => lease.parked).map(lease => this.vacate(lease)));
+  }
 
   // Call only after the session's run has ended; active leases never enter this retry set.
   async retrySessionRelease(sessionId: string): Promise<void> {
@@ -90,8 +111,10 @@ export class AccountCredentials {
     return await this.tokens.identity(journal.slotId) ?? undefined;
   }
 
-  // Runs a short task while no lease exists; new leases wait for it. Returns undefined when the slot is in use.
-  async whileIdle<T>(slotId: string, task: () => Promise<T>): Promise<{ value: T } | undefined> {
+  // Runs a short task while no lease exists; new leases wait for it. Returns undefined when the slot is in use,
+  // or parked and `keepParked` asks not to disturb its last user.
+  async whileIdle<T>(slotId: string, task: () => Promise<T>, keepParked = false): Promise<{ value: T } | undefined> {
+    if (!keepParked) await this.releaseParked(slotId);
     if (this.leases.has(slotId) || this.pauses.has(slotId)) return undefined;
     let resume!: () => void;
     this.pauses.set(slotId, new Promise<void>(resolve => { resume = resolve; }));
@@ -105,6 +128,10 @@ export class AccountCredentials {
     const current = this.currentSlot(journal, true);
     if (current.status !== 'IDLE') throw new HttpError(409, '该授权槽位当前不可用');
     let lease = this.leases.get(journal.slotId);
+    if (lease?.parked && (lease.failure || lease.journal.userId !== journal.userId || lease.journal.revision !== journal.revision)) {
+      await this.releaseParked(journal.slotId);
+      return this.acquire(context, reclaimed);
+    }
     if (lease) {
       this.assertHealthy(lease);
       if (lease.journal.userId !== journal.userId) {
@@ -128,6 +155,12 @@ export class AccountCredentials {
       // Reserve before filesystem awaits so another user cannot enter during preparation.
       this.leases.set(journal.slotId, lease);
       lease.ready = this.prepare(journal);
+      this.onSlotActivity?.(journal.slotId);
+    } else if (lease.parked) {
+      // The same user returns, possibly from another project: the slot still holds everything prepare would restore.
+      const parked = lease;
+      parked.parked = false;
+      parked.ready = parked.ready.then(() => this.writeJournal(parked.journal, 'active'));
       this.onSlotActivity?.(journal.slotId);
     }
     const active = lease;
@@ -191,10 +224,11 @@ export class AccountCredentials {
       release.counted = false;
     }
     if (!lease.count) {
-      lease.finishing ??= this.settle(lease.journal).then(() => {
-        if (this.leases.get(lease.journal.slotId) === lease) this.leases.delete(lease.journal.slotId);
-      }).catch((error: unknown) => { lease.finishing = undefined; throw error; });
-      await lease.finishing;
+      if (lease.journal.phase === 'active' && !lease.failure) {
+        lease.parked = true;
+        lease.ready = this.writeJournal(lease.journal, 'parked');
+        await lease.ready;
+      } else await this.vacate(lease);
     }
     if (sessionId) {
       const session = this.sessions.get(sessionId);
@@ -204,6 +238,25 @@ export class AccountCredentials {
       const count = (this.projects.get(projectId) ?? 1) - 1;
       if (count) this.projects.set(projectId, count); else this.projects.delete(projectId);
     }
+  }
+
+  private vacate(lease: SlotLease): Promise<void> {
+    const { slotId } = lease.journal;
+    lease.finishing ??= lease.ready.catch(() => undefined).then(() => this.settle(lease.journal)).then(() => {
+      if (this.leases.get(slotId) === lease) this.leases.delete(slotId);
+      if (lease.parked) this.onSlotActivity?.(slotId);
+    }, (error: unknown) => {
+      lease.finishing = undefined;
+      // A partly saved slot must not be handed back to its last user as if it were still prepared.
+      lease.failure = error instanceof Error ? error : new Error('槽位用户状态回收失败');
+      throw lease.failure;
+    });
+    return lease.finishing;
+  }
+
+  private writeJournal(journal: SlotJournal, phase: SlotJournal['phase']): Promise<void> {
+    journal.phase = phase;
+    return writePrivateJson(this.file(journal.slotId), JSON.stringify(journal));
   }
 
   private assertHealthy(lease: SlotLease): void {
@@ -228,7 +281,7 @@ export class AccountCredentials {
     accountIdentifier(journal.slotId);
     if (journal.version !== 3 || !['claude', 'codex'].includes(journal.engine)
       || !Number.isSafeInteger(journal.revision) || journal.revision < 0
-      || !['preparing', 'active', 'releasing'].includes(journal.phase)
+      || !['preparing', 'active', 'parked', 'releasing'].includes(journal.phase)
       || journal.home !== resolve(this.dataDir, 'slots', journal.slotId)) throw new Error('槽位运行恢复日志无效');
   }
 
@@ -260,8 +313,7 @@ export class AccountCredentials {
     this.userPreparations.set(key, tail);
     try { await preparation; }
     finally { if (this.userPreparations.get(key) === tail) this.userPreparations.delete(key); }
-    journal.phase = 'active';
-    await writePrivateJson(this.file(journal.slotId), JSON.stringify(journal));
+    await this.writeJournal(journal, 'active');
   }
 
   private async settle(journal: SlotJournal): Promise<void> {

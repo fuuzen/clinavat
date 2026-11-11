@@ -84,8 +84,19 @@ async function groupProcesses(directory) {
   return pids;
 }
 
+async function activeJournals(directory) {
+  let count = 0;
+  for (const entry of await directoryEntries(directory)) {
+    // A parked slot keeps its last user's state without any process; the Hub saves it when it stops.
+    const phase = entry.isFile() && entry.name.endsWith('.json')
+      ? await readFile(join(directory, entry.name), 'utf8').then(content => JSON.parse(content).phase, () => undefined) : undefined;
+    if (phase !== 'parked') count++;
+  }
+  return count;
+}
+
 export async function runtimeCounts(database, dataDirectory, hub) {
-  const journals = await directoryEntries(join(dataDirectory, 'accounts', 'slot-runtime'));
+  const runtimeJournals = await activeJournals(join(dataDirectory, 'accounts', 'slot-runtime'));
   const probeDirectory = resolve(dataDirectory, 'run', 'usage-probes');
   // Slot directories stay mounted in their VMs; only their temporary children indicate a probe.
   // Keep unexpected entries blocking deployment as well, rather than assuming they are idle.
@@ -108,7 +119,7 @@ export async function runtimeCounts(database, dataDirectory, hub) {
       } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw new Error(`无法确认 Hub 子进程 ${pid} 的归属`); }
     }
   }
-  return { runtimeJournals: journals.length, conversationProcesses, usageProbeDirectories, usageProbeProcesses };
+  return { runtimeJournals, conversationProcesses, usageProbeDirectories, usageProbeProcesses };
 }
 
 export function hasRuntimeActivity(runtime, includeUsageProbes = true) {

@@ -389,11 +389,12 @@ export class SlotUsage {
     const credential = await inspectCredential(slot.home_dir, slot.engine);
     if (credential.kind === 'none') throw new Error('槽位尚未完成登录');
     if (credential.kind === 'apikey') return { windows: [], unavailable: 'API key 账号没有订阅额度窗口' };
-    // Idle slots are paused for the probe, so a token refresh can be written back safely.
+    // Idle slots are paused for the probe, so a token refresh can be written back safely. A parked slot is
+    // only given up when its token needs that refresh; otherwise its last user keeps it prepared.
     const idle = await this.credentials.whileIdle(slot.id, async () => {
       if (slot.engine === 'claude') await ensureClaudeSlotIdentity(this.config.dataDir, slot.id, slot.home_dir);
       return this.isolatedProbe(slot);
-    });
+    }, credential.fresh);
     if (idle) return idle.value;
     if (!credential.fresh) throw new Error('槽位正在使用且访问令牌临近刷新，等待对话中的额度事件更新');
     return this.isolatedProbe(slot);

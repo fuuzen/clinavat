@@ -278,6 +278,7 @@ app.addHook('preClose', async () => {
   connections.close();
   events.close();
   await agents.close();
+  await credentials.close();
 });
 app.addHook('onClose', async () => { await ssh.close(); store.close(); });
 let shuttingDown = false;

@@ -29,6 +29,8 @@ export async function updateSlot(context: Context, slotId: string, input: SlotUp
     const accessChanged = previousUsers.length !== allowedUsers.length || previousUsers.some(userId => !allowedUsers.includes(userId));
     const status = input.status ?? slot.status;
     const accountChanged = accessChanged || status !== slot.status;
+    // A parked lease is tied to the current revision, so it must be saved before the revision changes.
+    if (accountChanged) await config.credentials.releaseParked(slotId);
     if (accountChanged && config.credentials.isSlotBusy(slotId)) {
       throw new HttpError(409, '该槽位正在使用，请等待相关会话和模型查询结束后再修改状态或访问权限');
     }
