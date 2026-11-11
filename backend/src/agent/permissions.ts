@@ -2,6 +2,8 @@ import { HttpError } from '../models.js';
 
 export const permissionModes = ['manual', 'accept-edits', 'auto', 'full-access', 'yolo'] as const;
 export type PermissionMode = typeof permissionModes[number];
+/** New conversations of users without their own default let the CLI's native reviewer decide. */
+export const defaultPermissionMode: PermissionMode = 'auto';
 
 export function getPermissionMode(session: { permission_mode?: string | null }): PermissionMode {
   return permissionModes.includes(session.permission_mode as PermissionMode)

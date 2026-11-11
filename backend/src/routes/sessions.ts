@@ -5,7 +5,7 @@ import { type Context, projectFor, sessionFor, withResourceLocks } from '../cont
 import { HttpError, type Slot } from '../models.js';
 import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
-import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
+import { defaultPermissionMode, permissionModes, validatePermissionMode } from '../agent/permissions.js';
 import { ensureLocalHost } from '../local-host.js';
 import { availableSlots, serializeUserSlot, slotForUser } from '../accounts/access.js';
 import { sessionMessageRoutes, selectedSlotId, selectionFields } from './session-messages.js';
@@ -57,7 +57,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       projectFor(context, input.projectId, request.user.id);
       if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
       if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
-      const permissionMode = validatePermissionMode(input.engine, input.permissionMode ?? 'manual');
+      const permissionMode = validatePermissionMode(input.engine, input.permissionMode
+        ?? context.agentDefaults.forUser(request.user.id, input.engine).permissionMode ?? defaultPermissionMode);
       const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
       const id = randomUUID();
       const validate = (slot: Slot) => validateAgentSelection(context.config, { user: request.user, slot, session: { engine: input.engine } }, input);

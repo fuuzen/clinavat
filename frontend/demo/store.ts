@@ -44,7 +44,10 @@ export const db: DemoState = {
   siteQuestions: { mode: "skip", timeoutMs: 5 * 60_000 },
   userQuestions: { mode: null, timeoutMs: null },
   usageSettings: { refreshIntervalMs: 12 * 3_600_000, staleAfterMs: 12 * 3_600_000 },
-  agentDefaults: { claude: { model: null, reasoningEffort: null }, codex: { model: null, reasoningEffort: null } },
+  agentDefaults: {
+    claude: { model: null, reasoningEffort: null, permissionMode: null },
+    codex: { model: null, reasoningEffort: null, permissionMode: null },
+  },
   ...createFixtures(),
 };
 

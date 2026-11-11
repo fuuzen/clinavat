@@ -31,6 +31,13 @@ const yoloOption: PermissionOption = {
   description: "本系统自动批准全部工具审批，不经过 CLI 自动审核。",
 };
 
+/** New conversations start here unless the user has chosen another default. */
+export const defaultPermissionMode: PermissionMode = "auto";
+
+export function permissionOptions(engine: "claude" | "codex"): PermissionOption[] {
+  return [...nativeOptions.filter((option) => option.value !== "accept-edits" || engine === "claude"), yoloOption];
+}
+
 export default function PermissionPicker(props: Props) {
   const options = nativeOptions.filter((option) => option.value !== "accept-edits" || props.engine === "claude");
   const selected = [...options, yoloOption].find((option) => option.value === props.value) || nativeOptions[0];

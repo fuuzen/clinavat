@@ -65,7 +65,7 @@ export const sessionHandlers = [
     const session: Session = {
       id: crypto.randomUUID(), project_id: input.projectId!, engine, slot_mode: slotMode, slot_id: slot.id,
       title: input.title || "新对话", status: "idle", updated_at: timestamp(), model: input.model ?? null,
-      reasoning_effort: input.reasoningEffort ?? null, permission_mode: input.permissionMode ?? "manual",
+      reasoning_effort: input.reasoningEffort ?? null, permission_mode: input.permissionMode ?? db.agentDefaults[engine].permissionMode ?? "auto",
       agent_mode: input.agentMode ?? "normal", role_preset: input.rolePreset ?? "default",
     };
     db.sessions.unshift(session);

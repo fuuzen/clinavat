@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Bot, LoaderCircle, RefreshCw, Save } from "lucide-react";
 import { api, errorText, post } from "../../api";
-import type { AgentModel, AgentPreference, AgentPreferences } from "../../types";
+import type { AgentModel, AgentPreference, AgentPreferences, PermissionMode } from "../../types";
 import { effortName } from "../chat/ReasoningEffortControl";
+import { defaultPermissionMode, permissionOptions } from "../chat/PermissionPicker";
 import "../../styles/agent-defaults.css";
 
 type Engine = "claude" | "codex";
@@ -14,7 +15,10 @@ interface AgentSettingsView {
 
 const engineNames: Record<Engine, string> = { claude: "Claude Code", codex: "Codex" };
 
-/** The user's default model and reasoning effort per CLI, chosen from the catalogs of the slots they may use. */
+/**
+ * The user's defaults per CLI: model and reasoning effort, chosen from the catalogs of the slots they may use,
+ * and the permission mode new conversations start with.
+ */
 export default function AgentDefaultsSettings() {
   const [view, setView] = useState<AgentSettingsView | null>(null);
   const [error, setError] = useState("");
@@ -30,10 +34,11 @@ export default function AgentDefaultsSettings() {
     <>
       <div className="settings-section-heading">
         <Bot size={17} />
-        <h3>模型与思考强度</h3>
+        <h3>模型、思考强度与授权模式</h3>
       </div>
       <p className="settings-description">
-        你的对话未单独选择模型或思考强度时使用的默认值。所用槽位的模型列表中没有该模型、或模型不支持该强度时，改用 CLI 的默认设置。
+        模型和思考强度用于你所有未单独选择的对话；所用槽位的模型列表中没有该模型、或模型不支持该强度时，改用 CLI 的默认设置。
+        授权模式用于新建的对话，单个对话可在输入框底部调整。
       </p>
       {!view && !error && <div className="loading-state">正在读取…</div>}
       {view && !engines.length && <p className="settings-description">你还没有获授权的槽位。</p>}
@@ -56,7 +61,10 @@ function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: Agent
   // Without a chosen model, any effort some model offers can apply wherever the CLI's default model supports it.
   const efforts = model ? model.reasoningEfforts
     : [...new Map(models.flatMap((item) => item.reasoningEfforts).map((effort) => [effort.value, effort])).values()];
-  const dirty = draft.model !== saved.model || draft.reasoningEffort !== saved.reasoningEffort;
+  const dirty = draft.model !== saved.model || draft.reasoningEffort !== saved.reasoningEffort
+    || draft.permissionMode !== saved.permissionMode;
+  const permissions = permissionOptions(engine);
+  const siteDefault = permissions.find((option) => option.value === defaultPermissionMode)?.label;
   async function run(action: string, operation: () => Promise<AgentSettingsView>, done: string) {
     setBusy(action); setError(""); setMessage("");
     try { onSaved(await operation()); setMessage(done); }
@@ -67,7 +75,7 @@ function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: Agent
     <form className="agent-defaults" onSubmit={(event) => {
       event.preventDefault();
       void run("save", () => api<AgentSettingsView>(`/settings/agent/${engine}`, { method: "PUT", body: JSON.stringify(draft) }),
-        "已保存，你之后发送的消息按新默认值运行。");
+        "已保存。模型和思考强度从下一条消息起生效，授权模式用于之后新建的对话。");
     }}>
       <strong>{engineNames[engine]}</strong>
       <div className="agent-defaults-fields">
@@ -75,7 +83,7 @@ function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: Agent
           默认模型
           <select value={draft.model ?? ""} disabled={!!busy} onChange={(event) => {
             const next = models.find((item) => item.id === event.target.value);
-            setDraft({ model: next?.id ?? null,
+            setDraft({ ...draft, model: next?.id ?? null,
               reasoningEffort: next && !next.reasoningEfforts.some((effort) => effort.value === draft.reasoningEffort) ? null : draft.reasoningEffort });
             setMessage("");
           }}>
@@ -94,6 +102,23 @@ function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: Agent
             {draft.reasoningEffort && !efforts.some((effort) => effort.value === draft.reasoningEffort)
               && <option value={draft.reasoningEffort}>{effortName(draft.reasoningEffort)}</option>}
             {efforts.map((effort) => <option key={effort.value} value={effort.value}>{effortName(effort.value)}</option>)}
+          </select>
+        </label>
+        <label>
+          默认授权模式
+          <select value={draft.permissionMode ?? ""} disabled={!!busy} onChange={(event) => {
+            setDraft({ ...draft, permissionMode: (event.target.value || null) as PermissionMode | null });
+            setMessage("");
+          }}>
+            <option value="">跟随站点默认（{siteDefault}）</option>
+            <optgroup label="CLI 原生">
+              {permissions.filter((option) => option.value !== "yolo")
+                .map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </optgroup>
+            <optgroup label="本系统">
+              {permissions.filter((option) => option.value === "yolo")
+                .map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </optgroup>
           </select>
         </label>
         <button type="submit" className="button button-primary button-small" disabled={!!busy || !dirty}>

@@ -165,6 +165,8 @@ export class Store {
     this.addColumn('account_slots', 'model_catalog', 'TEXT');
     this.addColumn('account_slots', 'model_catalog_at', 'TEXT');
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
+    this.addColumn('user_agent_defaults', 'permission_mode',
+      "TEXT CHECK(permission_mode IN ('manual','accept-edits','auto','full-access','yolo'))");
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {
       this.addColumn(table, 'question_mode', "TEXT CHECK(question_mode IN ('skip','defer'))");

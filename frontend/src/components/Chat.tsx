@@ -16,7 +16,7 @@ import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
 import { useConversationSlot } from "./chat/useConversationSlot";
-import PermissionPicker from "./chat/PermissionPicker";
+import PermissionPicker, { defaultPermissionMode } from "./chat/PermissionPicker";
 import WorkspaceHeader from "./chat/WorkspaceHeader";
 import ChatComposer, { type ComposerHandle } from "./chat/ChatComposer";
 import RuntimeStrip from "./chat/RuntimeStrip";
@@ -101,7 +101,7 @@ export default function Chat(props: Props) {
     model: session?.model || null,
     reasoningEffort: session?.reasoning_effort || null,
   });
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(session?.permission_mode || "manual");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(session?.permission_mode || defaultPermissionMode);
   const [permissionSaving, setPermissionSaving] = useState(false);
   const permissionRequestRef = useRef(0);
   const [stickToBottom, setStickToBottom] = useState(true);
@@ -153,14 +153,13 @@ export default function Chat(props: Props) {
       reasoningEffort: session?.reasoning_effort || null,
     });
   }, [session?.id, project?.id, currentEngine, session?.model, session?.reasoning_effort, selectionAccountKey]);
+  // A new conversation starts with the user's default for its CLI, again whenever it switches CLI.
+  const personalPermission = overview.agentDefaults?.[currentEngine]?.permissionMode;
   useEffect(() => {
     permissionRequestRef.current += 1;
-    setPermissionMode(session?.permission_mode || "manual");
+    setPermissionMode(session?.permission_mode || personalPermission || defaultPermissionMode);
     setPermissionSaving(false);
-  }, [session?.id, project?.id, session?.permission_mode]);
-  useEffect(() => {
-    if (currentEngine === "codex") setPermissionMode((mode) => mode === "accept-edits" ? "manual" : mode);
-  }, [currentEngine]);
+  }, [session?.id, project?.id, session?.permission_mode, currentEngine, personalPermission]);
   useLayoutEffect(() => {
     if (stickToBottom && scrollRef.current)
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "instant" });

@@ -117,6 +117,8 @@ export interface AgentModel {
 export interface AgentPreference {
   model: string | null;
   reasoningEffort: string | null;
+  /** What the user's new conversations start with; null follows the site's default. */
+  permissionMode: PermissionMode | null;
 }
 
 export type AgentPreferences = Record<"claude" | "codex", AgentPreference>;
