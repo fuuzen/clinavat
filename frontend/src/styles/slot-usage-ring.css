@@ -26,6 +26,9 @@
 .slot-usage-ring-value {
   stroke: var(--info);
 }
+.slot-usage-ring-stale {
+  opacity: 0.4;
+}
 .slot-usage-ring-inner .slot-usage-ring-value {
   stroke: var(--success);
 }

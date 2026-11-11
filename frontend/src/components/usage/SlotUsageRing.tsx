@@ -22,9 +22,9 @@ export default function SlotUsageRing({ engine, usage, now, slotLimited, saving,
   return (
     <span className={`slot-usage-ring${three ? " slot-usage-ring-three" : ""}`} role="img" aria-label={label} title={label}>
       {!plain && <svg className="slot-usage-ring-chart" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
-        {rings.map(({ position, used, level }) => {
+        {rings.map(({ position, used, stale, level }) => {
           const radius = radii[position];
-          return <g key={position} className={`slot-usage-ring-${position} slot-usage-ring-${level}`}>
+          return <g key={position} className={`slot-usage-ring-${position} slot-usage-ring-${level}${stale ? " slot-usage-ring-stale" : ""}`}>
             <circle className={`slot-usage-ring-track${used === null ? " slot-usage-ring-unknown" : ""}`}
               cx="16" cy="16" r={radius} />
             {used !== null && used > 0 && <circle className="slot-usage-ring-value"
