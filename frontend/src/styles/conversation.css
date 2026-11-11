@@ -113,19 +113,23 @@
   color: var(--muted);
   margin-left: 4px;
 }
-.message-fork {
-  width: 24px;
-  height: 24px;
+.message-actions {
+  display: flex;
+  gap: 2px;
   margin-left: auto;
-  color: var(--muted);
   opacity: 0;
 }
-.message:hover .message-fork,
-.message-fork:focus-visible {
+.message-action {
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+.message:hover .message-actions,
+.message-actions:focus-within {
   opacity: 1;
 }
 @media (hover: none) {
-  .message-fork { opacity: 1; }
+  .message-actions { opacity: 1; }
 }
 .fork-origin {
   display: flex;

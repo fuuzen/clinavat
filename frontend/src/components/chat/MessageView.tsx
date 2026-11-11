@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronDown, ChevronUp, GitBranch } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, GitBranch } from "lucide-react";
 import { formatTime } from "../../api";
 import type { Message } from "../../types";
 import DiagramBlock from "../diagrams/DiagramBlock";
@@ -58,6 +58,26 @@ function Collapsible({ children }: { children: ReactNode }) {
   );
 }
 
+// Copies the stored reply, which is the Markdown the agent wrote rather than the rendered text.
+function CopyMarkdown({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    window.setTimeout(() => setState("idle"), 2000);
+  }
+  const label = state === "copied" ? "已复制 Markdown" : state === "failed" ? "复制失败，请手动选择文本" : "复制为 Markdown";
+  return (
+    <button type="button" className="icon-button message-action" onClick={() => void copy()} title={label} aria-label={label}>
+      {state === "copied" ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+    </button>
+  );
+}
+
 export function AgentAvatar({ engine }: { engine: "claude" | "codex" }) {
   return <span className="agent-avatar"><span className={`engine-logo engine-logo-${engine}`} aria-hidden="true" /></span>;
 }
@@ -87,10 +107,15 @@ export default function MessageView({
         )}
         <strong>{user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
         <time>{formatTime(message.created_at)}</time>
-        {onFork && (
-          <button type="button" className="icon-button message-fork" onClick={onFork} title="从这一轮创建分支对话" aria-label="从这一轮创建分支对话">
-            <GitBranch size={13} aria-hidden="true" />
-          </button>
+        {message.role === "assistant" && (
+          <span className="message-actions">
+            <CopyMarkdown text={message.content} />
+            {onFork && (
+              <button type="button" className="icon-button message-action" onClick={onFork} title="从这一轮创建分支对话" aria-label="从这一轮创建分支对话">
+                <GitBranch size={13} aria-hidden="true" />
+              </button>
+            )}
+          </span>
         )}
       </div>
       {user ? (
