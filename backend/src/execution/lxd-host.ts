@@ -14,6 +14,7 @@ import type { MachineKind, MachinePlan } from './machine-plan.js';
 import type { ProcessExecutionHost } from './process-host.js';
 import { delegateSuspension } from './suspension.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScope, ExecutionSpawnOptions } from './types.js';
+import type { SkippedLinks } from '../runtime/sync-status.js';
 
 export interface LxdConfig {
   dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
@@ -26,6 +27,8 @@ export interface LxdServices {
   /** The project directory of a user's sync session, or undefined when the user has no such session. */
   syncProject(userId: string, syncName: string): string | undefined;
   mutagenEnvironment(userId: string): Promise<NodeJS.ProcessEnv>;
+  /** Records the links a sync skips after a command; returns a notice about new ones for the command's output. */
+  reportSkippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
 }
 
 export interface Machine {
@@ -80,6 +83,7 @@ export class LxdExecutionHost implements ExecutionHost {
       },
       project: (userId, syncName) => this.services.syncProject(userId, syncName),
       prepareProject: async (userId, path) => { await this.attach({ userId, paths: [path] }); },
+      skippedLinks: (userId, syncName, skipped) => this.services.reportSkippedLinks(userId, syncName, skipped),
     });
   }
 

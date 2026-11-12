@@ -50,6 +50,21 @@ export interface Project {
   path_mode: "auto" | "direct" | "bwrap" | "symlink";
   execution_mode: "local" | "direct" | "bwrap" | "symlink" | null;
   sync_status: string;
+  /** JSON of SkippedLinks, the symbolic links the sync last reported as skipped; null when there are none. */
+  sync_skipped_links?: string | null;
+}
+
+export interface SkippedLink {
+  /** alpha is the dev machine, beta the mirror on the pool machine. */
+  side: "alpha" | "beta";
+  path: string;
+  reason: string;
+}
+
+export interface SkippedLinks {
+  links: SkippedLink[];
+  /** Skipped links Mutagen did not list individually. */
+  more: number;
 }
 
 export interface Session {
@@ -264,11 +279,19 @@ export interface SyncScanEntry {
   tracked: boolean | null;
 }
 
+export interface SyncScanLink {
+  path: string;
+  target: string;
+  kind: "project" | "workspace" | "outside" | "invalid";
+}
+
 export interface SyncScan {
   remotePath: string;
   totalBytes: number;
   totalFiles: number;
   entries: SyncScanEntry[];
+  links: SyncScanLink[];
+  linkCount: number;
   truncated: boolean;
 }
 

@@ -13,6 +13,7 @@ import { ConversationStore } from './conversation.js';
 import { ConnectionRegistry } from './connections.js';
 import { SshManager } from './runtime/ssh.js';
 import { WorkspaceManager } from './runtime/workspace.js';
+import { describeSkippedLinks, recordSkippedLinks } from './sync-links.js';
 import { AgentManager } from './agent/manager.js';
 import { resourceRoutes } from './routes/resources.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -64,6 +65,7 @@ const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, 
   syncProject: (userId, syncName) => store.get<{ local_path: string }>(
     "SELECT local_path FROM projects WHERE user_id=? AND sync_name=? AND execution_mode IS NOT 'local'", userId, syncName)?.local_path,
   mutagenEnvironment: userId => mutagenEnvironment(userId),
+  reportSkippedLinks: (userId, syncName, skipped) => describeSkippedLinks(recordSkippedLinks(store, events, userId, syncName, skipped)),
 }) : localExecution;
 for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('SELECT id,home_dir,engine FROM account_slots')) {
   await execution.assertReleased(slot.home_dir);
@@ -105,6 +107,7 @@ const turns = new ConversationStore(store, turn => {
 });
 mutagenEnvironment = userId => ssh.mutagenEnvironment(userId);
 const workspaces = new WorkspaceManager(config, ssh, execution);
+workspaces.onSkippedLinks = (project, skipped) => { recordSkippedLinks(store, events, project.user_id, project.sync_name, skipped); };
 for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
   if (host.kind === 'local') continue;
   try { await ssh.addHost(host.user_id, host); }

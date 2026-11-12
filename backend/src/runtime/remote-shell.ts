@@ -29,8 +29,20 @@ flush_sync() {
     return 74
   }
 }
+# Mutagen skips symbolic links it cannot sync; tell the agent about the ones that appeared since the last command.
+readonly skipped_links_template='{{range .}}{{range .Alpha.ScanProblems}}dev machine{{"\t"}}{{.Path}}{{"\t"}}{{.Error}}{{"\n"}}{{end}}{{range .Beta.ScanProblems}}local mirror{{"\t"}}{{.Path}}{{"\t"}}{{.Error}}{{"\n"}}{{end}}{{end}}'
+report_skipped_links() {
+  local known="$LOCAL_ROOT/.bin/skipped-links" listing fresh
+  listing=$(timeout --signal=TERM --kill-after=2s 10s "$MUTAGEN_BINARY" sync list "$SYNC_NAME" --template "$skipped_links_template" 2>/dev/null \
+    | grep -F $'\tinvalid symbolic link: ') || listing=''
+  if [[ -s "$known" ]]; then fresh=$(grep -vxF -f "$known" <<<"$listing" || true); else fresh=$listing; fi
+  printf '%s\n' "$listing" >"$known" 2>/dev/null || true
+  [[ -n "$fresh" ]] || return 0
+  printf '%s\n' "remote-shell: these symbolic links cannot be synced and are missing on the other side; only relative links that stay inside the project are synced. Recreate them with 'ln -sfr', or ask the user to add their build directory to the project's sync ignore rules:" >&2
+  awk -F '\t' 'NR <= 5 { sub(/^invalid symbolic link: /, "", $3); printf "  %s (%s: %s)\n", $2, $1, $3 } END { if (NR > 5) printf "  and %d more\n", NR - 5 }' <<<"$fresh" >&2
+}
 barrier_begin() { flush_sync; }
-barrier_end() { flush_sync; }
+barrier_end() { flush_sync && report_skipped_links; }
 `;
 
 // The connection stays open for the whole command: if this script dies, the Hub releases the project lock.
@@ -49,7 +61,11 @@ barrier_end() {
   local reply=''
   printf 'end\n' >&"\${BARRIER[1]}"
   read -r -u "\${BARRIER[0]}" reply || true
-  [[ "$reply" == done ]] && return 0
+  # The Hub may append a notice after a tab, such as symbolic links the command left unsynced.
+  if [[ "$reply" == done || "$reply" == done$'\t'* ]]; then
+    [[ "$reply" == done$'\t'* ]] && printf '%s\n' "\${reply#done$'\t'}" >&2
+    return 0
+  fi
   printf 'remote-shell: synchronization barrier failed after the command: %s\n' "\${reply:-relay closed}" >&2
   return 74
 }

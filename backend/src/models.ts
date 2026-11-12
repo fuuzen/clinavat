@@ -30,6 +30,7 @@ export interface Project {
   path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
   sync_rules: string | null;
+  sync_skipped_links?: string | null;
 }
 export interface Session {
   id: string; project_id: string; user_id: string; engine: 'claude' | 'codex'; slot_id: string | null;

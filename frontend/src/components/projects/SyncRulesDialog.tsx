@@ -3,14 +3,25 @@ import { LoaderCircle } from "lucide-react";
 import { api, errorText } from "../../api";
 import type { Project, SyncRules } from "../../types";
 import { Modal } from "../Dialogs";
+import { literalIgnore } from "./linkGroups";
 
 interface Props {
   project: Project;
+  /** Project paths to add as rules, such as symbolic links the sync skips. */
+  append?: string[];
   onClose: () => void;
   onSaved: () => void;
 }
 
-export default function SyncRulesDialog({ project, onClose, onSaved }: Props) {
+function withAppended(rules: string, paths: string[]): string {
+  const existing = new Set(rules.split(/\r?\n/).map((line) => line.trim()));
+  const additions = paths.map(literalIgnore).filter((rule) => !existing.has(rule));
+  if (!additions.length) return rules;
+  const base = rules.trimEnd();
+  return `${base}${base ? "\n" : ""}# 无法同步的软链接\n${additions.join("\n")}\n`;
+}
+
+export default function SyncRulesDialog({ project, append, onClose, onSaved }: Props) {
   const [loaded, setLoaded] = useState<SyncRules | null>(null);
   const [rules, setRules] = useState("");
   const [saving, setSaving] = useState(false);
@@ -21,7 +32,7 @@ export default function SyncRulesDialog({ project, onClose, onSaved }: Props) {
     api<SyncRules>(`/projects/${project.id}/sync-rules`).then((result) => {
       if (cancelled) return;
       setLoaded(result);
-      setRules(result.rules);
+      setRules(withAppended(result.rules, append ?? []));
     }, (cause) => {
       if (!cancelled) setError(errorText(cause));
     });

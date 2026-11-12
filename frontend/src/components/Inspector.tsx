@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Files,
   Folder,
@@ -6,6 +6,7 @@ import {
   FolderSync,
   GitBranch,
   GitCompareArrows,
+  Link2Off,
   ListFilter,
   LoaderCircle,
   RefreshCw,
@@ -13,13 +14,23 @@ import {
   X,
 } from "lucide-react";
 import { api, errorText, formatBytes, post } from "../api";
-import type { FileEntry, GitState, Project, ProjectUsage } from "../types";
+import type { FileEntry, GitState, Project, ProjectUsage, SkippedLinks } from "../types";
+import SkippedLinksDialog from "./projects/SkippedLinksDialog";
 import SyncRulesDialog from "./projects/SyncRulesDialog";
 import FileBrowser from "./workspace/FileBrowser";
 import UploadStatus from "./workspace/UploadStatus";
 import { useUploads } from "./workspace/useUploads";
 const TerminalView = lazy(() => import("./TerminalView"));
 const FilePreview = lazy(() => import("./preview/FilePreview"));
+
+function parseSkippedLinks(value: string | null | undefined): SkippedLinks | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as SkippedLinks;
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   tabRequest?: { tab: "changes"; id: number };
@@ -45,10 +56,13 @@ export default function Inspector({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
-  const [rulesOpen, setRulesOpen] = useState(false);
+  const [rulesDialog, setRulesDialog] = useState<{ append: string[] } | null>(null);
+  const [linksOpen, setLinksOpen] = useState(false);
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const projectId = project?.id;
+  const skippedLinks = useMemo(() => parseSkippedLinks(project?.sync_skipped_links), [project?.sync_skipped_links]);
+  const skippedCount = skippedLinks ? skippedLinks.links.length + skippedLinks.more : 0;
   const showSyncAction = !!project &&
     (project.execution_mode !== "local" || project.sync_status === "ERROR");
   const loadUsage = useCallback(async () => {
@@ -62,7 +76,8 @@ export default function Inspector({
   }, [projectId]);
   useEffect(() => {
     setUsage(null);
-    setRulesOpen(false);
+    setRulesDialog(null);
+    setLinksOpen(false);
   }, [projectId]);
   useEffect(() => {
     void loadUsage();
@@ -327,10 +342,16 @@ export default function Inspector({
                   镜像 {formatBytes(usage.mirrorBytes ?? 0)}
                 </span>
               )}
+              {skippedLinks && skippedCount > 0 && (
+                <button className="inspector-skipped-links" onClick={() => setLinksOpen(true)} title="查看同步时跳过的软链接">
+                  <Link2Off size={12} />
+                  {skippedCount} 个软链接未同步
+                </button>
+              )}
               {project.execution_mode !== "local" && (
                 <button
                   disabled={syncing || project.sync_status === "CREATING"}
-                  onClick={() => setRulesOpen(true)}
+                  onClick={() => setRulesDialog({ append: [] })}
                   title={project.sync_status === "CREATING" ? "同步完成后可用" : "查看和修改本项目的同步排除规则"}
                 >
                   <ListFilter size={12} />
@@ -357,8 +378,19 @@ export default function Inspector({
               )}
             </footer>
           )}
-          {rulesOpen && project && (
-            <SyncRulesDialog project={project} onClose={() => setRulesOpen(false)} onSaved={onRefresh} />
+          {linksOpen && project && skippedLinks && (
+            <SkippedLinksDialog
+              project={project}
+              skipped={skippedLinks}
+              onClose={() => setLinksOpen(false)}
+              onExclude={(paths) => {
+                setLinksOpen(false);
+                setRulesDialog({ append: paths });
+              }}
+            />
+          )}
+          {rulesDialog && project && (
+            <SyncRulesDialog project={project} append={rulesDialog.append} onClose={() => setRulesDialog(null)} onSaved={onRefresh} />
           )}
         </>
       )}

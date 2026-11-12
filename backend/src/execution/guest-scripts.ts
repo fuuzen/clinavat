@@ -233,6 +233,9 @@ def flush(message):
     try:
         result = subprocess.run([binary, 'sync', 'flush', message['sync']], capture_output=True, text=True, timeout=120)
         reply = {'id': message['id'], 'ok': result.returncode == 0, 'error': (result.stderr or result.stdout)[-2000:]}
+        if reply['ok'] and message.get('list'):
+            listed = subprocess.run([binary, 'sync', 'list', message['sync'], '--template', '{{json .}}'], capture_output=True, text=True, timeout=30)
+            if listed.returncode == 0: reply['session'] = listed.stdout
     except Exception as error:
         reply = {'id': message['id'], 'ok': False, 'error': str(error)}
     with output:
@@ -243,7 +246,8 @@ for line in sys.stdin:
 
 /**
  * remote-shell's side of the barrier: $1 sync name, $2 lock or nolock. Prints ready once the Hub has taken the
- * project lock and flushed, then waits for "end" on stdin and prints done after the closing flush.
+ * project lock and flushed, then waits for "end" on stdin and prints done after the closing flush, followed by a tab
+ * and a notice when the Hub has one.
  */
 export const barrierClientProgram = String.raw`
 import json, socket, sys
@@ -263,5 +267,6 @@ if not reply.get('ok'):
 print('ready', flush=True)
 if sys.stdin.readline().strip() != 'end': sys.exit(0)
 reply = exchange({'op': 'end'})
-print('done' if reply.get('ok') else 'error: ' + str(reply.get('error') or 'barrier failed').replace('\n', ' '), flush=True)
+notice = str(reply.get('notice') or '').replace('\n', ' ')
+print(('done\t' + notice if notice else 'done') if reply.get('ok') else 'error: ' + str(reply.get('error') or 'barrier failed').replace('\n', ' '), flush=True)
 `;

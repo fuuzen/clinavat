@@ -75,14 +75,50 @@ function endpointDescription(label: string, endpoint: SyncEndpoint): string {
   return `${label}：${connection}，已扫描 ${endpoint.files ?? 0} 个文件、${endpoint.directories ?? 0} 个目录，${formatBytes(endpoint.totalFileSize ?? 0)}`;
 }
 
+export interface SkippedLink { side: 'alpha' | 'beta'; path: string; reason: string }
+export interface SkippedLinks { links: SkippedLink[]; more: number }
+
+const LINK_PROBLEM = 'invalid symbolic link: ';
+
+/**
+ * Mutagen's portable mode refuses symbolic links with absolute, empty or malformed targets and links that leave
+ * the project. It skips just those entries and keeps syncing the rest, so they are reported rather than failures.
+ */
+function splitScanProblems(endpoint: SyncEndpoint) {
+  const listed = endpoint.scanProblems ?? [];
+  const links = listed.filter(problem => problem.error?.startsWith(LINK_PROBLEM));
+  const others = listed.filter(problem => !problem.error?.startsWith(LINK_PROBLEM));
+  const excluded = endpoint.excludedScanProblems ?? 0;
+  // Mutagen lists only the first problems; the unlisted ones count as links only when every listed one is.
+  const linksOnly = listed.length > 0 && !others.length;
+  return { links, others, moreLinks: linksOnly ? excluded : 0, moreOthers: linksOnly ? 0 : excluded };
+}
+
+function collectSkippedLinks(session: SyncSession): SkippedLinks {
+  const result: SkippedLinks = { links: [], more: 0 };
+  for (const side of ['alpha', 'beta'] as const) {
+    const { links, moreLinks } = splitScanProblems(session[side]);
+    result.links.push(...links.map(problem => ({
+      side, path: problem.path || '.', reason: compact(problem.error!.slice(LINK_PROBLEM.length), 200),
+    })));
+    result.more += moreLinks;
+  }
+  return result;
+}
+
+export function parseSkippedLinks(stdout: string): SkippedLinks {
+  return collectSkippedLinks(readSession(stdout));
+}
+
 function collectProblems(session: SyncSession): { lines: string[]; count: number } {
   const lines: string[] = [];
   let count = 0;
   const add = (line: string) => { count += 1; if (lines.length < 8) lines.push(line); };
   if (session.lastError) add(`同步错误：${compact(session.lastError)}`);
   for (const [label, endpoint] of [['远端（alpha）', session.alpha], ['镜像（beta）', session.beta]] as const) {
+    const { others, moreOthers } = splitScanProblems(endpoint);
     for (const [stage, problems, excluded] of [
-      ['扫描', endpoint.scanProblems, endpoint.excludedScanProblems],
+      ['扫描', others, moreOthers],
       ['应用变更', endpoint.transitionProblems, endpoint.excludedTransitionProblems],
     ] as const) {
       for (const problem of problems ?? []) {
@@ -96,26 +132,31 @@ function collectProblems(session: SyncSession): { lines: string[]; count: number
   return { lines, count };
 }
 
-export function parseSyncStatus(stdout: string): { status: 'WATCHING' | 'PAUSED' | 'ERROR' | 'SYNCING'; detail: string } {
+export function parseSyncStatus(stdout: string): {
+  status: 'WATCHING' | 'PAUSED' | 'ERROR' | 'SYNCING'; detail: string; skipped: SkippedLinks;
+} {
   const session = readSession(stdout);
   const problems = collectProblems(session);
+  const skipped = collectSkippedLinks(session);
   const failed = problems.count > 0 || session.status === 'disconnected' || session.status.startsWith('halted-')
     || (session.status === 'watching' && (!session.alpha.connected || !session.beta.connected));
   const status = session.paused ? 'PAUSED' : failed ? 'ERROR' : session.status === 'watching' ? 'WATCHING' : 'SYNCING';
   const description = session.paused ? '已暂停' : statusDescriptions[session.status] ?? compact(session.status);
+  const skippedCount = skipped.links.length + skipped.more;
   const detail = [
     `同步状态：${description}`,
     endpointDescription('远端（alpha）', session.alpha),
     endpointDescription('镜像（beta）', session.beta),
     ...problems.lines,
     ...(problems.count > problems.lines.length ? [`另有 ${problems.count - problems.lines.length} 条问题未展示`] : []),
+    ...(skippedCount ? [`已跳过 ${skippedCount} 个无法同步的软链接（目标为绝对路径、指向项目外或格式无效）`] : []),
   ].join('\n');
-  return { status, detail };
+  return { status, detail, skipped };
 }
 
 /**
- * Reasons the mirror may still differ from the remote. Scan problems on the remote are not among them:
- * they concern entries the mirror never received, and are often what a rule change is meant to exclude.
+ * Reasons the mirror may still differ from the remote. Scan problems on the remote and skipped symbolic links are
+ * not among them: those entries never crossed over, and are often what a rule change is meant to exclude.
  */
 export function syncBlockers(stdout: string): string[] {
   const session = readSession(stdout);
@@ -126,15 +167,16 @@ export function syncBlockers(stdout: string): string[] {
   if (session.lastError) blockers.push(`同步错误：${compact(session.lastError)}`);
   const conflicts = (session.conflicts?.length ?? 0) + (session.excludedConflicts ?? 0);
   if (conflicts) blockers.push(`两端有 ${conflicts} 处文件冲突`);
+  const mirrorScan = splitScanProblems(session.beta);
   const problems = [
-    ...(session.beta.scanProblems ?? []).map(problem => ['镜像（beta） 扫描', problem] as const),
+    ...mirrorScan.others.map(problem => ['镜像（beta） 扫描', problem] as const),
     ...(session.alpha.transitionProblems ?? []).map(problem => ['远端（alpha） 应用变更', problem] as const),
     ...(session.beta.transitionProblems ?? []).map(problem => ['镜像（beta） 应用变更', problem] as const),
   ];
   for (const [stage, problem] of problems.slice(0, 8)) {
     blockers.push(`${stage} ${compact(problem.path || '.', 200)}：${compact(problem.error || '未知错误')}`);
   }
-  const hidden = problems.length - Math.min(problems.length, 8) + (session.beta.excludedScanProblems ?? 0)
+  const hidden = problems.length - Math.min(problems.length, 8) + mirrorScan.moreOthers
     + (session.alpha.excludedTransitionProblems ?? 0) + (session.beta.excludedTransitionProblems ?? 0);
   if (hidden) blockers.push(`另有 ${hidden} 条问题未展示`);
   return blockers;

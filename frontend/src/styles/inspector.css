@@ -379,3 +379,6 @@
   color: var(--danger);
   background: var(--danger-bg);
 }
+.inspector-footer > .inspector-skipped-links {
+  color: var(--warning);
+}

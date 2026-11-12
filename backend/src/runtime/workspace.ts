@@ -8,7 +8,7 @@ import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
 import { pruneChangedPaths } from './sync-rules.js';
-import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, syncBlockers, type SyncProgress } from './sync-status.js';
+import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, syncBlockers, type SkippedLinks, type SyncProgress } from './sync-status.js';
 import { assertHostOwner, assertIdentifier, assertRemotePath, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 
@@ -20,6 +20,8 @@ interface SessionSummary {
 
 export class WorkspaceManager {
   private readonly initializations = new Map<string, Promise<void>>();
+  /** Receives the symbolic links each status reading finds skipped, including an empty list once they are gone. */
+  onSkippedLinks?: (project: WorkspaceProject, skipped: SkippedLinks) => void;
 
   constructor(readonly config: RuntimeConfig, readonly ssh: SshManager, readonly execution: ExecutionHost) {}
 
@@ -196,7 +198,9 @@ export class WorkspaceManager {
       return {status: 'LOCAL', detail: '直接使用本机目录，无需同步'};
     }
     const result = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}']);
-    return parseSyncStatus(result.stdout);
+    const health = parseSyncStatus(result.stdout);
+    this.onSkippedLinks?.(project, health.skipped);
+    return health;
   }
 
   /** Progress of a sync session that is still being set up; before the session exists the remote side is being prepared. */

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { errorText } from "./api";
 import { loadSiteSettings } from "./site/store";
+import type { Notice } from "./components/AppNotices";
 import type { PoolEvent, SlotUsage, ToolEvent, Turn } from "./types";
 import { receiveSlotUsage } from "./useSlotUsage";
 interface EventOptions {
@@ -16,7 +17,7 @@ interface EventOptions {
   refreshApprovals: () => Promise<void>;
   reloadMessages: (id: string) => Promise<void>;
   receiveTurn: (turn: Turn) => void;
-  notify: (message: string) => void;
+  notify: (message: string, kind?: Notice["kind"]) => void;
   setStreamConnected: Dispatch<SetStateAction<boolean>>;
   setStreaming: Dispatch<SetStateAction<string>>;
   setTools: Dispatch<SetStateAction<ToolEvent[]>>;
@@ -156,6 +157,8 @@ export function useWorkspaceEvents({
         );
         void refreshApprovals();
       }
+      if (data.type === "notice")
+        notify(String(object.message || ""), object.kind === "success" ? "success" : "warning");
       if (data.type === "error" && (!data.sessionId || current)) {
         setStreaming("");
         notify(

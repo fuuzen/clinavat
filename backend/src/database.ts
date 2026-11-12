@@ -156,6 +156,8 @@ export class Store {
     // Sync ignore rules the user maintains through Clinavat. NULL marks a project from before they moved here,
     // which imports its remote .clinavatignore once before it next syncs.
     this.addColumn('projects', 'sync_rules', 'TEXT');
+    // Symbolic links the sync last reported as skipped, as JSON; NULL when there are none.
+    this.addColumn('projects', 'sync_skipped_links', 'TEXT');
     // Where a turn ends in the CLI's own history: Claude's last assistant message, Codex's last native turn.
     // Copied turns of a branch keep their source's native session, whose history up to them is the same.
     this.addColumn('session_turns', 'native_ref', 'TEXT');

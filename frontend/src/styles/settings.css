@@ -279,6 +279,15 @@
 .notice-error .icon-button {
   color: var(--danger);
 }
+.notice-warning {
+  background: var(--warning-bg);
+  border-color: var(--warning-line);
+  color: var(--warning);
+}
+.notice-warning > svg,
+.notice-warning .icon-button {
+  color: var(--warning);
+}
 .usage-meter {
   display: flex;
   flex-direction: column;

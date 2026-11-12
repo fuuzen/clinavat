@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readJsonLines } from '../agent/ndjson.js';
+import { parseSkippedLinks, type SkippedLinks } from '../runtime/sync-status.js';
 import type { Machine } from './lxd-host.js';
 
 interface BarrierHooks {
@@ -10,10 +11,12 @@ interface BarrierHooks {
   project(userId: string, syncName: string): string | undefined;
   /** Makes the project directory visible in the workspace machine before Mutagen flushes it. */
   prepareProject(userId: string, path: string): Promise<void>;
+  /** Records the links the sync skips after a command, returning a notice about new ones for the command's output. */
+  skippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
 }
 interface Request { id: number; op: 'ready' | 'begin' | 'end' | 'abort'; conn?: number; sync?: string; lock?: boolean }
 interface Relay { child: ChildProcessWithoutNullStreams; userId: string; closed: boolean; connections: Map<number, { sync: string; release?: () => void }> }
-interface Worker { child: Promise<ChildProcessWithoutNullStreams>; pending: Map<number, { resolve(): void; reject(error: Error): void }> }
+interface Worker { child: Promise<ChildProcessWithoutNullStreams>; pending: Map<number, { resolve(session?: string): void; reject(error: Error): void }> }
 
 const LOCK_TIMEOUT_MS = 120_000;
 const FLUSH_TIMEOUT_MS = 130_000;
@@ -90,9 +93,9 @@ export class SyncBarriers {
     relay.child.kill();
   }
 
-  private reply(relay: Relay, id: number, error?: unknown): void {
+  private reply(relay: Relay, id: number, error?: unknown, notice?: string): void {
     if (relay.closed || relay.child.stdin.destroyed) return;
-    relay.child.stdin.write(JSON.stringify(error === undefined ? { id, ok: true }
+    relay.child.stdin.write(JSON.stringify(error === undefined ? { id, ok: true, ...(notice ? { notice } : {}) }
       : { id, ok: false, error: error instanceof Error ? error.message : String(error) }) + '\n');
   }
 
@@ -104,6 +107,7 @@ export class SyncBarriers {
       return;
     }
     if (message.op !== 'begin' && message.op !== 'end') return;
+    let notice: string | undefined;
     try {
       if (message.op === 'begin') {
         const sync = String(message.sync ?? '');
@@ -119,10 +123,14 @@ export class SyncBarriers {
         const connection = relay.connections.get(conn);
         if (!connection) throw new Error('同步屏障尚未开始');
         relay.connections.delete(conn);
-        try { await this.flush(relay.userId, connection.sync, this.hooks.project(relay.userId, connection.sync)!); }
+        let session: string | undefined;
+        try { session = await this.flush(relay.userId, connection.sync, this.hooks.project(relay.userId, connection.sync)!, true); }
         finally { connection.release?.(); }
+        // The command already ran; a status that cannot be read only costs the notice.
+        try { if (session) notice = this.hooks.skippedLinks(relay.userId, connection.sync, parseSkippedLinks(session)); }
+        catch { notice = undefined; }
       }
-      this.reply(relay, message.id);
+      this.reply(relay, message.id, undefined, notice);
     } catch (error) {
       this.reply(relay, message.id, error);
     }
@@ -142,10 +150,10 @@ export class SyncBarriers {
     };
     created.child.then(child => {
       const lines = readJsonLines(child.stdout, value => {
-        const message = value as { id: number; ok: boolean; error?: string };
+        const message = value as { id: number; ok: boolean; error?: string; session?: string };
         const entry = pending.get(message.id);
         pending.delete(message.id);
-        if (message.ok) entry?.resolve();
+        if (message.ok) entry?.resolve(message.session);
         else entry?.reject(new Error(`synchronization barrier failed: ${(message.error ?? '').trim().slice(-500)}`));
       }, () => child.kill());
       child.stderr.resume();
@@ -154,15 +162,19 @@ export class SyncBarriers {
     return worker;
   }
 
-  private async flush(userId: string, sync: string, path: string): Promise<void> {
+  /** With `list`, also returns the session status read after the flush. */
+  private async flush(userId: string, sync: string, path: string, list = false): Promise<string | undefined> {
     await this.hooks.prepareProject(userId, path);
     const worker = this.worker(userId);
     const child = await worker.child;
     const id = ++this.sequence;
-    await new Promise<void>((resolve, reject) => {
+    return new Promise<string | undefined>((resolve, reject) => {
       const timer = setTimeout(() => { worker.pending.delete(id); reject(new Error('synchronization barrier timed out')); }, FLUSH_TIMEOUT_MS);
-      worker.pending.set(id, { resolve: () => { clearTimeout(timer); resolve(); }, reject: error => { clearTimeout(timer); reject(error); } });
-      child.stdin.write(JSON.stringify({ id, sync }) + '\n');
+      worker.pending.set(id, {
+        resolve: session => { clearTimeout(timer); resolve(session); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
+      child.stdin.write(JSON.stringify({ id, sync, list }) + '\n');
     });
   }
 }

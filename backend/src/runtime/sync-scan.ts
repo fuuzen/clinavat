@@ -7,6 +7,7 @@ const OUTPUT_LIMIT = 64 * 1024 * 1024;
 const MIN_ENTRY_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 15;
 const MAX_PRUNED_PATHS = 2000;
+const MAX_LINKS = 200;
 
 export interface SyncScanEntry {
   path: string;
@@ -17,11 +18,24 @@ export interface SyncScanEntry {
   tracked: boolean | null;
 }
 
+/**
+ * A symbolic link Mutagen will skip. `project`: an absolute target inside the project; `workspace`: an absolute
+ * target under Clinavat's workspace path, left by a build in an earlier project; `outside`: a target outside the
+ * project; `invalid`: an empty target, or one with a colon or backslash.
+ */
+export interface SyncScanLink {
+  path: string;
+  target: string;
+  kind: 'project' | 'workspace' | 'outside' | 'invalid';
+}
+
 export interface SyncScan {
   remotePath: string;
   totalBytes: number;
   totalFiles: number;
   entries: SyncScanEntry[];
+  links: SyncScanLink[];
+  linkCount: number;
   truncated: boolean;
 }
 
@@ -134,11 +148,27 @@ function ancestors(path: string): string[] {
   return result;
 }
 
+// Mirrors Mutagen's portable symbolic link checks, which accept only relative targets that stay inside the project.
+function unsyncableLink(path: string, target: string, remoteRoot: string, workspaceDir: string): SyncScanLink['kind'] | undefined {
+  if (!target || target.includes(':') || target.includes('\\')) return 'invalid';
+  if (target.startsWith('/')) {
+    if (target === remoteRoot || target.startsWith(`${remoteRoot}/`)) return 'project';
+    return target.startsWith(`${workspaceDir}/`) ? 'workspace' : 'outside';
+  }
+  let depth = path.split('/').length - 1;
+  for (const part of target.split('/')) {
+    if (part === '..') { if (--depth < 0) return 'outside'; }
+    else if (part && part !== '.') depth++;
+  }
+  return undefined;
+}
+
 function findPattern(path: string): string {
   return `./${path.replace(/\/$/, '').replace(/[\\*?[\]]/g, '\\$&')}`;
 }
 
-// Lists remote file sizes once, before the first sync, so users can exclude the largest outputs.
+// Lists remote file sizes and symbolic links once, before the first sync, so users can exclude the largest outputs
+// and see which links will not sync.
 export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager, userId: string, host: DevHost, remotePath: string, rules: string): Promise<SyncScan> {
   assertRemotePath(remotePath);
   const policy = await loadSyncPolicy(config, ssh, userId, host, remotePath, rules);
@@ -152,25 +182,33 @@ export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager,
     `cd -- ${shellQuote(policy.remotePath)} || exit`,
     `command -v gzip >/dev/null && command -v base64 >/dev/null || { echo '远端缺少 gzip 或 base64' >&2; exit 3; }`,
     `find . -maxdepth 0 -printf '' 2>/dev/null || { echo '远端 find 不支持 -printf，需要 GNU findutils' >&2; exit 3; }`,
-    `find . \\( ${prunes} \\) -prune -o -type f -printf '%s\\t%P\\0' 2>/dev/null | head -c ${OUTPUT_LIMIT} | gzip -1c | base64`,
+    `find . \\( ${prunes} \\) -prune -o -type f -printf 'f\\0%s\\0%P\\0' -o -type l -printf 'l\\0%l\\0%P\\0' 2>/dev/null | head -c ${OUTPUT_LIMIT} | gzip -1c | base64`,
   ].join('\n'), 180_000, 64 * 1024 * 1024);
   if (result.code !== 0) throw new Error(`远端体积扫描失败：${result.stderr.trim() || `退出码 ${result.code}`}`);
   const raw = gunzipSync(Buffer.from(result.stdout, 'base64'));
   const truncated = raw.length >= OUTPUT_LIMIT;
-  const records = raw.toString('utf8').split('\0');
-  // The trailing element is empty, or a partial record when the listing was cut off.
-  records.pop();
+  // Each record is three NUL-terminated fields: type, size or link target, and path.
+  const fields = raw.toString('utf8').split('\0');
+  // The trailing element is empty, or part of a record when the listing was cut off.
+  const recordCount = Math.floor((fields.length - 1) / 3);
 
   const matcher = new IgnoreMatcher(policy.ignores);
   const directories = new Map<string, { bytes: number; files: number }>();
   const largeFiles: { path: string; bytes: number }[] = [];
+  const links: SyncScanLink[] = [];
+  let linkCount = 0;
   let totalBytes = 0;
   let totalFiles = 0;
-  for (const record of records) {
-    const tab = record.indexOf('\t');
-    const bytes = Number(record.slice(0, tab));
-    const path = record.slice(tab + 1);
-    if (tab < 0 || !Number.isFinite(bytes) || !path || matcher.ignored(path)) continue;
+  for (let record = 0; record < recordCount; record++) {
+    const [type, value, path] = fields.slice(record * 3, record * 3 + 3) as [string, string, string];
+    if (!path || matcher.ignored(path)) continue;
+    if (type === 'l') {
+      const kind = unsyncableLink(path, value, policy.remotePath, config.workspaceDir);
+      if (kind && ++linkCount <= MAX_LINKS) links.push({ path, target: value, kind });
+      continue;
+    }
+    const bytes = Number(value);
+    if (type !== 'f' || !Number.isFinite(bytes)) continue;
     totalBytes += bytes;
     totalFiles++;
     if (bytes >= MIN_ENTRY_BYTES) largeFiles.push({ path, bytes });
@@ -208,7 +246,7 @@ export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager,
     entries.push(entry);
     if (entry.type === 'directory') chosen.add(entry.path);
   }
-  return { remotePath: policy.remotePath, totalBytes, totalFiles, entries, truncated };
+  return { remotePath: policy.remotePath, totalBytes, totalFiles, entries, links, linkCount, truncated };
 }
 
 export function assertIgnorePath(path: string): void {

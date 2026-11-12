@@ -1,9 +1,9 @@
-import { AlertCircle, Check, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Check, X } from "lucide-react";
 
 export interface Notice {
   id: number;
   content: string;
-  kind: "error" | "success";
+  kind: "error" | "warning" | "success";
 }
 
 export default function AppNotices({ notices, onDismiss }: {
@@ -14,7 +14,7 @@ export default function AppNotices({ notices, onDismiss }: {
     <div className="notices" aria-live="polite">
       {notices.map((notice) => (
         <div key={notice.id} className={`notice notice-${notice.kind}`}>
-          {notice.kind === "error" ? <AlertCircle size={17} /> : <Check size={17} />}
+          {notice.kind === "error" ? <AlertCircle size={17} /> : notice.kind === "warning" ? <AlertTriangle size={17} /> : <Check size={17} />}
           <span>{notice.content}</span>
           <button className="icon-button" onClick={() => onDismiss(notice.id)} aria-label="关闭通知">
             <X size={14} />
