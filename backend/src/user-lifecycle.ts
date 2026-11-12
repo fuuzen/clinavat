@@ -57,7 +57,7 @@ async function reclaim(context: Context, user: User, remove: boolean): Promise<v
   const projects = store.all<Project>('SELECT * FROM projects WHERE user_id=?', user.id);
   for (const project of projects) {
     connections.revokeResource(`project:${project.id}`);
-    if (remove) await workspaces.remove(project, true);
+    if (remove) await workspaces.remove(project);
     else if (project.execution_mode !== 'local') {
       await workspaces.pause(project);
       store.run("UPDATE projects SET sync_status='PAUSED' WHERE id=?", project.id);

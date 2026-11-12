@@ -153,6 +153,9 @@ export class Store {
     this.addColumn('sessions', 'archived_at', 'TEXT');
     // A suspended user keeps every record but can neither sign in nor hold slots, sync or machines.
     this.addColumn('users', 'suspended_at', 'TEXT');
+    // Sync ignore rules the user maintains through Clinavat. NULL marks a project from before they moved here,
+    // which imports its remote .clinavatignore once before it next syncs.
+    this.addColumn('projects', 'sync_rules', 'TEXT');
     // Where a turn ends in the CLI's own history: Claude's last assistant message, Codex's last native turn.
     // Copied turns of a branch keep their source's native session, whose history up to them is the same.
     this.addColumn('session_turns', 'native_ref', 'TEXT');

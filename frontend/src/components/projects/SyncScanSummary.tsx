@@ -51,7 +51,7 @@ export default function SyncScanSummary({
         <p>未发现超过 1 MB 的目录或文件，可直接创建。</p>
       )}
       <p className="form-hint">
-        勾选的路径将写入远端项目根目录的 .clinavatignore（不存在时自动创建），不再同步到号池机；之后可编辑该文件并「立即同步」生效。
+        勾选的路径会加入本项目的同步排除规则，不再同步到号池机；之后可在工作区底部的「排除规则」中修改。
         {scan.truncated && "文件过多，统计只覆盖了部分文件。"}
       </p>
     </div>

@@ -6,6 +6,7 @@ import {
   FolderSync,
   GitBranch,
   GitCompareArrows,
+  ListFilter,
   LoaderCircle,
   RefreshCw,
   TerminalSquare,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { api, errorText, formatBytes, post } from "../api";
 import type { FileEntry, GitState, Project, ProjectUsage } from "../types";
+import SyncRulesDialog from "./projects/SyncRulesDialog";
 import FileBrowser from "./workspace/FileBrowser";
 import UploadStatus from "./workspace/UploadStatus";
 import { useUploads } from "./workspace/useUploads";
@@ -43,6 +45,7 @@ export default function Inspector({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const projectId = project?.id;
@@ -57,7 +60,10 @@ export default function Inspector({
       // Disk usage is informational; failures leave the footer without it.
     }
   }, [projectId]);
-  useEffect(() => setUsage(null), [projectId]);
+  useEffect(() => {
+    setUsage(null);
+    setRulesOpen(false);
+  }, [projectId]);
   useEffect(() => {
     void loadUsage();
   }, [loadUsage, refresh, project?.sync_status]);
@@ -317,19 +323,25 @@ export default function Inspector({
           {(usage || showSyncAction) && (
             <footer className="inspector-footer">
               {usage && (
-                <span
-                  className="inspector-usage"
-                  title="号池机上本项目同步镜像占用的磁盘空间；备份为排除规则变化后保留的旧镜像，位于数据目录 backups/workspaces/"
-                >
+                <span className="inspector-usage" title="号池机上本项目同步镜像占用的磁盘空间">
                   镜像 {formatBytes(usage.mirrorBytes ?? 0)}
-                  {usage.backupBytes > 0 && ` · 备份 ${formatBytes(usage.backupBytes)}`}
                 </span>
+              )}
+              {project.execution_mode !== "local" && (
+                <button
+                  disabled={syncing || project.sync_status === "CREATING"}
+                  onClick={() => setRulesOpen(true)}
+                  title={project.sync_status === "CREATING" ? "同步完成后可用" : "查看和修改本项目的同步排除规则"}
+                >
+                  <ListFilter size={12} />
+                  排除规则
+                </button>
               )}
               {showSyncAction && (
                 <button
                   disabled={syncing || project.sync_status === "CREATING"}
                   onClick={() => void sync()}
-                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : project.sync_status === "CREATING" ? "首次同步完成后可用" : "强制同步"}
+                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : project.sync_status === "CREATING" ? "同步完成后可用" : "强制同步"}
                 >
                   {syncing ? (
                     <LoaderCircle size={12} className="spin" />
@@ -344,6 +356,9 @@ export default function Inspector({
                 </button>
               )}
             </footer>
+          )}
+          {rulesOpen && project && (
+            <SyncRulesDialog project={project} onClose={() => setRulesOpen(false)} onSaved={onRefresh} />
           )}
         </>
       )}

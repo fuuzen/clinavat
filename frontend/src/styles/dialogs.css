@@ -419,3 +419,7 @@
   font-weight: 500;
   color: var(--text);
 }
+.sync-rules-editor { min-height: 180px; font: 12px/1.6 var(--mono); resize: vertical; tab-size: 2; }
+.sync-rules-defaults { font-size: 11px; color: var(--muted); }
+.sync-rules-defaults summary { cursor: pointer; }
+.sync-rules-defaults code { display: block; margin-top: 6px; font-family: var(--mono); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }

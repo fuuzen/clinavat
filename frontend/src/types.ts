@@ -284,7 +284,12 @@ export interface SyncProgress {
 
 export interface ProjectUsage {
   mirrorBytes: number | null;
-  backupBytes: number;
+}
+
+export interface SyncRules {
+  rules: string;
+  /** Built-in patterns that apply to every project, in addition to the project's own rules. */
+  defaults: string[];
 }
 
 export interface GitState {

@@ -255,7 +255,7 @@ export default function Chat(props: Props) {
           ? "此对话原选槽位已不可访问，请选择同引擎的其他授权槽位。"
           : "请选择已获授权的账号槽位；没有可用账号时请联系管理员。"
     : project?.sync_status === "CREATING"
-      ? "项目正在进行首次同步，完成后即可发送任务。"
+      ? "项目正在同步，完成后即可发送任务。"
     : !syncReady
       ? project?.execution_mode === "local"
         ? "本机项目目录不可用。恢复目录及其访问权限后，请在工作区点击「检查目录」。"

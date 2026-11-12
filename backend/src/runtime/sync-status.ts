@@ -113,6 +113,33 @@ export function parseSyncStatus(stdout: string): { status: 'WATCHING' | 'PAUSED'
   return { status, detail };
 }
 
+/**
+ * Reasons the mirror may still differ from the remote. Scan problems on the remote are not among them:
+ * they concern entries the mirror never received, and are often what a rule change is meant to exclude.
+ */
+export function syncBlockers(stdout: string): string[] {
+  const session = readSession(stdout);
+  const blockers: string[] = [];
+  if (session.paused) blockers.push('同步已暂停');
+  else if (session.status !== 'watching') blockers.push(`同步尚未完成：${statusDescriptions[session.status] ?? compact(session.status)}`);
+  if (!session.alpha.connected || !session.beta.connected) blockers.push('同步两端未全部连接');
+  if (session.lastError) blockers.push(`同步错误：${compact(session.lastError)}`);
+  const conflicts = (session.conflicts?.length ?? 0) + (session.excludedConflicts ?? 0);
+  if (conflicts) blockers.push(`两端有 ${conflicts} 处文件冲突`);
+  const problems = [
+    ...(session.beta.scanProblems ?? []).map(problem => ['镜像（beta） 扫描', problem] as const),
+    ...(session.alpha.transitionProblems ?? []).map(problem => ['远端（alpha） 应用变更', problem] as const),
+    ...(session.beta.transitionProblems ?? []).map(problem => ['镜像（beta） 应用变更', problem] as const),
+  ];
+  for (const [stage, problem] of problems.slice(0, 8)) {
+    blockers.push(`${stage} ${compact(problem.path || '.', 200)}：${compact(problem.error || '未知错误')}`);
+  }
+  const hidden = problems.length - Math.min(problems.length, 8) + (session.beta.excludedScanProblems ?? 0)
+    + (session.alpha.excludedTransitionProblems ?? 0) + (session.beta.excludedTransitionProblems ?? 0);
+  if (hidden) blockers.push(`另有 ${hidden} 条问题未展示`);
+  return blockers;
+}
+
 export function summarizeSyncFailure(stdout: string): string {
   return parseSyncStatus(stdout).detail;
 }

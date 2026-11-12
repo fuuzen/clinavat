@@ -7,6 +7,7 @@ import { HttpError, type Host, type Project } from '../models.js';
 import { isValidSshHost } from '../runtime/types.js';
 import { ensureLocalHost } from '../local-host.js';
 import { localDirectories } from './local-projects.js';
+import { readLegacyRules } from '../runtime/sync-rules.js';
 import { scanSyncCandidates } from '../runtime/sync-scan.js';
 
 const identifier = z.object({ id: z.uuid() });
@@ -162,7 +163,10 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
       if (host.kind === 'local') throw new HttpError(400, '本机项目直接使用实际目录，无需同步扫描');
-      try { return await scanSyncCandidates(context.config, ssh, request.user.id, host, remotePath); }
+      try {
+        const rules = await readLegacyRules(ssh, request.user.id, host, remotePath) ?? '';
+        return await scanSyncCandidates(context.config, ssh, request.user.id, host, remotePath, rules);
+      }
       catch (error) { throw new HttpError(502, error instanceof Error ? error.message : String(error)); }
     });
   });

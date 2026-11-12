@@ -13,13 +13,15 @@ export const DEFAULT_IGNORES = [
   '*.tsbuildinfo', '.DS_Store',
 ];
 
-export const IGNORE_FILE = '.clinavatignore';
-export const IGNORE_FILE_LIMIT = 65536;
-
 export interface SyncPolicy {
   remotePath: string; ignores: string[]; archivePaths: string[]; fingerprint: string;
   // Untracked paths reported by Git; null outside Git work trees. Directories end with '/'.
   untracked: string[] | null;
+}
+
+/** Rules from the user's text: one Mutagen pattern per line, with blank lines and '#' comments skipped. */
+export function ruleLines(rules: string): string[] {
+  return rules.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
 }
 
 export function literalIgnore(path: string): string {
@@ -31,7 +33,7 @@ function inside(parent: string, child: string): boolean {
   return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
-export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, userId: string, host: DevHost, remotePath: string): Promise<SyncPolicy> {
+export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, userId: string, host: DevHost, remotePath: string, rules: string): Promise<SyncPolicy> {
   const dataRoot = await realpath(config.dataDir);
   const token = randomUUID();
   const marker = join(dataRoot, `.sync-origin-${token}`);
@@ -43,7 +45,6 @@ export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, use
       `printf '%s\\0' "$(pwd -P)"`,
       `if [ "$(cat -- ${shellQuote(marker)} 2>/dev/null)" = ${shellQuote(token)} ]; then printf 'same-host'; fi`,
       `printf '\\0'`,
-      `if [ -f ${IGNORE_FILE} ]; then head -c ${IGNORE_FILE_LIMIT + 1} -- ${IGNORE_FILE} || exit; fi; printf '\\0'`,
       `if command -v git >/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,
       `  printf 'git\\0'`,
       `  git --no-optional-locks -c status.renames=false status --porcelain=v1 --ignored=matching --untracked-files=normal -z || exit`,
@@ -53,15 +54,14 @@ export async function loadSyncPolicy(config: RuntimeConfig, ssh: SshManager, use
     output = result.stdout;
   } finally { await rm(marker, { force: true }); }
 
-  const [remoteRoot, sameHost, customRules = '', git, ...gitEntries] = output.split('\0');
+  const [remoteRoot, sameHost, git, ...gitEntries] = output.split('\0');
   if (!remoteRoot?.startsWith('/')) throw new Error('无法确定远端项目的真实目录');
-  if (Buffer.byteLength(customRules) > IGNORE_FILE_LIMIT) throw new Error(`${IGNORE_FILE} 超过 64 KiB`);
   const ignores = [...DEFAULT_IGNORES];
   // Matching mode traverses untracked parents too, while collapsing explicitly ignored output directories.
   const gitIgnored = gitEntries.filter(entry => entry.startsWith('!! ')).map(entry => entry.slice(3));
   const archivePaths = [...gitIgnored];
   ignores.push(...gitIgnored.sort().map(literalIgnore));
-  ignores.push(...customRules.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')));
+  ignores.push(...ruleLines(rules));
   if (sameHost) {
     if (inside(dataRoot, remoteRoot)) throw new Error('不能将平台运行数据或已有镜像创建为项目，请选择源码目录');
     if (inside(config.workspaceDir, remoteRoot)) throw new Error('不能将号池机本地镜像当成远端源码目录');

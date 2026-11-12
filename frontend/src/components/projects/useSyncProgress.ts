@@ -4,7 +4,7 @@ import type { Project, SyncProgress } from "../../types";
 
 const pollInterval = 2000;
 
-/** Polls first-sync progress of projects still being created, and announces each one that becomes ready. */
+/** Polls progress of projects whose sync is being set up, and announces each one that becomes ready. */
 export function useSyncProgress(
   projects: Project[] | undefined,
   notify: (content: string, kind?: "error" | "success") => void,
@@ -42,7 +42,7 @@ export function useSyncProgress(
     // Failures arrive as error events from the server with the reason; only completion is announced here.
     for (const project of projects) {
       if (previous?.get(project.id) === "CREATING" && project.sync_status === "WATCHING")
-        notify(`项目「${project.name}」首次同步完成，可以开始工作了`, "success");
+        notify(`项目「${project.name}」同步完成，可以开始工作了`, "success");
     }
   }, [projects, notify]);
   return progress;

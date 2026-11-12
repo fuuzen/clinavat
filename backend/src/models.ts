@@ -29,6 +29,7 @@ export interface Project {
   local_path: string; sync_name: string; sync_status: string; created_at: string;
   path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
+  sync_rules: string | null;
 }
 export interface Session {
   id: string; project_id: string; user_id: string; engine: 'claude' | 'codex'; slot_id: string | null;

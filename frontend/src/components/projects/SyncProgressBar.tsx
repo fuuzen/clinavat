@@ -13,13 +13,13 @@ function progressDetail(progress: SyncProgress) {
 
 export default function SyncProgressBar({ progress, compact = false }: { progress?: SyncProgress; compact?: boolean }) {
   const ratio = progress?.ratio ?? null;
-  const description = progress?.description || "正在准备首次同步";
+  const description = progress?.description || "正在准备同步";
   const detail = progress ? progressDetail(progress) : "";
   return (
     <div
       className={`sync-progress${compact ? " sync-progress-compact" : ""}`}
       role="progressbar"
-      aria-label={`首次同步：${description}`}
+      aria-label={`项目同步：${description}`}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={ratio === null ? undefined : Math.floor(ratio * 100)}

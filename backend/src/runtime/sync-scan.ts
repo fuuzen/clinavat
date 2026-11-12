@@ -1,6 +1,6 @@
 import { gunzipSync } from 'node:zlib';
 import { SshManager } from './ssh.js';
-import { DEFAULT_IGNORES, IGNORE_FILE, IGNORE_FILE_LIMIT, literalIgnore, loadSyncPolicy } from './sync-policy.js';
+import { DEFAULT_IGNORES, loadSyncPolicy } from './sync-policy.js';
 import { assertRemotePath, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
 
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
@@ -139,9 +139,9 @@ function findPattern(path: string): string {
 }
 
 // Lists remote file sizes once, before the first sync, so users can exclude the largest outputs.
-export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager, userId: string, host: DevHost, remotePath: string): Promise<SyncScan> {
+export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager, userId: string, host: DevHost, remotePath: string, rules: string): Promise<SyncScan> {
   assertRemotePath(remotePath);
-  const policy = await loadSyncPolicy(config, ssh, userId, host, remotePath);
+  const policy = await loadSyncPolicy(config, ssh, userId, host, remotePath, rules);
   // Pruning remotely keeps dependency trees and Git-ignored directories out of the listing.
   const names = ['.git', ...DEFAULT_IGNORES.filter(pattern => /^[^!/*?[{\\]+$/.test(pattern))];
   const prunes = [
@@ -193,7 +193,7 @@ export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager,
     ...[...directories].filter(([, usage]) => usage.bytes >= MIN_ENTRY_BYTES)
       .map(([path, usage]) => ({ path, type: 'directory' as const, ...usage, tracked: tracked(path, true) })),
     ...largeFiles.map(({ path, bytes }) => ({ path, type: 'file' as const, bytes, files: 1, tracked: tracked(path, false) })),
-  ].filter(entry => !entry.path.includes('�') && entry.path !== IGNORE_FILE)
+  ].filter(entry => !entry.path.includes('�'))
     .sort((left, right) => right.bytes - left.bytes
       || left.path.split('/').length - right.path.split('/').length
       || (left.type === right.type ? 0 : left.type === 'directory' ? -1 : 1));
@@ -215,21 +215,4 @@ export function assertIgnorePath(path: string): void {
   if (path.length > 4096 || /[\0\r\n]/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) {
     throw new Error('排除路径必须是项目内的相对路径');
   }
-}
-
-// Appends literal, root-anchored rules so that later edits by users remain ordinary text lines.
-export async function appendIgnoreRules(ssh: SshManager, userId: string, host: DevHost, remotePath: string, paths: string[]): Promise<void> {
-  if (!paths.length) return;
-  assertRemotePath(remotePath);
-  paths.forEach(assertIgnorePath);
-  const lines = [`# 由 Clinavat 在首次同步前添加（${new Date().toISOString().slice(0, 10)}）`, ...paths.map(literalIgnore)];
-  if (Buffer.byteLength(lines.join('\n')) > IGNORE_FILE_LIMIT) throw new Error(`${IGNORE_FILE} 超过 64 KiB`);
-  const file = shellQuote(IGNORE_FILE);
-  const result = await ssh.exec(userId, host, [
-    `cd -- ${shellQuote(remotePath)} || exit`,
-    `if [ -L ${file} ] || { [ -e ${file} ] && [ ! -f ${file} ]; }; then echo '${IGNORE_FILE} 必须是普通文件' >&2; exit 3; fi`,
-    `if [ -s ${file} ] && [ -n "$(tail -c 1 -- ${file})" ]; then printf '\\n' >> ${file} || exit; fi`,
-    `printf '%s\\n' ${lines.map(shellQuote).join(' ')} >> ${file}`,
-  ].join('\n'));
-  if (result.code !== 0) throw new Error(`无法写入 ${IGNORE_FILE}：${result.stderr.trim() || `退出码 ${result.code}`}`);
 }

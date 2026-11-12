@@ -34,6 +34,7 @@ export interface WorkspaceProject {
   sync_name: string;
   path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
+  sync_rules: string | null;
 }
 
 export interface CommandResult {

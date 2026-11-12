@@ -11,6 +11,8 @@ const transfers = new Map<string, Uint8Array[]>();
 const firstSyncs = new Map<string, number>();
 const firstSyncDuration = 9000;
 const firstSyncBytes = 48_600_000;
+const syncRules = new Map<string, string>();
+const demoDefaultIgnores = ["node_modules", "target", "dist", "build", ".venv", "__pycache__", "*.log", "*.zip", "/.bin", ".env", ".env.*"];
 
 // Mirrors the Hub's conditional writes: If-None-Match: * creates only, If-Match replaces only an unchanged file.
 function refusedWrite(request: Request, path: string) {
@@ -208,7 +210,16 @@ export const workspaceHandlers = [
     return ok();
   }),
   http.post("/api/projects/:id/sync", () => ok()),
-  http.get("/api/projects/:id/usage", () => HttpResponse.json({ mirrorBytes: 2_404_200, backupBytes: 0 })),
+  http.get("/api/projects/:id/sync-rules", ({ params }) =>
+    HttpResponse.json({ rules: syncRules.get(String(params.id)) ?? "", defaults: demoDefaultIgnores })),
+  http.put("/api/projects/:id/sync-rules", async ({ params, request }) => {
+    const project = findProject(params.id);
+    if (!project) return fail(404, "项目不存在");
+    const { rules } = await readBody<{ rules: string }>(request);
+    syncRules.set(project.id, rules);
+    return HttpResponse.json(project, { status: 202 });
+  }),
+  http.get("/api/projects/:id/usage", () => HttpResponse.json({ mirrorBytes: 2_404_200 })),
   http.get("/api/projects/:id/files", ({ request }) =>
     HttpResponse.json({ entries: listFiles(new URL(request.url).searchParams.get("path") || "") })),
   http.get("/api/projects/:id/file", ({ request }) => {

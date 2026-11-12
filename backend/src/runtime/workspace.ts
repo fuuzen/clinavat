@@ -1,4 +1,4 @@
-import { access, lstat, mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access, lstat, mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, childEnvironment, runCommand } from './process.js';
@@ -7,9 +7,16 @@ import { renderRemoteShell } from './remote-shell.js';
 import { prepareRemotePath, remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
-import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, type SyncProgress } from './sync-status.js';
+import { pruneChangedPaths } from './sync-rules.js';
+import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, syncBlockers, type SyncProgress } from './sync-status.js';
 import { assertHostOwner, assertIdentifier, assertRemotePath, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
+
+interface SessionSummary {
+  labels?: Record<string, string>;
+  ignore?: { paths?: string[] };
+  alpha?: { path?: string };
+}
 
 export class WorkspaceManager {
   private readonly initializations = new Map<string, Promise<void>>();
@@ -80,10 +87,10 @@ export class WorkspaceManager {
     return error instanceof Error && error.message.includes(`specification "${project.sync_name}" did not match any sessions`);
   }
 
-  private async session(project: WorkspaceProject): Promise<{ labels?: Record<string, string> } | undefined> {
+  private async session(project: WorkspaceProject): Promise<SessionSummary | undefined> {
     try {
       const result = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}']);
-      const sessions = JSON.parse(result.stdout) as { labels?: Record<string, string> }[];
+      const sessions = JSON.parse(result.stdout) as SessionSummary[];
       if (!Array.isArray(sessions) || sessions.length !== 1) throw new Error('无法识别项目同步会话');
       return sessions[0];
     }
@@ -102,8 +109,9 @@ export class WorkspaceManager {
       await this.checkLocalDirectory(project);
       return;
     }
+    if (project.sync_rules === null) throw new Error('项目排除规则尚未迁移，请重新同步');
     await this.ssh.addHost(userId, host);
-    const policy = await loadSyncPolicy(this.config, this.ssh, userId, host, project.remote_path);
+    const policy = await loadSyncPolicy(this.config, this.ssh, userId, host, project.remote_path, project.sync_rules);
     project.execution_mode = await prepareRemotePath(this.config, this.ssh, userId, host, project);
     const session = await this.session(project);
     const reuse = session?.labels?.['clinavat-policy'] === policy.fingerprint;
@@ -111,24 +119,15 @@ export class WorkspaceManager {
       await this.mutagen(project, ['sync', 'resume', project.sync_name]);
       if (reuse) await this.flush(project);
       else {
-        // Old scan errors may concern newly ignored outputs; require the transfer barrier and retain a full mirror backup.
-        await this.flushBarrier(project);
+        // No backup is kept, so the mirror carries over only from a session that has fully synced the same root.
+        const sameRoot = session.alpha?.path === policy.remotePath;
+        if (sameRoot) await this.assertSynced(project);
+        else await this.flushBarrier(project);
         await this.mutagen(project, ['sync', 'terminate', project.sync_name]);
+        if (sameRoot) await pruneChangedPaths(project.local_path, session.ignore?.paths ?? [], policy.ignores);
+        else await this.clearMirror(project);
       }
-    }
-    if (!reuse) {
-      const entries = await readdir(project.local_path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return [];
-        throw error;
-      });
-      if (entries.some(name => name !== '.bin')) {
-        const backupRoot = join(this.config.dataDir, 'backups', 'workspaces');
-        await mkdir(backupRoot, { recursive: true, mode: 0o700 });
-        // A guest keeps its mount on the moved directory otherwise, and would write into the backup.
-        await this.execution.revoke(project.user_id, [project.local_path]);
-        await rename(project.local_path, join(backupRoot, `${project.id}-${Date.now()}`));
-      }
-    }
+    } else await this.clearMirror(project);
     await mkdir(project.local_path, {recursive: true, mode: 0o700});
     await this.refreshExecutor(project, host);
     if (reuse) return;
@@ -156,6 +155,26 @@ export class WorkspaceManager {
         .then(result => summarizeSyncFailure(result.stdout)).catch(() => '');
       throw new Error(`${error instanceof Error ? error.message : String(error)}${diagnosis ? `\n${diagnosis}` : ''}`);
     }
+  }
+
+  /** Waits for a full sync cycle, then requires that the mirror holds nothing the remote lacks. */
+  async assertSynced(project: WorkspaceProject): Promise<void> {
+    await this.flushBarrier(project);
+    const result = await this.mutagen(project, ['sync', 'list', project.sync_name, '--template', '{{json .}}']);
+    const blockers = syncBlockers(result.stdout);
+    if (blockers.length) throw new Error(`同步尚未完成，镜像中可能有未同步的修改：\n${blockers.join('\n')}`);
+  }
+
+  // Without a session vouching for the mirror, the remote is the only source; a fresh session refills it.
+  private async clearMirror(project: WorkspaceProject): Promise<void> {
+    const entries = await readdir(project.local_path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    if (!entries.some(name => name !== '.bin')) return;
+    // A guest keeps its mount on the removed directory otherwise.
+    await this.execution.revoke(project.user_id, [project.local_path]);
+    await rm(project.local_path, { recursive: true, force: true });
   }
 
   async flush(project: WorkspaceProject, timeout?: number): Promise<void> {
@@ -191,8 +210,7 @@ export class WorkspaceManager {
     }
   }
 
-  /** `withBackups` also deletes the mirror backups kept after rule changes, which a deleted user leaves no use for. */
-  async remove(project: WorkspaceProject, withBackups = false): Promise<void> {
+  async remove(project: WorkspaceProject): Promise<void> {
     this.validate(project);
     // Local projects refer to source directories; removing a project never removes its source.
     if (project.execution_mode === 'local') return;
@@ -201,10 +219,6 @@ export class WorkspaceManager {
     catch (error) { if (!this.missingSession(error, project)) throw error; }
     await this.execution.revoke(project.user_id, [project.local_path]);
     await rm(project.local_path, {recursive: true, force: true});
-    if (!withBackups) return;
-    const backupRoot = join(this.config.dataDir, 'backups', 'workspaces');
-    const backups = (await readdir(backupRoot).catch(() => [] as string[])).filter(name => name.startsWith(`${project.id}-`));
-    await Promise.all(backups.map(name => rm(join(backupRoot, name), {recursive: true, force: true})));
   }
 
   /**
@@ -220,15 +234,11 @@ export class WorkspaceManager {
     });
   }
 
-  // Disk usage of the local mirror and of mirror backups kept after rule changes, in bytes.
-  async usage(project: WorkspaceProject): Promise<{ mirrorBytes: number | null; backupBytes: number }> {
+  // Disk usage of the local mirror, in bytes.
+  async usage(project: WorkspaceProject): Promise<{ mirrorBytes: number | null }> {
     this.validate(project);
-    if (project.execution_mode === 'local') return { mirrorBytes: null, backupBytes: 0 };
-    const backupRoot = join(this.config.dataDir, 'backups', 'workspaces');
-    const backups = (await readdir(backupRoot).catch(() => [] as string[]))
-      .filter(name => name.startsWith(`${project.id}-`)).map(name => join(backupRoot, name));
-    const [mirrorBytes, backupBytes] = await Promise.all([diskUsage([project.local_path]), diskUsage(backups)]);
-    return { mirrorBytes, backupBytes };
+    if (project.execution_mode === 'local') return { mirrorBytes: null };
+    return { mirrorBytes: await diskUsage([project.local_path]) };
   }
 
   private async openProjectPath(project: WorkspaceProject, path: string, directory = false): Promise<ContainedFile> {
