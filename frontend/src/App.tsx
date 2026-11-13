@@ -99,7 +99,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
-  const syncProgress = useSyncProgress(overview?.projects, notify);
+  const syncProgress = useSyncProgress(overview?.projects, notify, refresh);
   const changePermission = useSessionPermissions(setOverview, notify);
   const changeSlot = useSessionSlot(setOverview, notify);
   const changeBehavior = useSessionBehavior(setOverview, notify);

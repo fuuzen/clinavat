@@ -47,7 +47,7 @@ export class EventBus {
       responses.add(response);
       this.clients.set(request.user.id, responses);
       const unwatch = connections.watch(request.authSessionHash, () => response.end());
-      const heartbeat = setInterval(() => { if (!response.writableEnded && !response.destroyed) response.write(': heartbeat\n\n'); }, 20000);
+      const heartbeat = setInterval(() => { if (!response.writableEnded && !response.destroyed) response.write('event: heartbeat\ndata: {}\n\n'); }, 20000);
       const cleanup = () => {
         unwatch();
         clearInterval(heartbeat); responses.delete(response);

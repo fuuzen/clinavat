@@ -10,6 +10,7 @@ import { loadSiteSettings } from "./site/store";
 import type { Notice } from "./components/AppNotices";
 import type { PoolEvent, SlotUsage, ToolEvent, Turn } from "./types";
 import { receiveSlotUsage } from "./useSlotUsage";
+const streamStallTimeout = 60_000;
 interface EventOptions {
   userId?: string;
   selectedSessionRef: RefObject<string>;
@@ -42,18 +43,36 @@ export function useWorkspaceEvents({
   useEffect(() => {
     if (!userId) return;
     void refreshApprovals();
-    const source = new EventSource("/api/events", { withCredentials: true });
-    source.onopen = () => {
-      setStreamConnected(true);
-      void refresh().catch(() => {});
-      void refreshApprovals();
-      if (selectedSessionRef.current)
-        void reloadMessages(selectedSessionRef.current).catch(() => {});
-    };
-    source.onerror = () => {
-      setStreamConnected(false);
-      void refresh().catch(() => {});
-    };
+    let source: EventSource;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    // A proxy can keep the stream open while no longer forwarding it, and EventSource never notices.
+    // The server sends a heartbeat event every 20 seconds, so a silent minute means the stream has stalled.
+    function watchStall() {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        source.close();
+        setStreamConnected(false);
+        connect();
+      }, streamStallTimeout);
+    }
+    function connect() {
+      source = new EventSource("/api/events", { withCredentials: true });
+      source.onopen = () => {
+        watchStall();
+        setStreamConnected(true);
+        void refresh().catch(() => {});
+        void refreshApprovals();
+        if (selectedSessionRef.current)
+          void reloadMessages(selectedSessionRef.current).catch(() => {});
+      };
+      source.onerror = () => {
+        setStreamConnected(false);
+        void refresh().catch(() => {});
+      };
+      source.onmessage = receive;
+      source.addEventListener("heartbeat", watchStall);
+      watchStall();
+    }
     function scheduleRefresh() {
       if (refreshTimer.current) return;
       refreshTimer.current = setTimeout(() => {
@@ -61,7 +80,8 @@ export function useWorkspaceEvents({
         void refresh().catch((cause) => notify(errorText(cause)));
       }, 300);
     }
-    source.onmessage = (event) => {
+    function receive(event: MessageEvent<string>) {
+      watchStall();
       let data: PoolEvent;
       try {
         data = JSON.parse(event.data) as PoolEvent;
@@ -169,8 +189,10 @@ export function useWorkspaceEvents({
         if (current)
           void reloadMessages(selectedSessionRef.current).catch(() => {});
       }
-    };
+    }
+    connect();
     return () => {
+      clearTimeout(stallTimer);
       source.close();
       setStreamConnected(false);
       if (refreshTimer.current) {

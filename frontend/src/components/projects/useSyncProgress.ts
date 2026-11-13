@@ -8,6 +8,7 @@ const pollInterval = 2000;
 export function useSyncProgress(
   projects: Project[] | undefined,
   notify: (content: string, kind?: "error" | "success") => void,
+  refresh: () => Promise<void>,
 ) {
   const [progress, setProgress] = useState<Record<string, SyncProgress>>({});
   const creating = (projects ?? []).filter((project) => project.sync_status === "CREATING").map((project) => project.id).join(",");
@@ -19,13 +20,16 @@ export function useSyncProgress(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       const results = await Promise.all(ids.map((id) =>
-        api<SyncProgress | null>(`/projects/${id}/sync-progress`).then((result) => [id, result] as const, () => [id, null] as const)));
+        api<SyncProgress | null>(`/projects/${id}/sync-progress`).then((result) => [id, result] as const, () => [id, undefined] as const)));
       if (cancelled) return;
       setProgress((current) => {
         const next = { ...current };
         for (const [id, result] of results) if (result) next[id] = result;
         return next;
       });
+      // The server answers null once the project has left CREATING. The project event announcing it can be lost
+      // when the event stream silently stalls behind a proxy, so reload the overview instead of waiting for it.
+      if (results.some(([, result]) => result === null)) void refresh().catch(() => undefined);
       timer = setTimeout(() => void poll(), pollInterval);
     };
     void poll();
@@ -33,7 +37,7 @@ export function useSyncProgress(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [creating]);
+  }, [creating, refresh]);
   const statuses = useRef<Map<string, string>>(undefined);
   useEffect(() => {
     if (!projects) return;
