@@ -76,10 +76,24 @@ Codex 没有后台任务的控制接口；它启动的长命令可能在一轮�
 
 列表只包含网页已经支持的命令。项目自定义的 Slash Commands、skills 和插件尚未接入，输入未知命令会直接报错。
 
-## 联网
+## 联网与子智能体
+
+**联网**
 
 - **Claude Code**：开放 `WebFetch`（读取网页）和 `WebSearch`（搜索），是否需要审批按权限模式决定，与其他工具相同。`WebFetch` 从槽位虚拟机经网关出口访问网页，`WebSearch` 由 Anthropic 服务端执行。
 - **Codex**：Full access 下使用实时网页搜索（`web_search="live"`），其他模式使用 OpenAI 维护的缓存索引（`cached`），与 Codex 自身的默认值一致；缓存结果受提示注入的影响更小。
+
+**子智能体**
+
+- **Claude Code**：开放原生的 `Agent` 工具，可以使用内置子智能体（通用、Explore、Plan 等）。
+  - 子智能体默认在后台运行：本轮回复可以先结束，子智能体显示在输入框上方的「子智能体」中，可以单独停止；完成后 Claude 自动开始新一轮汇总结果，与[后台任务](#后台任务)相同。
+  - 子智能体的工具调用经过同一个 Hook 和审批，在执行过程中标注子智能体名称；它的中间文字不会进入回复。
+  - 不支持 `isolation`：`worktree` 会写入 Git 内部目录，`remote` 在 Anthropic 云端运行，都不在平台的检查范围内，这类调用会被拒绝。
+  - 项目或用户目录中的自定义子智能体（`.claude/agents/`）不会加载，因为 CLI 不读取任何 settings。`SendMessage` 未开放（它也能给本机其他会话发消息），所以停下的子智能体不能继续，需要重新启动一个。
+- **Codex**：启用 `features.multi_agent`。
+  - 子线程的命令、文件审批和提问照常显示在网页上，即使发起它的那一轮已经结束。
+  - 子线程的工具调用标注其昵称；`spawnAgent`、`wait` 等协作调用显示为 `agent.*` 工具，完成后列出各子线程的状态和结果。子线程的文字不进入回复。
+  - 仍有子线程在运行时，常驻进程不会进入空闲回收。子线程的 Token 用量按线程单独累计，计入当前对话。
 
 ## 暂停、继续与停止
 
@@ -200,7 +214,7 @@ CLI 自带的自动审核器仍可能拒绝操作。YOLO 不会生成审批卡�
 
 **Claude Code**：
 
-- 使用隔离的 settings、固定的工具白名单（`Bash`、`Read`、`Edit`、`Write`、`Glob`、`Grep`、`WebFetch`、`WebSearch`、`AskUserQuestion`、`ExitPlanMode`）和 `PreToolUse` Hook。
+- 使用隔离的 settings、固定的工具白名单（`Bash`、`Read`、`Edit`、`Write`、`Glob`、`Grep`、`WebFetch`、`WebSearch`、`Agent`、`AskUserQuestion`、`ExitPlanMode`）和 `PreToolUse` Hook。
 - Hook 检查路径是否在项目内，并把 Bash 命令改写为经 `remote-shell` 执行，然后仍由 CLI 判断权限；CLI 需要确认时，通过 stream-json 控制协议在网页上显示审批。
 - Full access 使用 `bypassPermissions`，其他模式保留 `--restricted`。
 - 一轮以 CLI 的 `result` 为结束，最终回答此时确定；进程继续常驻，见[常驻进程与空闲回收](#常驻进程与空闲回收)。后台任务通过 `task_*` 和 `background_tasks_changed` 事件跟踪，用控制协议的 `stop_task` 停止；任务结束后 CLI 自行开始的一轮由平台记录为新的执行轮次。

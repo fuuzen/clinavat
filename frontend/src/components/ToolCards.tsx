@@ -15,6 +15,7 @@ export function ToolCard({ tool }: { tool: ToolEvent }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Terminal size={14} />
         <strong>{tool.name}</strong>
+        {tool.agent && <small className="tool-agent" title={`子智能体：${tool.agent}`}>{tool.agent}</small>}
         <span>{tool.status || "工具调用"}</span>
         <ChevronDown size={14} className={open ? "rotate" : ""} />
       </button>

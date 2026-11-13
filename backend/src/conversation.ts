@@ -6,7 +6,8 @@ export interface ActivityItem {
   kind: 'text' | 'reasoning' | 'tool';
   text?: string;
   final?: boolean;
-  tool?: { id: string; name: string; input?: unknown; output?: string; status?: string };
+  /** `agent` names the subagent that made the call; absent for the conversation's own agent. */
+  tool?: { id: string; name: string; input?: unknown; output?: string; status?: string; agent?: string };
 }
 
 export interface ConversationTurn {
@@ -78,6 +79,7 @@ export class ConversationStore {
         input: payload.input ?? previous?.input,
         output: output === undefined ? undefined : tail(output, outputLimit),
         status: typeof payload.status === 'string' ? payload.status : previous?.status,
+        agent: typeof payload.agent === 'string' ? payload.agent : previous?.agent,
       };
       const item: ActivityItem = { id, kind: 'tool', tool };
       if (existing) Object.assign(existing, item);

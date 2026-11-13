@@ -510,3 +510,15 @@
   border: 1px solid var(--warning-line);
   border-radius: 5px;
 }
+.tool-card > button .tool-agent {
+  min-width: 0;
+  max-width: 40%;
+  padding: 1px 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}

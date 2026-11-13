@@ -9,6 +9,7 @@ import { projectInstructions } from './project-instructions.js';
 import { ClaudeQuotaTracker } from './claude-quota.js';
 import { ClaudeUsageMeter } from '../token-usage/meters.js';
 import { parseClaudeUsage } from '../accounts/usage-parsers.js';
+import { ClaudeSubagents } from './claude-subagents.js';
 import type { AgentRun, RunServices, RunTask } from './types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
@@ -50,7 +51,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     '--setting-sources', '', '--settings', JSON.stringify(settings),
     '--append-system-prompt', projectInstructions(services.context.project, 'claude') + (permissionMode === 'plan'
       ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
-    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,AskUserQuestion,ExitPlanMode',
+    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
@@ -85,7 +86,10 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   let closing = false;
   let exitGrace: NodeJS.Timeout | undefined;
   let lastTaskSummary = '';
+  // Only a finished task makes the CLI begin a turn by itself; a background subagent's requests must not.
+  let taskNotified = false;
   let tasks: RunTask[] = [];
+  const subagents = new ClaudeSubagents();
   // Steering sent while a turn was ending starts its own turn; its message already exists.
   const pendingSteers = new Map<string, string>();
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
@@ -121,6 +125,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   };
   const lines = readJsonLines(child.stdout, (event) => {
     if (control.handle(event)) return;
+    const agent = subagents.source(event);
     if (event.type === 'command_lifecycle' && event.state === 'started' && !turnActive && pendingSteers.has(event.command_uuid)) {
       turnActive = true;
       services.automaticTurn({ messageId: pendingSteers.get(event.command_uuid)! });
@@ -135,10 +140,14 @@ export async function startClaude(services: RunServices, prompt: string, signal?
       }));
       services.activityChanged();
     }
-    if (event.type === 'system' && event.subtype === 'task_notification') lastTaskSummary = String(event.summary ?? '');
+    if (event.type === 'system' && event.subtype === 'task_notification') {
+      lastTaskSummary = String(event.summary ?? '');
+      taskNotified = true;
+    }
     // After a background task the CLI may emit an empty init/result pair first; only a model request is a real turn.
-    if (event.type === 'system' && event.subtype === 'status' && event.status === 'requesting' && !turnActive) {
+    if (event.type === 'system' && event.subtype === 'status' && event.status === 'requesting' && !turnActive && taskNotified) {
       turnActive = true;
+      taskNotified = false;
       services.automaticTurn({ summary: lastTaskSummary });
     }
     if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event',
@@ -150,7 +159,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         terminateProcess(child);
       });
     }
-    if (event.type === 'stream_event') {
+    if (event.type === 'stream_event' && !agent) {
       const nested = event.event;
       if (nested?.type === 'message_start') {
         messageId = String(nested.message?.id || randomUUID());
@@ -185,7 +194,13 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         services.event('activity', { id, kind: 'text', text, append: true });
       }
     }
-    if (event.type === 'assistant') {
+    if (event.type === 'assistant' && agent) {
+      tokenUsage.observeAssistant(event);
+      for (const entry of Array.isArray(event.message?.content) ? event.message.content : []) {
+        if (entry.type === 'tool_use') services.event('tool', { id: entry.id, tool: entry.name, input: entry.input, status: 'running', agent });
+      }
+    }
+    if (event.type === 'assistant' && !agent) {
       quota.observeAssistant(event);
       tokenUsage.observeAssistant(event);
       if (typeof event.uuid === 'string') lastAssistantUuid = event.uuid;
@@ -207,6 +222,7 @@ export async function startClaude(services: RunServices, prompt: string, signal?
         services.event('activity', { id, kind: 'text', text });
       }
       for (const entry of contents) {
+        if (entry.type === 'tool_use' && entry.name === 'Agent') subagents.launched(entry.id, entry.input);
         if (entry.type === 'tool_use') services.event('tool', { id: entry.id, tool: entry.name, input: entry.input, status: 'running' });
       }
     }

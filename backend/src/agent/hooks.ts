@@ -95,11 +95,16 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
       const approved = await services.approve(tool, args);
       return decision(approved.decision === 'allow', approved.reason ?? '搜索审批');
     }
-    if (['WebFetch', 'WebSearch'].includes(tool)) {
+    if (['WebFetch', 'WebSearch', 'Agent'].includes(tool)) {
+      // A worktree agent writes Git internals, and a remote one runs in Anthropic's cloud, beyond these checks.
+      if (tool === 'Agent' && args.isolation !== undefined) return decision(false, '当前工作台不支持 isolation，请在当前项目中直接运行子智能体');
+      if (tool === 'Agent' && args.cwd !== undefined) await workspacePath(root, path.resolve(cwd, String(args.cwd)));
       if (!yolo) return nativeDecision();
       const approved = await services.approve(tool, args);
-      return decision(approved.decision === 'allow', approved.reason ?? '联网审批');
+      return decision(approved.decision === 'allow', approved.reason ?? '工具审批');
     }
+    // A subagent delivers its report to the conversation through this tool; it touches nothing else.
+    if (tool === 'SubagentHandback') return nativeDecision();
     return decision(false, `当前工作台未启用工具 ${tool}`);
   } catch (error) {
     return decision(false, error instanceof Error ? error.message : '工具路径或审批校验失败');

@@ -1,4 +1,4 @@
-import { Clock3, LoaderCircle, Square, TerminalSquare, X } from "lucide-react";
+import { Bot, Clock3, LoaderCircle, Square, TerminalSquare, X } from "lucide-react";
 import type { SessionRuntime } from "../../types";
 
 interface Props {
@@ -28,16 +28,20 @@ export default function RuntimeStrip({ runtime, onCancelQueued, onStopTask }: Pr
           </button>
         </div>
       ))}
-      {runtime.tasks.map((task) => (
-        <div key={task.id} className="runtime-item">
-          <TerminalSquare size={13} aria-hidden="true" />
-          <span className="runtime-item-label">后台任务</span>
-          <span className="runtime-item-text" title={task.description}>{task.description || task.id}</span>
-          <button type="button" onClick={() => onStopTask(task.id)} title="停止后台任务" aria-label={`停止后台任务 ${task.description || task.id}`}>
-            <Square size={11} fill="currentColor" aria-hidden="true" />
-          </button>
-        </div>
-      ))}
+      {runtime.tasks.map((task) => {
+        // Claude runs subagents in the background by default; they show as tasks of an agent type.
+        const label = task.type.includes("agent") ? "子智能体" : "后台任务";
+        return (
+          <div key={task.id} className="runtime-item">
+            {task.type.includes("agent") ? <Bot size={13} aria-hidden="true" /> : <TerminalSquare size={13} aria-hidden="true" />}
+            <span className="runtime-item-label">{label}</span>
+            <span className="runtime-item-text" title={task.description}>{task.description || task.id}</span>
+            <button type="button" onClick={() => onStopTask(task.id)} title={`停止${label}`} aria-label={`停止${label} ${task.description || task.id}`}>
+              <Square size={11} fill="currentColor" aria-hidden="true" />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

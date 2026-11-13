@@ -168,6 +168,8 @@ export interface ToolEvent {
   input?: unknown;
   output?: string;
   status?: string;
+  /** The subagent that made the call; absent for the conversation's own agent. */
+  agent?: string;
 }
 
 export interface ActivityItem {

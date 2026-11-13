@@ -5,6 +5,7 @@ import { codexPermissions, createCodexRequests } from './codex-requests.js';
 import { projectInstructions } from './project-instructions.js';
 import { roleInstructions } from './session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './codex-goal.js';
+import { CodexSubagents } from './codex-subagents.js';
 import type { AgentRun, RunServices } from './types.js';
 import { parseCodexRead } from '../accounts/usage-parsers.js';
 
@@ -86,6 +87,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     pauseWaiter = undefined;
     turnAbort.abort();
     requests.close();
+    subagents.close();
     signal.removeEventListener('abort', abort);
     if (unfinishedTurn && turnActive) {
       const output = finalAnswer(true);
@@ -104,14 +106,20 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     if (message.method === 'item/completed' && params.item?.type === 'commandExecution' && runningCommands.delete(String(params.item.id))) {
       services.activityChanged();
     }
+    const answer = async (handler: typeof requests) => {
+      if (await handler.handle(message)) return;
+      rpc.send({ id: message.id, error: { code: -32601, message: '当前工作台不支持此交互请求，请通过对话向用户说明。' } });
+    };
+    const source = String(params.threadId ?? params.thread?.id ?? '');
+    if (threadId && source && source !== threadId) {
+      if (message.id !== undefined && message.method) await answer(subagents.requests);
+      else subagents.observe(message);
+      return;
+    }
     // Usage of an earlier turn can arrive late and still counts.
     if (message.method === 'thread/tokenUsage/updated') services.recordTokenUsage({ codex: { model: usageModel, tokenUsage: params.tokenUsage } });
     if (params.turnId && turnId && params.turnId !== turnId && message.method !== 'turn/started') return;
-    if (message.id !== undefined && message.method) {
-      if (await requests.handle(message)) return;
-      rpc.send({ id: message.id, error: { code: -32601, message: '当前工作台不支持此交互请求，请通过对话向用户说明。' } });
-      return;
-    }
+    if (message.id !== undefined && message.method) { await answer(requests); return; }
     if (message.method === 'serverRequest/resolved') requests.resolved(params.requestId);
     if (message.method === 'account/rateLimits/updated') services.config.usage?.observe(services.context.slot, 'codex-event',
       params, services.context.account_identity);
@@ -139,9 +147,8 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       const item = params.item;
       if (item && typeof item === 'object') requests.record(item);
       if (item?.type === 'agentMessage' && typeof item.phase === 'string') phases.set(String(item.id), item.phase);
-      if (item && ['webSearch', 'commandExecution', 'fileChange', 'mcpToolCall'].includes(item.type)) {
-        services.event('tool', { id: item.id, tool: item.type === 'fileChange' ? 'apply_patch' : item.type, input: item.command ?? item.action ?? item.arguments ?? item.changes, status: 'running' });
-      }
+      const tool = item && typeof item === 'object' ? subagents.toolEvent(item, false) : undefined;
+      if (tool) services.event('tool', tool);
     }
     if (message.method === 'item/completed') {
       const item = params.item;
@@ -162,12 +169,10 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
           if (typeof text === 'string') services.event('activity', { id: `${item.id}:summary:${index}`, kind: 'reasoning', text });
         });
       }
-      if (item && ['webSearch', 'commandExecution', 'fileChange', 'mcpToolCall'].includes(item.type)) {
-        services.event('tool', { id: item.id, tool: item.type === 'fileChange' ? 'apply_patch' : item.type, input: item.command ?? item.action ?? item.arguments ?? item.changes,
-          output: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput.slice(0, 128 * 1024) : undefined,
-          status: item.status === 'declined' ? 'declined'
-            : ['cancelled', 'canceled', 'interrupted'].includes(item.status) ? 'interrupted'
-            : item.status === 'failed' || item.exitCode > 0 ? 'failed' : 'completed' });
+      if (item && typeof item === 'object') {
+        subagents.observeCall(item);
+        const tool = subagents.toolEvent(item, true);
+        if (tool) services.event('tool', tool);
       }
     }
     if (message.method === 'turn/diff/updated') services.event('tool', { id: 'turn-diff', tool: 'diff', output: params.diff, status: 'completed' });
@@ -227,6 +232,9 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   const makeRequests = () => createCodexRequests(services, AbortSignal.any([signal, turnAbort.signal]),
     message => rpc.send(message), () => !finished && !stopped);
   let requests = makeRequests();
+  // A sub-agent can still ask for approval after the turn that spawned it has ended.
+  const subagents = new CodexSubagents(services, createCodexRequests(services, signal, message => rpc.send(message),
+    () => !finished && !stopped), () => usageModel);
   let requestTurn: (input: { type: 'text'; text: string }[]) => Promise<any> = async () => { throw new Error('Codex 尚未就绪'); };
   const abort = () => {
     stopped = true;
@@ -258,7 +266,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     const shared = { cwd: root, sandbox: permissions.sandbox, approvalPolicy: permissions.approvalPolicy,
       approvalsReviewer: permissions.approvalsReviewer, developerInstructions: projectInstructions(services.context.project, 'codex') + roleInstructions(selection.role_preset),
       ...(model ? { model } : {}),
-      config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': false, 'features.goals': true,
+      config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': true, 'features.goals': true,
         ...(effort ? { model_reasoning_effort: effort } : {}) } };
     const nativeId = services.context.session.native_session_id;
     // Each slot indexes the shared history through its own path; native resume resolves that path by ID.
@@ -397,7 +405,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       if (activeTurnId) await rpc.request('turn/interrupt', { threadId, turnId: activeTurnId }, 10000);
       else endTurn();
     }),
-    isIdle: () => !turnActive && !runningCommands.size,
+    isIdle: () => !turnActive && !runningCommands.size && !subagents.busy(),
     close: () => { void finish(); },
     tasks: () => [],
     stopTask: async () => { throw new Error('Codex 不提供后台任务控制'); },
