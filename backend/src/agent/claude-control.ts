@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { RunServices } from './types.js';
+import type { AgentPrompt, RunServices } from './types.js';
 import { answerClaudeQuestions } from './claude-questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
 import { questionTimeoutRange } from './session-settings.js';
@@ -33,7 +33,7 @@ export class ClaudeControl {
     private onError: (error: Error) => void,
   ) {}
 
-  async start(prompt: string): Promise<void> {
+  async start(prompt: AgentPrompt): Promise<void> {
     if (this.closed) throw new Error('Claude CLI 控制通道已关闭');
     await new Promise<void>((resolve, reject) => {
       const id = randomUUID();
@@ -56,7 +56,12 @@ export class ClaudeControl {
     this.sendUser(prompt);
   }
 
-  sendUser(content: string, options: { uuid?: string; priority?: 'next' } = {}): void {
+  sendUser(prompt: AgentPrompt, options: { uuid?: string; priority?: 'next' } = {}): void {
+    // Images go before the text, as the API recommends for image prompts.
+    const content = prompt.images.length ? [
+      ...prompt.images.map(image => ({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } })),
+      ...(prompt.text ? [{ type: 'text', text: prompt.text }] : []),
+    ] : prompt.text;
     this.write({ type: 'user', session_id: '', parent_tool_use_id: null, ...options, message: { role: 'user', content } });
   }
 

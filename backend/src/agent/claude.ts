@@ -10,7 +10,7 @@ import { ClaudeQuotaTracker } from './claude-quota.js';
 import { ClaudeUsageMeter } from '../token-usage/meters.js';
 import { parseClaudeUsage } from '../accounts/usage-parsers.js';
 import { ClaudeSubagents } from './claude-subagents.js';
-import type { AgentRun, RunServices, RunTask } from './types.js';
+import type { AgentPrompt, AgentRun, RunServices, RunTask } from './types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
 const EXIT_GRACE_MS = 10_000;
@@ -25,7 +25,7 @@ async function transcriptPath(home: string, nativeId: string): Promise<string | 
   return undefined;
 }
 
-export async function startClaude(services: RunServices, prompt: string, signal?: AbortSignal): Promise<AgentRun> {
+export async function startClaude(services: RunServices, prompt: AgentPrompt, signal?: AbortSignal): Promise<AgentRun> {
   if (signal?.aborted) throw new Error('会话已停止');
   const { execution } = services.config;
   const scope = agentScope(services.context);
@@ -288,17 +288,17 @@ export async function startClaude(services: RunServices, prompt: string, signal?
   return {
     process: child, completion, stop,
     readUsage: async () => parseClaudeUsage(await control.request({ subtype: 'get_usage', skip_behaviors: true }, 30_000)),
-    startTurn: async (text) => {
+    startTurn: async (input) => {
       if (closing) throw new Error('Claude CLI 正在退出');
       quota.reset();
       turnActive = true;
-      control.sendUser(text);
+      control.sendUser(input);
     },
-    steer: async (text, id) => {
+    steer: async (input, id) => {
       if (!turnActive) return false;
       const uuid = randomUUID();
       pendingSteers.set(uuid, id);
-      control.sendUser(text, { uuid, priority: 'next' });
+      control.sendUser(input, { uuid, priority: 'next' });
       return true;
     },
     interruptTurn: async () => {

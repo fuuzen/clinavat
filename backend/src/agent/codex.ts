@@ -6,10 +6,17 @@ import { projectInstructions } from './project-instructions.js';
 import { roleInstructions } from './session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './codex-goal.js';
 import { CodexSubagents } from './codex-subagents.js';
-import type { AgentRun, RunServices } from './types.js';
+import type { AgentPrompt, AgentRun, RunServices } from './types.js';
 import { parseCodexRead } from '../accounts/usage-parsers.js';
 
-export async function startCodex(services: RunServices, prompt: string, signal: AbortSignal): Promise<AgentRun> {
+type CodexInput = { type: 'text'; text: string } | { type: 'image'; url: string };
+
+const codexInput = (prompt: AgentPrompt): CodexInput[] => [
+  ...prompt.images.map(image => ({ type: 'image' as const, url: `data:${image.mediaType};base64,${image.data}` })),
+  ...(prompt.text ? [{ type: 'text' as const, text: prompt.text }] : []),
+];
+
+export async function startCodex(services: RunServices, prompt: AgentPrompt, signal: AbortSignal): Promise<AgentRun> {
   if (services.context.session.goal && services.context.session.agent_mode === 'plan') {
     throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
   }
@@ -235,7 +242,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
   // A sub-agent can still ask for approval after the turn that spawned it has ended.
   const subagents = new CodexSubagents(services, createCodexRequests(services, signal, message => rpc.send(message),
     () => !finished && !stopped), () => usageModel);
-  let requestTurn: (input: { type: 'text'; text: string }[]) => Promise<any> = async () => { throw new Error('Codex 尚未就绪'); };
+  let requestTurn: (input: CodexInput[]) => Promise<any> = async () => { throw new Error('Codex 尚未就绪'); };
   const abort = () => {
     stopped = true;
     turnAbort.abort();
@@ -294,7 +301,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
         settings: { model, reasoning_effort: effort ?? null, developer_instructions: null },
       } } : {}),
     };
-    requestTurn = (input: { type: 'text'; text: string }[]) => rpc.request('turn/start', {
+    requestTurn = (input: CodexInput[]) => rpc.request('turn/start', {
       ...turnSettings, input,
     }, 120000, false);
     if (!finished && services.context.session.command !== 'compact') services.control.setNative({
@@ -355,7 +362,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     } else {
       const turn = selection.command === 'compact'
         ? await rpc.request('thread/compact/start', { threadId })
-        : await requestTurn([{ type: 'text', text: prompt }]);
+        : await requestTurn(codexInput(prompt));
       turnId = String(turn?.turn?.id ?? turnId);
     }
     if (typeof result.thread.path === 'string') await services.update({ jsonl_file_path: result.thread.path });
@@ -372,7 +379,7 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
     process: child, completion, stop: abort,
     readUsage: async () => parseCodexRead(await rpc.request('account/rateLimits/read',
       { excludeResetCreditDetails: true }, 30000, false)),
-    startTurn: (text) => mutate(async () => {
+    startTurn: (input) => mutate(async () => {
       if (finished || stopped) throw new Error('当前执行已结束');
       turnActive = true;
       interruptRequested = false;
@@ -380,17 +387,17 @@ export async function startCodex(services: RunServices, prompt: string, signal: 
       requests = makeRequests();
       try {
         await services.verifyShell();
-        const turn = await requestTurn([{ type: 'text', text }]);
+        const turn = await requestTurn(codexInput(input));
         turnId = String(turn?.turn?.id ?? turnId);
       } catch (error) {
         endTurn(error instanceof Error ? error : new Error('Codex 无法开始新一轮'));
       }
     }),
-    steer: async (text) => {
+    steer: async (input) => {
       const expectedTurnId = activeTurnId;
       if (!turnActive || !expectedTurnId || nativePaused || finished) return false;
       try {
-        await rpc.request('turn/steer', { threadId, expectedTurnId, input: [{ type: 'text', text }] }, 30000, false);
+        await rpc.request('turn/steer', { threadId, expectedTurnId, input: codexInput(input) }, 30000, false);
         return true;
       } catch (error) {
         // The turn ended between the check and the request; the caller starts a new turn instead.

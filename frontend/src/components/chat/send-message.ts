@@ -1,7 +1,8 @@
 import type { RefObject } from "react";
-import { errorText, post } from "../../api";
+import { api, errorText, post } from "../../api";
 import type { AccountSelection, AgentBehavior, AgentSelection, InputMode, PermissionMode, Project, Session } from "../../types";
 import { clearComposerDraft, getComposerDraftKey, moveComposerDraft, readComposerDraft } from "./composer/draftStorage";
+import type { ComposerImage } from "./composer/imageAttachments";
 import type { usePendingSends } from "./usePendingSends";
 
 interface MessageSenderOptions {
@@ -21,7 +22,7 @@ interface MessageSenderOptions {
 }
 
 export function createMessageSender(options: MessageSenderOptions) {
-  return async function send(content: string, selection: AgentSelection, permissionMode: PermissionMode,
+  return async function send(content: string, images: ComposerImage[], selection: AgentSelection, permissionMode: PermissionMode,
     account: AccountSelection, behavior: AgentBehavior, mode?: InputMode): Promise<boolean> {
     const { project, session, userId } = options;
     if (!project || !userId) return false;
@@ -40,7 +41,7 @@ export function createMessageSender(options: MessageSenderOptions) {
         target = await post<Session>("/sessions", {
           projectId: project.id, engine: account.engine, slotMode: account.slotMode,
           ...(account.slotMode === "manual" ? { slotId: account.slotId } : {}),
-          ...selection, permissionMode, ...behavior, title: content.slice(0, 40),
+          ...selection, permissionMode, ...behavior, title: content.trim().slice(0, 40) || "图片",
         });
         moveComposerDraft(originDraftKey, getComposerDraftKey(userId, originProjectId, target.id),
           request === options.request.current ? undefined : submittedDraft);
@@ -52,8 +53,13 @@ export function createMessageSender(options: MessageSenderOptions) {
           options.selectSession(target.id);
         }
       }
+      // Each image is its own request: the reverse proxies take at most 1 MiB per request.
+      const imagePath = `/sessions/${target.id}/images`;
+      const imageIds = await Promise.all(images.map(async (image) => (await api<{ id: string }>(imagePath, {
+        method: "POST", body: image.blob, headers: { "Content-Type": image.blob.type },
+      })).id));
       await post(`/sessions/${target.id}/messages`, {
-        content, ...selection, permissionMode, ...behavior, ...(mode ? { mode } : {}),
+        content, images: imageIds, ...selection, permissionMode, ...behavior, ...(mode ? { mode } : {}),
         // The backend owns the actual account in automatic mode; the view may still show the former one.
         ...(target.slot_mode === "manual" ? { slotId: account.slotId ?? target.slot_id } : {}),
       });

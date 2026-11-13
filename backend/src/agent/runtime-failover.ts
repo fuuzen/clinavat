@@ -74,7 +74,7 @@ export class RuntimeFailovers {
     return {
       resident: !!pending,
       turnActive: !!pending?.state.turnActive,
-      queue: (queue ?? []).map(({ id, content, queuedAt }) => ({ id, content, queuedAt })),
+      queue: (queue ?? []).map(({ id, content, queuedAt, images }) => ({ id, content, queuedAt, images: images?.length ?? 0 })),
       tasks: pending?.state.run?.tasks() ?? [],
       ...(pending?.terminal ? { settling: true } : pending ? { switching: { fromSlotId: pending.state.slotId, attempt: Math.min(MAX_SWITCHES, pending.attemptedSlotIds.length),
         waitingForTasks: !pending.state.closing && !pending.state.run?.isIdle() } } : {}),

@@ -40,7 +40,7 @@ function buildEntries(messages: Message[], turns: Turn[]): OutlineEntry[] {
     const linkedResponse = turn?.assistant_message_id ? assistantMessages.get(turn.assistant_message_id) : undefined;
     entries.push({
       id: `conversation-message-${message.id}`,
-      label: summarize(message.content, 160) || "空白消息",
+      label: summarize(message.content, 160) || (message.images ? "图片" : "空白消息"),
       preview: summarize(linkedResponse?.trim() || responses.join("\n").trim() || turnPreview(turn), 360),
       createdAt: message.created_at,
       status: turn?.status,

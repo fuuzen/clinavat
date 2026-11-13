@@ -510,6 +510,25 @@
   border: 1px solid var(--warning-line);
   border-radius: 5px;
 }
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.message-images > a {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.message-images img {
+  display: block;
+  max-width: min(240px, 100%);
+  max-height: 180px;
+  object-fit: contain;
+}
 .tool-card > button .tool-agent {
   min-width: 0;
   max-width: 40%;

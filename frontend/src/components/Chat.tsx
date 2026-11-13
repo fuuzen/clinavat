@@ -23,6 +23,7 @@ import RuntimeStrip from "./chat/RuntimeStrip";
 import { useSessionRuntime } from "./chat/useSessionRuntime";
 import { clearComposerDraft } from "./chat/composer/draftStorage";
 import { useComposerDraft } from "./chat/composer/useComposerDraft";
+import { maxComposerImages, prepareImage, type ComposerImage } from "./chat/composer/imageAttachments";
 import ConversationOutline from "./chat/ConversationOutline";
 import BehaviorPicker from "./chat/native/BehaviorPicker";
 import QuestionPanel from "./chat/native/QuestionPanel";
@@ -49,7 +50,7 @@ import type {
   ToolEvent,
   Turn,
 } from "../types";
-import { isActive, statusLabel } from "../api";
+import { errorText, isActive, statusLabel } from "../api";
 import SyncProgressBar from "./projects/SyncProgressBar";
 
 interface Props {
@@ -72,7 +73,7 @@ interface Props {
   onNewProject: () => void;
   onSelectProject: (project: Project) => void;
   onProjectRefresh: () => Promise<void>;
-  onSend: (content: string, selection: AgentSelection, permissionMode: PermissionMode, account: AccountSelection, behavior: AgentBehavior, mode?: InputMode) => Promise<boolean>;
+  onSend: (content: string, images: ComposerImage[], selection: AgentSelection, permissionMode: PermissionMode, account: AccountSelection, behavior: AgentBehavior, mode?: InputMode) => Promise<boolean>;
   onBehaviorChange: (sessionId: string, value: AgentBehavior) => Promise<void>;
   onQuestionsChange: (sessionId: string, value: QuestionPreference) => Promise<void>;
   onNotice: (message: string, kind?: "error" | "success") => void;
@@ -100,6 +101,10 @@ export default function Chat(props: Props) {
   const draftVersion = useRef({ key: "", draft: "", revision: 0 });
   if (draftVersion.current.key !== (draftKey ?? "") || draftVersion.current.draft !== draft)
     draftVersion.current = { key: draftKey ?? "", draft, revision: draftVersion.current.revision + 1 };
+  // Attached images per draft, so that each conversation keeps its own while the page stays open.
+  const [attachments, setAttachments] = useState<Record<string, ComposerImage[]>>({});
+  const imageKey = draftKey ?? "";
+  const images = attachments[imageKey] ?? [];
   const [selection, setSelection] = useState<AgentSelection>({
     model: session?.model || null,
     reasoningEffort: session?.reasoning_effort || null,
@@ -188,8 +193,21 @@ export default function Chat(props: Props) {
     if (conversation) observer.observe(conversation);
     return () => observer.disconnect();
   }, [stickToBottom, session?.id, project?.id, props.loading]);
+  async function addImages(files: File[]) {
+    const key = imageKey;
+    const room = maxComposerImages - (attachments[key]?.length ?? 0);
+    if (files.length > room) props.onNotice(`每条消息最多附带 ${maxComposerImages} 张图片`);
+    const prepared = await Promise.allSettled(files.slice(0, Math.max(0, room)).map(prepareImage));
+    const failure = prepared.find((result) => result.status === "rejected");
+    if (failure) props.onNotice(errorText(failure.reason));
+    const added = prepared.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (added.length) setAttachments((current) => ({ ...current, [key]: [...(current[key] ?? []), ...added].slice(0, maxComposerImages) }));
+  }
+  function removeImages(key: string, ids: string[]) {
+    setAttachments((current) => ({ ...current, [key]: (current[key] ?? []).filter((image) => !ids.includes(image.id)) }));
+  }
   async function send() {
-    if (!draft.trim() || submittingRef.current) return;
+    if ((!draft.trim() && !images.length) || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     try {
@@ -210,7 +228,7 @@ export default function Chat(props: Props) {
     // A running reply accepts messages too; the send mode decides how it takes them.
     const running = active && !!session && !props.sending;
     if (
-      !draft.trim() ||
+      (!draft.trim() && !images.length) ||
       (active && !running) ||
       permissionSaving ||
       behaviorSaving ||
@@ -222,8 +240,11 @@ export default function Chat(props: Props) {
     )
       return;
     const content = draft;
+    const sentImages = images;
+    const sentKey = imageKey;
     try {
-      const stillSelected = await props.onSend(content, selection, permissionMode, accountSelection, behavior, running ? sendMode : undefined);
+      const stillSelected = await props.onSend(content, sentImages, selection, permissionMode, accountSelection, behavior, running ? sendMode : undefined);
+      removeImages(sentKey, sentImages.map((image) => image.id));
       if (stillSelected) setStickToBottom(true);
     } catch {
       // The send handler reports failures and only clears drafts after server acceptance.
@@ -410,6 +431,9 @@ export default function Chat(props: Props) {
           }}
           draft={draft}
           onDraftChange={setDraft}
+          images={images}
+          onAddImages={(files) => void addImages(files)}
+          onRemoveImage={(id) => removeImages(imageKey, [id])}
           onSend={() => void send()}
           sendMode={sendMode}
           onSendModeChange={setSendMode}
@@ -425,7 +449,7 @@ export default function Chat(props: Props) {
           active={active}
           available={slotAvailable}
           locked={submitting || props.sending}
-          sendDisabled={!draft.trim() || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
+          sendDisabled={(!draft.trim() && !images.length) || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
           warning={[composerWarning, storageError].filter(Boolean).join(" ") || undefined}
           showScrollToBottom={!stickToBottom}
           onScrollToBottom={() => setStickToBottom(true)}

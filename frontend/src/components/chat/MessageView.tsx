@@ -6,6 +6,7 @@ import { formatTime } from "../../api";
 import type { Message } from "../../types";
 import DiagramBlock from "../diagrams/DiagramBlock";
 import { diagramFence } from "../diagrams/fence";
+import { messageImageIds } from "./composer/imageAttachments";
 
 const components: Components = {
   pre({ children }) {
@@ -78,6 +79,23 @@ function CopyMarkdown({ text }: { text: string }) {
   );
 }
 
+function MessageImages({ message }: { message: Message }) {
+  const ids = messageImageIds(message.images);
+  if (!ids.length || !message.session_id) return null;
+  return (
+    <div className="message-images">
+      {ids.map((id) => {
+        const url = `/api/sessions/${message.session_id}/images/${id}`;
+        return (
+          <a key={id} href={url} target="_blank" rel="noreferrer" title="查看原图">
+            <img src={url} alt="附带的图片" loading="lazy" />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AgentAvatar({ engine }: { engine: "claude" | "codex" }) {
   return <span className="agent-avatar"><span className={`engine-logo engine-logo-${engine}`} aria-hidden="true" /></span>;
 }
@@ -120,9 +138,14 @@ export default function MessageView({
       </div>
       {user ? (
         // Shown as typed, like the CLIs do: Markdown would turn an unclosed fence or __init__ into something else.
-        <Collapsible>
-          <div className="message-plain">{message.content}</div>
-        </Collapsible>
+        <>
+          <MessageImages message={message} />
+          {message.content && (
+            <Collapsible>
+              <div className="message-plain">{message.content}</div>
+            </Collapsible>
+          )}
+        </>
       ) : (
         <Markdown text={message.content} />
       )}

@@ -20,10 +20,12 @@ interface SessionInput {
   questionTimeoutMs?: Session["question_timeout_ms"];
   title?: string;
   content?: string;
+  images?: string[];
   mode?: "steer" | "queue" | "interrupt";
 }
 
 const goals = new Map<string, CodexGoal>();
+const images = new Map<string, Blob>();
 const busyMessage = "对话仍在运行，请等待结束或先停止后修改";
 
 function chooseSlot(engine: Session["engine"], mode: SlotMode, slotId?: string | null): Slot | undefined {
@@ -132,6 +134,17 @@ export const sessionHandlers = [
     db.sessions.unshift(fork);
     return HttpResponse.json(fork, { status: 201 });
   }),
+  // Uploaded images live in page memory, like the rest of the demo data.
+  http.post("/api/sessions/:id/images", async ({ params, request }) => {
+    if (!findSession(String(params.id))) return fail(404, "对话不存在");
+    const id = crypto.randomUUID();
+    images.set(id, await request.blob());
+    return HttpResponse.json({ id });
+  }),
+  http.get("/api/sessions/:id/images/:imageId", ({ params }) => {
+    const image = images.get(String(params.imageId));
+    return image ? new HttpResponse(image, { headers: { "Content-Type": image.type } }) : fail(404, "图片不存在或已删除");
+  }),
   http.get("/api/sessions/:id/messages", ({ params }) =>
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
   http.get("/api/sessions/:id/runtime", () =>
@@ -142,13 +155,15 @@ export const sessionHandlers = [
     const session = findSession(String(params.id));
     if (!session) return fail(404, "对话不存在");
     const input = await readBody<SessionInput>(request);
-    if (!input.content?.trim()) return fail(400, "请输入消息内容");
+    if (!input.content?.trim() && !input.images?.length) return fail(400, "请输入消息内容");
+    if (input.images?.some((id) => !images.has(id))) return fail(409, "图片已失效，请重新添加后发送");
+    const attached = input.images?.length ? JSON.stringify(input.images) : null;
     if (session.archived_at) return fail(409, "对话已归档，请先恢复后再继续");
     if (session.slot_mode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
     if (isRunning(session.id)) {
       // The demo agent follows a script, so it only records guidance sent during a reply.
       if (input.mode && input.mode !== "steer") return fail(409, "演示环境仅支持以「引导」方式在运行中发送。");
-      const message = { id: crypto.randomUUID(), session_id: session.id, role: "user" as const, content: input.content.trim(), created_at: timestamp() };
+      const message = { id: crypto.randomUUID(), session_id: session.id, role: "user" as const, content: input.content?.trim() ?? "", images: attached, created_at: timestamp() };
       db.messages.push(message);
       emit({ type: "message", sessionId: session.id, payload: message });
       return HttpResponse.json({ sessionId: session.id, status: "steered" });
@@ -162,7 +177,7 @@ export const sessionHandlers = [
       permission_mode: input.permissionMode ?? session.permission_mode,
       agent_mode: input.agentMode ?? session.agent_mode, role_preset: input.rolePreset ?? session.role_preset,
     });
-    startRun(session, input.content.trim());
+    startRun(session, input.content?.trim() ?? "", attached);
     return HttpResponse.json({ ok: true }, { status: 202 });
   }),
   ...(["pause", "resume", "stop"] as const).map((action) => http.post(`/api/sessions/:id/${action}`, ({ params }) => {

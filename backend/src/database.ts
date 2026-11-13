@@ -142,6 +142,11 @@ export class Store {
         model TEXT PRIMARY KEY, input REAL NOT NULL, cache_read REAL, cache_write REAL, output REAL NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS message_images (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        media_type TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS message_images_session ON message_images(session_id);
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS token_usage_user ON token_usage(user_id,recorded_at);
       CREATE INDEX IF NOT EXISTS token_usage_recorded ON token_usage(recorded_at);
@@ -178,6 +183,14 @@ export class Store {
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
     this.addColumn('user_agent_defaults', 'permission_mode',
       "TEXT CHECK(permission_mode IN ('manual','accept-edits','auto','full-access','yolo'))");
+    // IDs of the images attached to a user message, as JSON; NULL when there are none.
+    this.addColumn('messages', 'images', 'TEXT');
+    // Images of a send that failed or of a discarded queued message. The day of grace keeps those of a send
+    // retried across a restart.
+    this.run(`DELETE FROM message_images WHERE created_at < datetime('now','-1 day')
+      AND id NOT IN (SELECT image.value FROM messages, json_each(messages.images) AS image WHERE messages.images IS NOT NULL)
+      AND id NOT IN (SELECT image.value FROM session_input_queue, json_tree(session_input_queue.inputs) AS image
+        WHERE image.path LIKE '$[%].images')`);
     // Question settings left NULL follow the next level: conversation, then its user, then the site.
     for (const table of ['users', 'sessions']) {
       this.addColumn(table, 'question_mode', "TEXT CHECK(question_mode IN ('skip','defer'))");

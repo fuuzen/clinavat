@@ -10,6 +10,7 @@ import { Store } from './database.js';
 import { registerAuth } from './auth.js';
 import { EventBus } from './events.js';
 import { ConversationStore } from './conversation.js';
+import { loadImages, storedImages } from './message-images.js';
 import { ConnectionRegistry } from './connections.js';
 import { SshManager } from './runtime/ssh.js';
 import { WorkspaceManager } from './runtime/workspace.js';
@@ -212,14 +213,15 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     }
     events.emit(session.user_id, { type: 'session', sessionId, payload: store.get('SELECT * FROM sessions WHERE id=?', sessionId) });
   },
-  saveUserMessage(sessionId, content) {
+  saveUserMessage(sessionId, content, images) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
     if (!session) throw new Error('会话不存在');
     const id = randomUUID();
-    store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'user',?)", id, sessionId, content);
+    store.run("INSERT INTO messages(id,session_id,role,content,images) VALUES(?,?,'user',?,?)", id, sessionId, content, storedImages(images));
     events.emit(session.user_id, { type: 'message', sessionId, payload: store.get('SELECT * FROM messages WHERE id=?', id) });
     return id;
   },
+  loadImages: (sessionId, ids) => loadImages(store, sessionId, ids),
   beginTurn(sessionId, origin, authorization) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
     if (!session) throw new Error('会话不存在');

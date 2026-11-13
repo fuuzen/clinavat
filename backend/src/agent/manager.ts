@@ -51,7 +51,7 @@ export class AgentManager {
     return {
       resident: !!state && !state.finishing && !state.closing,
       turnActive: !!state?.turnActive,
-      queue: state?.queue.map(({ id, content, queuedAt }) => ({ id, content, queuedAt })) ?? [],
+      queue: state?.queue.map(({ id, content, queuedAt, images }) => ({ id, content, queuedAt, images: images?.length ?? 0 })) ?? [],
       tasks: state?.run?.tasks() ?? [],
     };
   }
@@ -63,11 +63,13 @@ export class AgentManager {
       && !context.session.command && state.settings === settingsKey(context);
   }
 
-  async start(context: AgentContext, prompt: string, continuation?: RunContinuation): Promise<void> {
+  /** `images` are the IDs of the images attached to the first message. */
+  async start(context: AgentContext, prompt: string, continuation?: RunContinuation, images: string[] = []): Promise<void> {
     if (this.closing) throw new DOMException('服务正在关闭', 'AbortError');
-    if (!prompt.trim() && !(context.session.engine === 'codex' && context.session.goal)) throw new Error('消息不能为空');
+    if (!prompt.trim() && !images.length && !(context.session.engine === 'codex' && context.session.goal)) throw new Error('消息不能为空');
     if (context.slot.engine !== context.session.engine) throw new Error('当前账号槽位未启用此引擎');
     if (this.active.has(context.session.id)) throw new Error('当前会话正在运行');
+    const input = { text: prompt, images: this.callbacks.loadImages(context.session.id, images) };
     let startupDone!: () => void;
     const startup = new Promise<void>((resolve) => { startupDone = resolve; });
     // Turn IDs change on this copy as the process moves from turn to turn.
@@ -160,8 +162,8 @@ export class AgentManager {
       await this.callbacks.updateSession(sessionId, { status: 'running' });
       state.cliStarting = true;
       state.run = context.session.engine === 'claude'
-        ? await startClaude(services, prompt, state.abort.signal)
-        : await startCodex(services, prompt, state.abort.signal);
+        ? await startClaude(services, input, state.abort.signal)
+        : await startCodex(services, input, state.abort.signal);
       if (state.abort.signal.aborted) state.run.stop();
       this.publish(state);
       // A turn ends through turnEnded; the process ending only settles a turn the CLI left open.
@@ -221,15 +223,15 @@ export class AgentManager {
    * Sends a message to the resident process. Without an open turn it starts one; otherwise `steer` joins
    * the running turn, `queue` waits for it to end, and `interrupt` ends it and runs next.
    */
-  async send(sessionId: string, mode: InputMode, content: string, prompt: string): Promise<'started' | 'steered' | 'queued'> {
+  async send(sessionId: string, mode: InputMode, content: string, prompt: string, images: string[] = []): Promise<'started' | 'steered' | 'queued'> {
     const state = this.residentRun(sessionId);
     const run = state.run!;
     if (!state.turnActive) {
       this.beginTurn(state, this.callbacks.beginTurn(sessionId,
-        { messageId: this.callbacks.saveUserMessage(sessionId, content) }, this.authorization(state)), prompt);
+        { messageId: this.callbacks.saveUserMessage(sessionId, content, images) }, this.authorization(state)), prompt, images);
       return 'started';
     }
-    const input: QueuedInput = { id: randomUUID(), content, prompt, queuedAt: new Date().toISOString() };
+    const input: QueuedInput = { id: randomUUID(), content, prompt, queuedAt: new Date().toISOString(), ...(images.length ? { images } : {}) };
     if (mode === 'queue') {
       if (state.queue.length >= 20) throw new HttpError(409, '排队消息已达上限，请等待当前回复结束');
       state.queue.push(input);
@@ -243,14 +245,15 @@ export class AgentManager {
       await run.interruptTurn();
       return 'queued';
     }
-    const messageId = this.callbacks.saveUserMessage(sessionId, content);
-    if (await run.steer(prompt, messageId)) return 'steered';
+    const promptImages = this.callbacks.loadImages(sessionId, images);
+    const messageId = this.callbacks.saveUserMessage(sessionId, content, images);
+    if (await run.steer({ text: prompt, images: promptImages }, messageId)) return 'steered';
     // The turn ended while steering; the saved message becomes the next turn.
     if (state.turnActive) {
       state.queue.unshift({ ...input, messageId });
       this.publish(state);
     } else if (!state.finishing && !state.closing) {
-      this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId }, this.authorization(state)), prompt);
+      this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId }, this.authorization(state)), prompt, images);
     }
     return 'queued';
   }
@@ -298,14 +301,15 @@ export class AgentManager {
     return { slotId: state.context.slot.id, credentialRevision: state.context.slot.credential_revision };
   }
 
-  private beginTurn(state: ActiveRun, turnId: string, prompt: string): void {
+  private beginTurn(state: ActiveRun, turnId: string, prompt: string, images: string[]): void {
     clearTimeout(state.idleTimer);
     state.turnActive = true;
     state.attemptedSlotIds = [];
     state.context.session.turn_id = turnId;
     void this.callbacks.updateSession(state.context.session.id, { status: 'running' });
     this.publish(state);
-    void state.run!.startTurn(prompt).catch((error: unknown) => {
+    const start = async () => state.run!.startTurn({ text: prompt, images: this.callbacks.loadImages(state.context.session.id, images) });
+    void start().catch((error: unknown) => {
       if (state.context.session.turn_id === turnId) {
         this.turnEnded(state, { status: 'error', error: error instanceof Error ? error.message : 'CLI 无法开始新一轮' });
       }
@@ -344,8 +348,9 @@ export class AgentManager {
     const next = !state.closing && !state.abort.signal.aborted && !this.closing ? state.queue.shift() : undefined;
     if (next && !state.closing) {
       try {
-        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content);
-        this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId: next.messageId }, this.authorization(state)), next.prompt);
+        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content, next.images ?? []);
+        this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId: next.messageId }, this.authorization(state)),
+          next.prompt, next.images ?? []);
       } catch (error) {
         state.queue.unshift(next);
         this.callbacks.event({ type: 'error', sessionId, payload: { message: error instanceof Error ? error.message : '排队消息发送失败' } });

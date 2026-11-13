@@ -32,7 +32,8 @@ export interface ActiveRun {
 export interface RuntimeView {
   resident: boolean;
   turnActive: boolean;
-  queue: { id: string; content: string; queuedAt: string }[];
+  /** `images` counts the images attached to a queued message. */
+  queue: { id: string; content: string; queuedAt: string; images: number }[];
   tasks: RunTask[];
   switching?: { fromSlotId: string; attempt: number; waitingForTasks?: boolean };
   settling?: boolean;

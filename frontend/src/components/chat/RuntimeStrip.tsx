@@ -22,7 +22,9 @@ export default function RuntimeStrip({ runtime, onCancelQueued, onStopTask }: Pr
         <div key={item.id} className="runtime-item">
           <Clock3 size={13} aria-hidden="true" />
           <span className="runtime-item-label">排队 {index + 1}</span>
-          <span className="runtime-item-text" title={item.content}>{item.content}</span>
+          <span className="runtime-item-text" title={item.content}>
+            {item.images ? `[图片 ×${item.images}] ` : ""}{item.content}
+          </span>
           <button type="button" onClick={() => onCancelQueued(item.id)} title="取消发送" aria-label={`取消排队消息 ${index + 1}`}>
             <X size={13} aria-hidden="true" />
           </button>

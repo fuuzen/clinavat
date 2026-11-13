@@ -148,8 +148,11 @@ export interface ModelCatalog {
 
 export interface Message {
   id: string;
+  session_id?: string;
   role: string;
   content: string;
+  /** IDs of the images attached to a user message, as JSON; null when there are none. */
+  images?: string | null;
   created_at: string;
 }
 
@@ -330,7 +333,7 @@ export interface RuntimeTask { id: string; description: string; type: string }
 export interface SessionRuntime {
   resident: boolean;
   turnActive: boolean;
-  queue: { id: string; content: string; queuedAt: string }[];
+  queue: { id: string; content: string; queuedAt: string; images?: number }[];
   tasks: RuntimeTask[];
   switching?: { fromSlotId: string; attempt: number; targetSlotId?: string };
   settling?: boolean;

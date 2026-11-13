@@ -291,3 +291,66 @@
   left: 0;
   z-index: 2;
 }
+.composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 48px 0 17px;
+}
+.composer-image {
+  position: relative;
+  margin: 0;
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.composer-image > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.composer-image > button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 60%);
+}
+.composer-image > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.composer-images + textarea {
+  min-height: 56px;
+}
+.composer-attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+}
+.composer-attach:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+.composer-attach:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

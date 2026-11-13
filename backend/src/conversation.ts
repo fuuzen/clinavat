@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Store } from './database.js';
+import { copyImages } from './message-images.js';
 
 export interface ActivityItem {
   id: string;
@@ -113,13 +114,13 @@ export class ConversationStore {
     if (index < 0) throw new Error('轮次不存在');
     const next = turns[index + 1];
     const boundary = next ? this.store.get<{ rowid: number }>('SELECT rowid FROM messages WHERE id=?', next.user_message_id)?.rowid ?? null : null;
-    const messages = this.store.all<{ id: string; role: string; content: string; created_at: string }>(`SELECT id,role,content,created_at
-      FROM messages WHERE session_id=? AND (?2 IS NULL OR rowid<?2) ORDER BY rowid`, sourceId, boundary);
+    const messages = this.store.all<{ id: string; role: string; content: string; images: string | null; created_at: string }>(`SELECT
+      id,role,content,images,created_at FROM messages WHERE session_id=? AND (?2 IS NULL OR rowid<?2) ORDER BY rowid`, sourceId, boundary);
     const copies = new Map<string, string>();
     for (const message of messages) {
       copies.set(message.id, randomUUID());
-      this.store.run('INSERT INTO messages(id,session_id,role,content,created_at) VALUES(?,?,?,?,?)',
-        copies.get(message.id)!, targetId, message.role, message.content, message.created_at);
+      this.store.run('INSERT INTO messages(id,session_id,role,content,images,created_at) VALUES(?,?,?,?,?,?)',
+        copies.get(message.id)!, targetId, message.role, message.content, copyImages(this.store, message.images, targetId), message.created_at);
     }
     for (const turn of turns.slice(0, index + 1)) {
       const userMessageId = copies.get(turn.user_message_id);

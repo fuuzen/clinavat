@@ -178,9 +178,9 @@ function finish(run: Run, session: Session, status: Turn["status"], answer?: str
   emit({ type: "done", sessionId: session.id });
 }
 
-export function startRun(session: Session, content: string) {
+export function startRun(session: Session, content: string, images: string | null = null) {
   if (runs.has(session.id)) throw new Error("对话仍在运行，请等待结束或先停止。");
-  const request: DemoMessage = { id: crypto.randomUUID(), session_id: session.id, role: "user", content, created_at: timestamp() };
+  const request: DemoMessage = { id: crypto.randomUUID(), session_id: session.id, role: "user", content, images, created_at: timestamp() };
   db.messages.push(request);
   const turn: Turn = {
     id: request.id, session_id: session.id, user_message_id: request.id, assistant_message_id: null,

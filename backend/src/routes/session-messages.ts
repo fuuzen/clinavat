@@ -8,6 +8,7 @@ import { permissionModes, validatePermissionMode } from '../agent/permissions.js
 import { slotForUser } from '../accounts/access.js';
 import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { expandProjectReferences } from '../runtime/project-references.js';
+import { imageTypes, maxImagesPerMessage, messageImages, readImage, saveImage, storedImages } from '../message-images.js';
 
 export const selectedSlotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export const selectionFields = {
@@ -18,14 +19,33 @@ export const selectionFields = {
   rolePreset: z.enum(rolePresets).optional(),
 };
 
-export const messageInput = z.object({ content: z.string().trim().min(1).max(100000), slotId: selectedSlotId.optional(),
+export const messageInput = z.object({ content: z.string().trim().max(100000), slotId: selectedSlotId.optional(),
+  // IDs from the conversation's image uploads.
+  images: z.array(z.uuid()).max(maxImagesPerMessage, `每条消息最多附带 ${maxImagesPerMessage} 张图片`).default([]),
   // How a message sent during a running reply is handled; ignored when the conversation is idle.
-  mode: z.enum(['steer', 'queue', 'interrupt']).default('steer'), ...selectionFields });
+  mode: z.enum(['steer', 'queue', 'interrupt']).default('steer'), ...selectionFields })
+  .refine(input => input.content || input.images.length, '消息不能为空');
 
 export function sessionMessageRoutes(app: FastifyInstance, context: Context) {
+  // Uploads stay below the proxies' 1 MiB request limit; the browser scales larger images down first.
+  app.addContentTypeParser(imageTypes, { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
   app.post('/api/sessions/:id/messages', async request => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     return sendSessionMessage(context, request.user, id, messageInput.parse(request.body));
+  });
+  app.post('/api/sessions/:id/images', async request => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    if (sessionFor(context, id, request.user.id).archived_at) throw new HttpError(409, '对话已归档，请先恢复后再继续');
+    if (!Buffer.isBuffer(request.body)) throw new HttpError(415, '仅支持上传 PNG、JPEG、GIF 和 WebP 图片');
+    const mediaType = String(request.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    return { id: saveImage(context.store, id, mediaType, request.body) };
+  });
+  app.get('/api/sessions/:id/images/:imageId', async (request, reply) => {
+    const { id, imageId } = z.object({ id: z.uuid(), imageId: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    const image = readImage(context.store, id, imageId);
+    if (!image) throw new HttpError(404, '图片不存在或已删除');
+    return reply.type(image.media_type).send(Buffer.from(image.data));
   });
 }
 
@@ -72,6 +92,8 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     if (compact && session.engine === 'codex' && input.content !== '/compact') {
       throw new HttpError(400, 'Codex 的 /compact 暂不接受附加参数');
     }
+    if (compact && input.images.length) throw new HttpError(400, '/compact 不能附带图片');
+    const images = messageImages(store, id, input.images);
     const runContext = {
       runtime_home: slot.home_dir,
       runtime_kind: 'conversation' as const,
@@ -90,7 +112,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
         throw error;
       }
       const prompt = await expandProjectReferences(workspaces, project, input.content);
-      return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt) };
+      return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt, images) };
     }
     // Different settings or a command need a new process; an idle one exits first.
     await agents.reclaim(id);
@@ -112,7 +134,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       store.transaction(() => {
         store.run(`UPDATE sessions SET slot_id=?,model=?,reasoning_effort=?,permission_mode=?,agent_mode=?,role_preset=?,status='running',updated_at=datetime('now') WHERE id=?`,
           slot.id, model, reasoningEffort, permissionMode, agentMode, rolePreset, id);
-        store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'user',?)", messageId, id, input.content);
+        store.run("INSERT INTO messages(id,session_id,role,content,images) VALUES(?,?,'user',?,?)", messageId, id, input.content, storedImages(images));
       });
       turns.start(id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision });
       events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
@@ -124,7 +146,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
         const prompt = previousMessages.length && !expandedContent.startsWith('/')
           ? `The native session was restarted. The following is saved conversation history for context; file paths may refer to the former workspace location. Use the current project working directory.\n<previous_conversation>\n${JSON.stringify(previousMessages)}\n</previous_conversation>\n\nCurrent user request:\n${expandedContent}`
           : expandedContent;
-        await agents.start({ ...runContext, session: { ...runContext.session, turn_id: messageId } }, prompt);
+        await agents.start({ ...runContext, session: { ...runContext.session, turn_id: messageId } }, prompt, undefined, images);
         return { sessionId: id, status: 'running' };
       } catch (error) {
         turns.finish(id, 'error');

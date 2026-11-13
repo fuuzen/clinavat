@@ -87,8 +87,10 @@ export interface AgentCallbacks {
   }): void | Promise<void>;
   approval(request: ApprovalRequest): Promise<ApprovalDecision>;
   flushWorkspace(sessionId: string): Promise<void>;
-  /** Persists a user message and returns its ID. */
-  saveUserMessage(sessionId: string, content: string): string;
+  /** Persists a user message with the IDs of its attached images, and returns its ID. */
+  saveUserMessage(sessionId: string, content: string, images: string[]): string;
+  /** Reads uploaded images for the CLI; throws when one no longer exists. */
+  loadImages(sessionId: string, ids: string[]): PromptImage[];
   /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */
   beginTurn(sessionId: string, origin: TurnOrigin, authorization: TurnAuthorization): string;
   quotaReached?(context: AgentContext, quota: QuotaFailure): void;
@@ -110,7 +112,12 @@ export type TurnOrigin = { messageId: string } | { summary: string };
 
 export interface TurnAuthorization { slotId: string; credentialRevision: number }
 export type InputMode = 'steer' | 'queue' | 'interrupt';
-export interface QueuedInput { id: string; content: string; prompt: string; queuedAt: string; messageId?: string }
+/** `images` holds the IDs of uploaded images; their data is read only when the input is sent. */
+export interface QueuedInput { id: string; content: string; prompt: string; queuedAt: string; messageId?: string; images?: string[] }
+/** An image attached to a user message, base64-encoded as both CLIs take it. */
+export interface PromptImage { mediaType: string; data: string }
+/** A user message as the CLI receives it: the text with project references expanded, and its images. */
+export interface AgentPrompt { text: string; images: PromptImage[] }
 /** A background task of the running CLI. */
 export interface RunTask { id: string; description: string; type: string }
 export interface QuotaFailure { window: string; resetsAt: string | null }
@@ -122,11 +129,11 @@ export interface AgentRun {
   /** Settles when the process has ended. */
   completion: Promise<void>;
   stop(): void;
-  startTurn(prompt: string): Promise<void>;
+  startTurn(prompt: AgentPrompt): Promise<void>;
   /** Reads the server's quota snapshot through this CLI without starting a conversation turn. */
   readUsage(): Promise<UsageUpdate>;
   /** Adds input to the active turn; false when there is none to join. `messageId` names the persisted message. */
-  steer(text: string, messageId: string): Promise<boolean>;
+  steer(prompt: AgentPrompt, messageId: string): Promise<boolean>;
   interruptTurn(): Promise<void>;
   /** No turn, task or goal needs this process any more. */
   isIdle(): boolean;
