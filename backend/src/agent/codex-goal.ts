@@ -1,5 +1,6 @@
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
 import { RpcClient, type RpcMessage } from './rpc.js';
+import { getPermissionMode } from './permissions.js';
 import type { AgentConfig, AgentContext } from './types.js';
 
 export interface CodexGoal {
@@ -23,7 +24,8 @@ export function codexServerArguments(context: AgentContext): string[] {
     '-c', 'cli_auth_credentials_store="file"',
     '-c', 'features.shell_tool=true', '-c', 'features.unified_exec=true', '-c', 'features.goals=true',
     '-c', 'features.shell_snapshot=false', '-c', 'features.multi_agent=false',
-    '-c', 'web_search="disabled"',
+    // Codex's own defaults: OpenAI's cached index, which exposes less to prompt injection, and live pages with full access.
+    '-c', `web_search="${getPermissionMode(context.session) === 'full-access' ? 'live' : 'cached'}"`,
     '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`,
     'app-server',
   ];

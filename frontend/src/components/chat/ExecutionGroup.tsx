@@ -5,6 +5,7 @@ import { ToolCard } from "../ToolCards";
 
 function toolCategory(tool: ToolEvent) {
   const name = tool.name.toLowerCase();
+  if (/^web/.test(name)) return "web";
   if (/command|bash|shell|exec/.test(name)) return "commands";
   if (/search|grep/.test(name)) return "searches";
   if (/read/.test(name)) return "reads";
@@ -25,6 +26,7 @@ function executionLabel(tools: ToolEvent[]) {
     if (category === "reads") return `Read ${count} file${count === 1 ? "" : "s"}`;
     if (category === "directories") return `Explored ${count} director${count === 1 ? "y" : "ies"}`;
     if (category === "edits") return `Updated ${count} file${count === 1 ? "" : "s"}`;
+    if (category === "web") return `Browsed the web ${count} time${count === 1 ? "" : "s"}`;
     return `Used ${count} tool${count === 1 ? "" : "s"}`;
   }).join(" · ");
 }

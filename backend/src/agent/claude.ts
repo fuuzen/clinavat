@@ -50,7 +50,8 @@ export async function startClaude(services: RunServices, prompt: string, signal?
     '--setting-sources', '', '--settings', JSON.stringify(settings),
     '--append-system-prompt', projectInstructions(services.context.project, 'claude') + (permissionMode === 'plan'
       ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
-    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,AskUserQuestion,ExitPlanMode', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,AskUserQuestion,ExitPlanMode',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId]

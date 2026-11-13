@@ -76,6 +76,11 @@ Codex 没有后台任务的控制接口；它启动的长命令可能在一轮�
 
 列表只包含网页已经支持的命令。项目自定义的 Slash Commands、skills 和插件尚未接入，输入未知命令会直接报错。
 
+## 联网
+
+- **Claude Code**：开放 `WebFetch`（读取网页）和 `WebSearch`（搜索），是否需要审批按权限模式决定，与其他工具相同。`WebFetch` 从槽位虚拟机经网关出口访问网页，`WebSearch` 由 Anthropic 服务端执行。
+- **Codex**：Full access 下使用实时网页搜索（`web_search="live"`），其他模式使用 OpenAI 维护的缓存索引（`cached`），与 Codex 自身的默认值一致；缓存结果受提示注入的影响更小。
+
 ## 暂停、继续与停止
 
 运行中可以点击输入框旁的「暂停」，之后点「继续」；也可以用 `/pause`、`/resume`。暂停和继续不会新增聊天消息，也不会替你发送“继续”之类的提示词，输入草稿保留。
@@ -195,7 +200,7 @@ CLI 自带的自动审核器仍可能拒绝操作。YOLO 不会生成审批卡�
 
 **Claude Code**：
 
-- 使用隔离的 settings、固定的工具白名单和 `PreToolUse` Hook。
+- 使用隔离的 settings、固定的工具白名单（`Bash`、`Read`、`Edit`、`Write`、`Glob`、`Grep`、`WebFetch`、`WebSearch`、`AskUserQuestion`、`ExitPlanMode`）和 `PreToolUse` Hook。
 - Hook 检查路径是否在项目内，并把 Bash 命令改写为经 `remote-shell` 执行，然后仍由 CLI 判断权限；CLI 需要确认时，通过 stream-json 控制协议在网页上显示审批。
 - Full access 使用 `bypassPermissions`，其他模式保留 `--restricted`。
 - 一轮以 CLI 的 `result` 为结束，最终回答此时确定；进程继续常驻，见[常驻进程与空闲回收](#常驻进程与空闲回收)。后台任务通过 `task_*` 和 `background_tasks_changed` 事件跟踪，用控制协议的 `stop_task` 停止；任务结束后 CLI 自行开始的一轮由平台记录为新的执行轮次。

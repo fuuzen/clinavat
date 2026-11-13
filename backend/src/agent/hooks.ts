@@ -95,6 +95,11 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
       const approved = await services.approve(tool, args);
       return decision(approved.decision === 'allow', approved.reason ?? '搜索审批');
     }
+    if (['WebFetch', 'WebSearch'].includes(tool)) {
+      if (!yolo) return nativeDecision();
+      const approved = await services.approve(tool, args);
+      return decision(approved.decision === 'allow', approved.reason ?? '联网审批');
+    }
     return decision(false, `当前工作台未启用工具 ${tool}`);
   } catch (error) {
     return decision(false, error instanceof Error ? error.message : '工具路径或审批校验失败');
