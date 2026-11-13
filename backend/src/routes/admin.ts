@@ -12,11 +12,13 @@ import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
 import { parseSetupToken } from '../accounts/slot-tokens.js';
 import { usageSettingsSchema } from '../accounts/usage-settings.js';
 import { adminUserRoutes } from './admin-users.js';
+import { adminMachineRoutes } from './admin-machines.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export function adminRoutes(app: FastifyInstance, context: Context) {
   const { store, config, ssh, events } = context;
   adminUserRoutes(app, context);
+  adminMachineRoutes(app, context);
   app.get('/api/slots', async request => availableSlots(store, request.user.id).map(slot => serializeUserSlot(context, slot, request.user.id)));
   const usageSlots = (userId: string, admin: boolean) => admin
     ? store.all<Slot>('SELECT * FROM account_slots ORDER BY id') : availableSlots(store, userId);

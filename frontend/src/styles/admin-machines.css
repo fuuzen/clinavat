@@ -1,0 +1,29 @@
+.admin-machines-quotas { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.admin-machines-quota { display: flex; flex-direction: column; gap: 6px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.admin-machines-quota > span { font-size: 11px; color: var(--muted); }
+.admin-machines-quota > strong { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.admin-machines-quota > strong small { font-size: 11px; font-weight: 400; color: var(--muted); }
+.admin-machines-quota > i { display: block; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.admin-machines-quota > i > b { display: block; height: 100%; background: var(--accent); }
+.admin-machines-quota > i.warning > b { background: var(--warning); }
+.admin-machines-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.admin-machines-settings fieldset { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 0; padding: 13px 15px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.admin-machines-settings fieldset:disabled { opacity: 0.7; }
+.admin-machines-settings legend { display: flex; align-items: baseline; gap: 7px; padding: 0 5px; font-size: 12px; font-weight: 500; }
+.admin-machines-settings legend small { font-size: 10px; font-weight: 400; color: var(--muted); }
+.admin-site-section .admin-machines-settings label { margin-top: 0; color: var(--text-secondary); }
+.admin-machines-settings label > span { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.admin-site-section .admin-machines-settings input { width: 84px; padding: 7px 9px; }
+.admin-machines-settings .admin-site-access-actions { grid-column: 1 / -1; margin-top: 0; }
+.admin-machines-table-wrap { margin-top: 18px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.admin-machines-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-machines-table th, .admin-machines-table td { padding: 9px 11px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.admin-machines-table th { font-size: 11px; font-weight: 450; color: var(--muted); background: var(--panel); }
+.admin-machines-table tbody tr:last-child td { border-bottom: 0; }
+.admin-machines-table td:first-child strong { display: block; font-weight: 500; }
+.admin-machines-table td:first-child small { font-size: 10px; color: var(--muted); }
+.admin-machines-changes { white-space: normal !important; min-width: 150px; color: var(--text-secondary); }
+.admin-machines-changes small { display: block; margin-top: 4px; color: var(--danger); font-size: 10px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .admin-machines-settings { grid-template-columns: 1fr; }
+}

@@ -2,11 +2,14 @@
 # Builds the execution images through the Hub's restricted LXD client; needs no root.
 #
 #   deploy/lxd/build-image.sh [--kind agent|workspace] [--remote clinavat-host] [--project clinavat] [--alias <alias>]
-#                             [--address 10.31.0.9]
+#                             [--address 10.31.0.9] [--cpu 4] [--memory 4GiB]
 #
 # agent (default) is the slot VM image with the CLIs, published as clinavat-agent; workspace is the container
 # image that only runs synchronization, published as clinavat-workspace. The builder uses a fixed address, which
 # the gateway must have bound once the VM network is no longer translated (admin panel: 网关 → 出口绑定 → 镜像构建).
+#
+# The builder only exists during the build, so it gets more CPU and memory than the instances it builds for
+# (--cpu, --memory). When the project quota has no room for that, it falls back to the profile's resources.
 #
 # Publishing is slow; to run the steps separately, pass the same --builder with --stage provision
 # and then --stage publish. The builder VM is removed after a successful publish.
@@ -18,7 +21,7 @@ set -euo pipefail
 
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 remote=clinavat-host project=clinavat alias="" base=ubuntu-minimal:24.04 kind=agent address=10.31.0.9
-builder="clinavat-image-build-$$" stage=all
+builder="clinavat-image-build-$$" stage=all cpu=4 memory=4GiB
 while (($#)); do
   case "$1" in
     --kind) kind="$2"; shift 2 ;;
@@ -29,6 +32,8 @@ while (($#)); do
     --base) base="$2"; shift 2 ;;
     --builder) builder="$2"; shift 2 ;;
     --stage) stage="$2"; shift 2 ;;
+    --cpu) cpu="$2"; shift 2 ;;
+    --memory) memory="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -44,7 +49,12 @@ remove_builder() { lxc delete "$remote:$builder" --force --project "$project" </
 
 provision() {
   echo "== launch $base"
-  run init "$base" "$remote:$builder" "${vm[@]}"
+  if ! error="$(run init "$base" "$remote:$builder" "${vm[@]}" -c limits.cpu="$cpu" -c limits.memory="$memory" 2>&1)"; then
+    grep -qiE 'limit|exceed' <<<"$error" || { echo "$error" >&2; exit 1; }
+    echo "== project quota has no room for $cpu vCPU and $memory; building with the profile's resources" >&2
+    remove_builder
+    run init "$base" "$remote:$builder" "${vm[@]}"
+  fi
   run config device override "$remote:$builder" eth0 ipv4.address="$address"
   run start "$remote:$builder"
   for _ in $(seq 1 90); do

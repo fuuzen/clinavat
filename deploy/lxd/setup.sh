@@ -152,7 +152,7 @@ lxc project set "$PROJECT" \
   limits.virtual-machines="$max_vms" \
   limits.cpu="$((max_vms * 2))" \
   limits.memory="$(awk '/^MemTotal:/ { print int($2 * 3 / 4 / 1024) }' /proc/meminfo)MiB"
-lxc profile set default --project "$PROJECT" limits.cpu=2 limits.memory=1536MiB limits.max_bus_ports=32
+lxc profile set default --project "$PROJECT" limits.cpu=1 limits.memory=1536MiB limits.max_bus_ports=32
 exists profile device get default root pool --project "$PROJECT" || \
   lxc profile device add default root disk --project "$PROJECT" pool="$POOL" path=/ size=8GiB
 exists profile device get default eth0 network --project "$PROJECT" || \

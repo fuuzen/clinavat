@@ -48,6 +48,7 @@ import { LxdExecutionHost } from './execution/lxd-host.js';
 import { ProcessExecutionHost } from './execution/process-host.js';
 import { MachinePlan } from './execution/machine-plan.js';
 import { HostCommands } from './execution/host-commands.js';
+import { MachineResourceSettingsStore, parseSize } from './execution/machine-resources.js';
 
 const app = Fastify({
   logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
@@ -58,6 +59,11 @@ const siteAccess = new SiteAccess(store, config);
 let onSlotActivity: (slotId: string) => void = () => undefined;
 const localExecution = new ProcessExecutionHost(config);
 const machines = new MachinePlan(store, config.vmAddresses);
+// Until an administrator saves them in the panel; the workspace memory variable predates the panel.
+const machineResourceSettings = new MachineResourceSettingsStore(store, {
+  slot: { cpu: 1, memoryMiB: 1536, diskGiB: 8 },
+  workspace: { cpu: 1, memoryMiB: parseSize(config.workspaceMemory)! / 2 ** 20, diskGiB: 4 },
+});
 // Assigned once the SSH manager exists; the VM host only calls it when serving a sync barrier.
 let mutagenEnvironment: (userId: string) => Promise<NodeJS.ProcessEnv> = async () => { throw new Error('同步服务尚未就绪'); };
 const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, localExecution, {
@@ -66,6 +72,7 @@ const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, 
     "SELECT local_path FROM projects WHERE user_id=? AND sync_name=? AND execution_mode IS NOT 'local'", userId, syncName)?.local_path,
   mutagenEnvironment: userId => mutagenEnvironment(userId),
   reportSkippedLinks: (userId, syncName, skipped) => describeSkippedLinks(recordSkippedLinks(store, events, userId, syncName, skipped)),
+  resources: kind => machineResourceSettings.view()[kind],
 }) : localExecution;
 for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('SELECT id,home_dir,engine FROM account_slots')) {
   await execution.assertReleased(slot.home_dir);
@@ -269,7 +276,7 @@ app.addHook('onSend', async (_request, reply) => {
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
 const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
-  usageSettings };
+  usageSettings, machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
 resourceRoutes(app, context);
 sessionRoutes(app, context);
 agentModelRoutes(app, context);

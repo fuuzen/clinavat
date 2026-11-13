@@ -116,6 +116,10 @@ export class Store {
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
         model TEXT, reasoning_effort TEXT, PRIMARY KEY(user_id,engine)
       );
+      CREATE TABLE IF NOT EXISTS machine_resources (
+        kind TEXT PRIMARY KEY CHECK(kind IN ('slot','workspace')), cpu INTEGER NOT NULL, memory_mib INTEGER NOT NULL,
+        disk_gib INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS usage_settings (
         id INTEGER PRIMARY KEY CHECK(id=1), refresh_interval_ms INTEGER NOT NULL, stale_after_ms INTEGER NOT NULL
       );

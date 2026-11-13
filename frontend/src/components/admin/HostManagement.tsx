@@ -15,6 +15,7 @@ import {
 import type { AdminHealth } from "./types";
 import MobileCardDetails from "./MobileCardDetails";
 import HostCommands from "./HostCommands";
+import MachineResources from "./MachineResources";
 import "../../styles/admin-host.css";
 
 interface Props {
@@ -96,6 +97,8 @@ export default function HostManagement({ health, loading, error, onRefresh }: Pr
       </section>
 
       <HostCommands execution={health?.execution} />
+
+      <MachineResources />
 
       <section aria-labelledby="admin-host-resource-heading">
         <div className="admin-host-section-heading">

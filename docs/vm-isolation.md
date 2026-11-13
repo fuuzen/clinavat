@@ -174,7 +174,7 @@ deploy/lxd/build-image.sh                    # 槽位 VM 镜像 clinavat-agent
 deploy/lxd/build-image.sh --kind workspace   # 工作区容器镜像 clinavat-workspace
 ```
 
-工作区镜像只有 Mutagen、SSH 客户端、Python 和时区数据，几分钟即可构建。构建机使用固定地址 `10.31.0.9`（`--address`）；虚拟机网段不再做地址转换后，需要在「网关 → 出口绑定」中为「镜像构建」绑定节点，迁移脚本会自动绑定。
+工作区镜像只有 Mutagen、SSH 客户端、Python 和时区数据，几分钟即可构建。构建机只在构建期间存在，默认分配 4 个 vCPU 和 4 GiB 内存（`--cpu`、`--memory`），比槽位 VM 高；项目配额放不下时，自动改用 profile 中的配置继续构建。构建机使用固定地址 `10.31.0.9`（`--address`）；虚拟机网段不再做地址转换后，需要在「网关 → 出口绑定」中为「镜像构建」绑定节点，迁移脚本会自动绑定。
 
 整个过程约 15 分钟。发布很慢，可以用 `--builder <名称> --stage provision` 和 `--stage publish` 分两步。镜像包含官方 CLI、Mutagen、Git、ripgrep、bubblewrap，版本取自环境变量 `CLAUDE_CODE_VERSION`、`CODEX_VERSION`、`MUTAGEN_VERSION`、`NODE_VERSION`。
 
@@ -212,7 +212,7 @@ deploy/lxd/build-image.sh --kind workspace   # 工作区容器镜像 clinavat-wo
 - 虚拟机 root 能留下 nobody 属主的文件，Hub 可能无法读取或删除。CLI 以无 sudo 的普通用户运行，正常情况下拿不到虚拟机 root。
 - 首次创建虚拟机约 2.5～4 分钟，之后开机到可用约 50 秒（其中系统启动约 24 秒，其余主要是固件），每次 `lxc exec` 约 1 秒。这些数字取决于存储和是否嵌套虚拟化。
 - 空闲虚拟机占用约 250 MiB，加上 CLI 进程。
-- 槽位 VM 默认每台 1.5 GiB、2 个 vCPU；工作区容器默认上限 512 MiB，实际占用通常只有几十 MiB。见下文[容量与默认值](#容量与默认值)。
+- 槽位 VM 默认每台 1 个 vCPU、1.5 GiB 内存、8 GiB 磁盘；工作区容器默认 1 个 vCPU、512 MiB 内存、4 GiB 磁盘，实际占用的内存通常只有几十 MiB。管理员可在管理面板调整，见下文[实例资源](#实例资源)。
 - 每台虚拟机的每个挂载都有一个 virtiofsd 进程。在实测中，Mutagen 扫描大目录时它们单个可占到 1 GiB；改为容器后，工作区不再有这部分开销。
 - 每个挂载占一个设备端口，端口数上限 32。槽位 VM 固定占槽位目录和额度查询目录，租用者再占 4 个，其余是该用户正在使用的项目；同一用户大约可以同时使用 20 多个项目。
 - 同一用户在槽位 VM 之间切换不需要重新挂载；换另一位用户时清理和卸载需要几秒到十几秒。
@@ -224,23 +224,34 @@ deploy/lxd/build-image.sh --kind workspace   # 工作区容器镜像 clinavat-wo
 | `CLINAVAT_VM_START_TIMEOUT_MS` | 15 分钟 | 单台虚拟机创建或开机的等待上限。开机全局排队，一次只进行一台，所以从轮到它时才开始计时，用户多也不需要调大；存储很慢时才需要调高 |
 | `CLINAVAT_VM_BUS_PORTS` | 32 | 每台虚拟机的设备端口数（`limits.max_bus_ports`）。LXD 默认只有 8 个，放不下多个项目。新虚拟机创建时带上，已有虚拟机下次开机时自动补齐；运行中的虚拟机改不了，要重启才生效 |
 | `CLINAVAT_VM_ADDRESSES` | `10.31.0.10-10.31.0.199` | 分配给槽位 VM 和工作区容器的固定地址范围，须在虚拟机网段内，并避开 DHCP 动态范围（迁移脚本默认设为 `.200-.254`） |
-| `CLINAVAT_WORKSPACE_MEMORY` | `512MiB` | 工作区容器的内存上限，只在创建时生效 |
+| `CLINAVAT_WORKSPACE_MEMORY` | `512MiB` | 工作区容器内存的初始默认值。管理员在面板中保存实例资源后，以面板设置为准 |
 | `CLINAVAT_LXD_WORKSPACE_IMAGE` | `clinavat-workspace` | 工作区容器镜像 |
 | `CLINAVAT_IMAGE_BUILDER_ADDRESS` | `10.31.0.9` | 镜像构建机的固定地址，须在虚拟机网段内、`CLINAVAT_VM_ADDRESSES` 之外，与 `build-image.sh --address` 一致 |
 | `CLINAVAT_VM_BRIDGE` | `10.31.0.1/24` | 宿主机在虚拟机网桥上的地址和网段长度，与 `lxc network get clinavat-users ipv4.address` 一致；本机项目的命令登录这个地址，宿主机只允许这个网段用密钥登录 |
 | `CLINAVAT_HOST_SSH_PORT` | `22` | 宿主机 sshd 的端口，与 `host-commands.sh --port` 一致 |
 | 项目配额 | `setup.sh --max-vms 8 --max-users 32` | `limits.virtual-machines` 取槽位数上限，`limits.containers` 取用户数上限，`limits.cpu` 取虚拟机数的 2 倍，`limits.memory` 取本机内存的 75%。配额按**所有已创建**的实例计算，包括已关机的。项目只接受独立 uid 范围的容器（`restricted.containers.privilege=isolated`） |
 
-配额按配置的上限计算，而不是实际占用：每个槽位 VM 计 2 个 vCPU 和 1.5 GiB，每个工作区容器计 1 个 vCPU 和 512 MiB，构建镜像时构建机再临时占一份。粗略估算：
+配额按配置的上限计算，而不是实际占用。按默认值，每个槽位 VM 计 1 个 vCPU 和 1.5 GiB，每个工作区容器计 1 个 vCPU 和 512 MiB；构建镜像时，构建机再临时占 4 个 vCPU 和 4 GiB，放不下时退回 profile 中的配置。粗略估算：
 
 ```text
-vCPU    = 2 × 槽位数 + 1 × 有项目的用户数 + 2（构建）
-内存    = 1.5 GiB × 槽位数 + 0.5 GiB × 有项目的用户数 + 1.5 GiB（构建）
+vCPU    = 1 × 槽位数 + 1 × 有项目的用户数 + 4（构建）
+内存    = 1.5 GiB × 槽位数 + 0.5 GiB × 有项目的用户数 + 4 GiB（构建）
 虚拟机  = 槽位数 + 1（构建）
 容器    = 有项目的用户数 + 1（构建工作区镜像）
 ```
 
 虚拟机实际会用满分到的内存，每个挂载还有一个 virtiofsd 进程，所以内存上限要按本机内存留足余量，不能只看 vCPU。
+
+### 实例资源
+
+管理面板 → 宿主机 → 实例资源分别设置槽位 VM 和工作区容器的 vCPU、内存和根磁盘大小，并列出每个实例的当前值和项目配额用量。Hub 在创建实例时直接写入这些值，不再依赖 profile 中的数值。保存时，如果按新设置所有实例合计会超出项目配额，Hub 会拒绝保存。保存后：
+
+- 已关机的实例立即调整，所以调低配额能马上腾出项目配额；
+- 运行中的工作区容器立即调整 CPU、内存，并立即扩大磁盘；磁盘缩小要等容器下次关机；
+- 运行中的槽位 VM 下次开机时生效。槽位空闲时，可在列表中点"重启以应用"；
+- 虚拟机磁盘不能缩小。需要缩小时，在列表中点"重建"，Hub 会删除这台虚拟机，下次使用时按新设置重建。槽位的登录、主目录和固定地址都保留在宿主机上，不受影响。
+
+使用 LVM 精简池时，磁盘大小只是上限，实际按写入量占用；使用 dir 存储时，LXD 不限制磁盘大小。项目总配额（`limits.*`）属于隔离边界，Hub 的受限证书改不了，仍由宿主机管理员调整。
 
 虚拟机数量超过配额时，新用户的虚拟机创建会失败，错误信息会说明要调哪一项。加内存后要记得调配额：
 

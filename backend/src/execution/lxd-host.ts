@@ -12,13 +12,16 @@ import {
 } from './guest-scripts.js';
 import type { MachineKind, MachinePlan } from './machine-plan.js';
 import type { ProcessExecutionHost } from './process-host.js';
+import {
+  describeResources, parseProjectQuota, planResources, quotaError, type MachineResourceHost, type MachineResources, type ResourceRow,
+} from './machine-resources.js';
 import { delegateSuspension } from './suspension.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScope, ExecutionSpawnOptions } from './types.js';
 import type { SkippedLinks } from '../runtime/sync-status.js';
 
 export interface LxdConfig {
   dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
-  lxdWorkspaceImage: string; vmStartTimeoutMs: number; vmBusPorts: number; workspaceMemory: string;
+  lxdWorkspaceImage: string; vmStartTimeoutMs: number; vmBusPorts: number;
 }
 
 /** What the VM host needs from the rest of the Hub to place and serve machines. */
@@ -29,6 +32,8 @@ export interface LxdServices {
   mutagenEnvironment(userId: string): Promise<NodeJS.ProcessEnv>;
   /** Records the links a sync skips after a command; returns a notice about new ones for the command's output. */
   reportSkippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
+  /** The CPU, memory and root disk the administrator set for this kind of machine. */
+  resources(kind: MachineKind): MachineResources;
 }
 
 export interface Machine {
@@ -42,10 +47,8 @@ export interface Machine {
   /** A slot machine's current user, whose files are mounted; cleared by the next hand-over. */
   occupant?: string;
 }
-interface InstanceRow {
-  name: string; status: string; type?: string; config?: Record<string, string>;
-  devices?: Record<string, Record<string, string>>; expanded_config?: Record<string, string>;
-  state?: { pid?: number };
+interface InstanceRow extends ResourceRow {
+  name: string; state?: { pid?: number };
 }
 
 const guestPath = '/usr/local/bin:/usr/bin:/bin';
@@ -61,7 +64,7 @@ export const machineName = (kind: MachineKind, owner: string) => kind === 'works
  * machine, so an account always appears from one machine and one egress; synchronization and remote access for a
  * user run in that user's workspace machine.
  */
-export class LxdExecutionHost implements ExecutionHost {
+export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   readonly kind = 'vm' as const;
   private readonly machines = new Map<string, Machine>();
   private loaded?: Promise<void>;
@@ -70,6 +73,8 @@ export class LxdExecutionHost implements ExecutionHost {
   private readonly uid = process.getuid!();
   private readonly gid = process.getgid!();
   private readonly barriers: SyncBarriers;
+  /** Why an instance last refused its resources, until a later attempt succeeds. */
+  private readonly resourceErrors = new Map<string, string>();
 
   constructor(private readonly config: LxdConfig, private readonly local: ProcessExecutionHost, private readonly services: LxdServices) {
     this.barriers = new SyncBarriers({
@@ -104,11 +109,8 @@ export class LxdExecutionHost implements ExecutionHost {
   /** Mounts survive Hub restarts, so slot occupancy starts from what LXD reports. */
   private load(): Promise<void> {
     this.loaded ??= (async () => {
-      const result = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json'], 60_000);
-      for (const row of JSON.parse(result.stdout) as InstanceRow[]) {
-        const kind = row.config?.[kindKey] as MachineKind | undefined;
-        const owner = row.config?.[ownerKey];
-        if ((kind !== 'workspace' && kind !== 'slot') || !owner || row.name !== machineName(kind, owner)) continue;
+      for (const row of await this.managedInstances()) {
+        const { kind, owner } = row;
         const mounts = Object.values(row.devices ?? {}).filter(device => device.type === 'disk' && device.path && device.path !== '/').map(device => device.path!);
         const users = join(this.config.dataDir, 'users') + sep;
         const occupant = kind === 'slot' ? mounts.find(path => path.startsWith(users) && path.endsWith(`${sep}engine-state`))
@@ -136,9 +138,30 @@ export class LxdExecutionHost implements ExecutionHost {
     return next;
   }
 
+  /** Instances the Hub created, recognized by the kind and owner it records on them. */
+  private async managedInstances(): Promise<(InstanceRow & { kind: MachineKind; owner: string })[]> {
+    const result = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json'], 60_000);
+    return (JSON.parse(result.stdout) as InstanceRow[]).flatMap(row => {
+      const kind = row.config?.[kindKey];
+      const owner = row.config?.[ownerKey];
+      return (kind === 'workspace' || kind === 'slot') && owner && row.name === machineName(kind, owner) ? [{ ...row, kind, owner }] : [];
+    });
+  }
+
+  private async fitResources(row: InstanceRow, kind: MachineKind): Promise<void> {
+    for (const command of planResources(this.target(row.name), row, this.services.resources(kind)).commands) {
+      await this.checkedLxc(command).catch((error: Error) => { throw quotaError(error); });
+    }
+    this.resourceErrors.delete(row.name);
+  }
+
+  private async instance(name: string): Promise<InstanceRow | undefined> {
+    const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, `^${name}$`, '--format', 'json']);
+    return (JSON.parse(shown.stdout) as InstanceRow[])[0];
+  }
+
   private async boot(machine: Machine): Promise<void> {
-    const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, `^${machine.name}$`, '--format', 'json']);
-    const row = (JSON.parse(shown.stdout) as InstanceRow[])[0];
+    const row = await this.instance(machine.name);
     if (row?.status === 'Running' && machine.prepared) return;
     const start = () => this.start(machine, row);
     const next = this.startQueue.then(start, start);
@@ -153,20 +176,19 @@ export class LxdExecutionHost implements ExecutionHost {
     if (row && (row.type === 'container') !== container) {
       throw new Error(`实例 ${machine.name} 的类型与当前版本不符（工作区应为容器、槽位应为虚拟机），请删除后由 Hub 重新创建`);
     }
+    const resources = this.services.resources(machine.kind);
     if (!row) {
       const idmap = this.uid === this.gid ? `both ${this.uid} ${this.uid}` : `uid ${this.uid} ${this.uid}\ngid ${this.gid} ${this.gid}`;
       await this.checkedLxc(['init', ...(container
         // Its profile isolates root and the remaining uid range. Only the Hub's uid/gid are mapped directly for
         // ordinary bind mounts: LXD forbids shift=true when a project restricts source paths.
         // The default profile carries VM-only settings.
-        ? [this.target(this.config.lxdWorkspaceImage), this.target(machine.name), '--profile', 'workspace',
-          '-c', `limits.memory=${this.config.workspaceMemory}`]
+        ? [this.target(this.config.lxdWorkspaceImage), this.target(machine.name), '--profile', 'workspace']
         // Agents run arbitrary code: a slot gets its own kernel.
         : [this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `limits.max_bus_ports=${vmBusPorts}`]),
-        '-c', `raw.idmap=${idmap}`, '-c', `${kindKey}=${machine.kind}`, '-c', `${ownerKey}=${machine.owner}`], vmStartTimeoutMs).catch((error: Error) => {
-        throw /limit|exceed/i.test(error.message)
-          ? new Error(`${error.message}（LXD 项目配额不足，请调高 limits.memory、limits.cpu、limits.virtual-machines 或 limits.containers）`) : error;
-      });
+        '-c', `limits.cpu=${resources.cpu}`, '-c', `limits.memory=${resources.memoryMiB}MiB`, '-d', `root,size=${resources.diskGiB}GiB`,
+        '-c', `raw.idmap=${idmap}`, '-c', `${kindKey}=${machine.kind}`, '-c', `${ownerKey}=${machine.owner}`], vmStartTimeoutMs)
+        .catch((error: Error) => { throw quotaError(error); });
     }
     if (row && (row.config?.[kindKey] !== machine.kind || row.config?.[ownerKey] !== machine.owner)) {
       await this.checkedLxc(['config', 'set', this.target(machine.name), `${kindKey}=${machine.kind}`, `${ownerKey}=${machine.owner}`]);
@@ -176,6 +198,9 @@ export class LxdExecutionHost implements ExecutionHost {
       if (row && !container && Number(row.expanded_config?.['limits.max_bus_ports'] ?? 0) < vmBusPorts) {
         await this.checkedLxc(['config', 'set', this.target(machine.name), `limits.max_bus_ports=${vmBusPorts}`]);
       }
+      // Settings saved while the instance was running catch up here; a VM disk that would shrink keeps its size.
+      // A refusal, such as a full project quota, leaves the old resources and is shown in the admin panel.
+      if (row) await this.fitResources(row, machine.kind).catch((error: Error) => { this.resourceErrors.set(machine.name, error.message); });
       // The gateway chooses the egress by this address.
       if (row?.devices?.eth0?.['ipv4.address'] !== identity.address) {
         await this.checkedLxc(row?.devices?.eth0
@@ -437,6 +462,30 @@ export class LxdExecutionHost implements ExecutionHost {
         if (remove) this.machines.delete(name);
       });
     } else await operation();
+  }
+
+  async resources() {
+    await this.load();
+    const [rows, project] = await Promise.all([
+      this.managedInstances(),
+      // A client restricted to the project may still be refused its state; the quota is then simply not shown.
+      this.lxc(['project', 'info', `${this.config.lxdRemote}:${this.config.lxdProject}`, '--format', 'json'], 15_000).catch(() => undefined),
+    ]);
+    return {
+      machines: rows.map(row => describeResources(row, planResources(this.target(row.name), row, this.services.resources(row.kind)),
+        this.resourceErrors.get(row.name))),
+      quota: project?.code === 0 ? parseProjectQuota(project.stdout) : null,
+    };
+  }
+
+  async applyResources(): Promise<void> {
+    await this.load();
+    for (const { name, kind, owner } of await this.managedInstances()) {
+      await this.serialized(this.machine(kind, owner), async () => {
+        const row = await this.instance(name);
+        if (row) await this.fitResources(row, kind).catch((error: Error) => { this.resourceErrors.set(name, error.message); });
+      });
+    }
   }
 
   async health() {

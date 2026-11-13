@@ -14,6 +14,7 @@ import type { TokenUsageLedger } from './token-usage/ledger.js';
 import type { PriceBook } from './token-usage/price-book.js';
 import type { UsageSettingsStore } from './accounts/usage-settings.js';
 import type { AgentDefaults } from './agent-defaults.js';
+import type { MachineResourceHost, MachineResourceSettingsStore } from './execution/machine-resources.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -27,6 +28,9 @@ export interface Context {
   tokenUsage: TokenUsageLedger;
   prices: PriceBook;
   usageSettings: UsageSettingsStore;
+  machineResourceSettings: MachineResourceSettingsStore;
+  /** Only with slot machines and workspace containers. */
+  machineResources?: MachineResourceHost;
   /** Only with slot machines; otherwise a local project's commands already run on the host. */
   hostCommands?: HostCommands;
 }
