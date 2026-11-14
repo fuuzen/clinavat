@@ -1,14 +1,18 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import { configuredDataDirectory, databasePath, environmentFilePath, installDirectory, loadEnvironment, releaseRoot } from './environment.mjs';
 import { activityCounts, controlService, deploymentStatus, gateCount, hasActivity, hasRuntimeActivity, installGate,
   openDatabase, removeGate, runtimeCounts, services, serviceState } from './release-state.mjs';
 
+const execute = promisify(execFile);
 const script = fileURLToPath(import.meta.url);
 const projectDirectory = dirname(dirname(script));
+// A scheduled release inherits the caller's own settings, never the Hub's secrets from the environment file.
+const invokingEnvironment = { ...process.env };
 loadEnvironment(environmentFilePath());
 const dataDirectory = configuredDataDirectory(projectDirectory);
 const liveDirectory = installDirectory();
@@ -16,7 +20,12 @@ const command = process.argv[2] ?? 'status';
 const argument = process.argv[3];
 const locked = process.argv.includes('--locked');
 const frontendOnly = process.argv.includes('--frontend-only');
+const waitWhenBusy = process.argv.includes('--wait');
+const inBackground = process.argv.includes('--in-background');
 const releaseParts = frontendOnly ? ['frontend'] : ['backend', 'frontend'];
+// A busy deployment hands `publish --wait` to this transient unit, which outlives the shell that scheduled it.
+const waiterUnit = 'clinavat-release-wait.service';
+const waitInterval = 15000;
 let cancelled = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { cancelled = true; });
 function checkCancelled() { if (cancelled) throw new Error('发布已取消，将恢复原服务并移除门禁'); }
@@ -133,13 +142,18 @@ async function drainPreparations(database) {
   while (Date.now() < deadline) {
     checkCancelled();
     const activity = activityCounts(database);
-    if (hasActivity(activity)) throw new Error('发布门禁后仍检测到活跃对话，已中止发布');
+    if (hasActivity(activity)) throw retryLater('发布门禁后仍检测到活跃对话，已中止发布');
     const runtime = await runtimeCounts(database, dataDirectory, await serviceState(services[0]));
     cleanSamples = hasRuntimeActivity(runtime, !frontendOnly) ? 0 : cleanSamples + 1;
     if (cleanSamples >= 2) return;
     await delay(500);
   }
-  throw new Error('账号准备、额度查询或凭据回收尚未结束，保留原部署，请稍后重试');
+  throw retryLater('账号准备、额度查询或凭据回收尚未结束，保留原部署，请稍后重试');
+}
+
+/** Nothing was switched yet: the deployment stays as it was, and a later attempt may succeed. */
+function retryLater(message) {
+  return Object.assign(new Error(message), { exitCode: 75 });
 }
 
 async function publish(staging) {
@@ -243,6 +257,7 @@ async function publish(staging) {
   if (finished) console.log(JSON.stringify({ state: 'published', frontendOnly, releaseId: release.releaseId, backup: release.previousDirectory }));
 }
 
+/** Resolves to the locked run's exit code; 75 when the deployment was busy or another release held the lock. */
 async function underLock() {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('flock', ['--nonblock', '--no-fork', '--conflict-exit-code', '75', join(dataDirectory, 'release.lock'),
@@ -250,26 +265,90 @@ async function underLock() {
     const forward = () => child.kill('SIGTERM');
     process.on('SIGINT', forward);
     process.on('SIGTERM', forward);
-    child.once('error', reject);
-    child.once('exit', code => { process.exitCode = code ?? 1; resolvePromise(); });
+    const release = () => { process.off('SIGINT', forward); process.off('SIGTERM', forward); };
+    child.once('error', error => { release(); reject(error); });
+    child.once('exit', code => { release(); resolvePromise(code ?? 1); });
   });
 }
 
-try {
-  if (command === 'publish' && process.argv.slice(4).some(flag => !['--locked', '--frontend-only'].includes(flag))) {
-    throw new Error('未知发布参数；仅支持 --frontend-only');
+async function pendingRelease() {
+  const waiter = await serviceState(waiterUnit, 'ActiveState,Description,ActiveEnterTimestamp');
+  return ['active', 'activating', 'deactivating', 'reloading'].includes(waiter.ActiveState)
+    ? { state: waiter.ActiveState, description: waiter.Description, since: waiter.ActiveEnterTimestamp } : null;
+}
+
+async function scheduleRelease(staging) {
+  // Values are copied from systemd-run's own environment, so none of them appear on a command line.
+  const names = Object.keys(invokingEnvironment).filter(name => name === 'PATH' || name.startsWith('CLINAVAT_') || /^XDG_[A-Z]+_HOME$/.test(name));
+  try {
+    await execute('systemd-run', ['--user', '--quiet', '--collect', `--unit=${waiterUnit}`,
+      `--description=等待空闲后发布 ${staging}${frontendOnly ? '（仅前端）' : ''}`,
+      // Stopping the unit cancels like Ctrl-C: only the waiter is signalled, and it has time to roll back.
+      '--property=KillMode=mixed', '--property=TimeoutStopSec=300', ...names.map(name => `--setenv=${name}`),
+      '--', process.execPath, '--no-warnings', script, 'publish', staging, ...(frontendOnly ? ['--frontend-only'] : []), '--in-background'],
+    { env: invokingEnvironment, timeout: 30000 });
+  } catch (error) { throw new Error(`无法创建后台发布任务：${(error.stderr || error.message).trim()}`); }
+}
+
+async function waitAndPublish(staging) {
+  console.log(`等待空闲后发布 ${staging}${frontendOnly ? '（仅前端）' : ''}`);
+  for (;;) {
+    let idle = false;
+    try {
+      const status = await deploymentStatus(dataDirectory);
+      idle = !hasActivity(status) && !hasRuntimeActivity(status, !frontendOnly);
+    } catch (error) { console.error(`检查部署状态失败，稍后重试：${error.message}`); }
+    // The locked run checks again and gates atomically; 75 means work started in between.
+    if (idle) {
+      const code = await underLock();
+      if (code !== 75) return code;
+    }
+    for (let waited = 0; waited < waitInterval; waited += 1000) {
+      if (cancelled) throw new Error('已取消等待中的发布');
+      await delay(1000);
+    }
   }
-  if (command === 'status') console.log(JSON.stringify(await deploymentStatus(dataDirectory)));
-  else if (!['publish', 'unblock'].includes(command)) throw new Error('用法：node deploy/release.mjs status | publish <staging目录> [--frontend-only] | unblock');
+}
+
+async function cancelPendingRelease() {
+  if (!await pendingRelease()) { console.log(JSON.stringify({ state: 'none' })); return; }
+  // A release already under way rolls back first, within the unit's stop timeout.
+  try { await execute('systemctl', ['--user', 'stop', waiterUnit], { timeout: 330000 }); }
+  catch { throw new Error(`${waiterUnit} 停止未完成，请检查 systemd 服务状态`); }
+  console.log(JSON.stringify({ state: 'cancelled' }));
+}
+
+try {
+  if (command === 'publish' && process.argv.slice(4).some(flag => !['--locked', '--frontend-only', '--wait', '--in-background'].includes(flag))) {
+    throw new Error('未知发布参数；仅支持 --frontend-only 和 --wait');
+  }
+  if (command === 'status') console.log(JSON.stringify({ ...await deploymentStatus(dataDirectory), pendingRelease: await pendingRelease() }));
+  else if (command === 'cancel') await cancelPendingRelease();
+  else if (!['publish', 'unblock'].includes(command)) throw new Error('用法：node deploy/release.mjs status | publish <staging目录> [--frontend-only] [--wait] | cancel | unblock');
   else if (command === 'publish' && (!argument || argument.startsWith('--'))) throw new Error('publish 需要含 backend/ 和 frontend/ 构建结果的 staging 目录');
-  else if (!locked) await underLock();
-  else if (command === 'publish') await publish(argument);
+  else if (locked) {
+    if (command === 'publish') await publish(argument);
+    else {
+      const database = openDatabase(dataDirectory, false);
+      try { const count = gateCount(database); removeGate(database); console.log(JSON.stringify({ state: 'unblocked', removedTriggers: count })); }
+      finally { database.close(); }
+    }
+  } else if (command === 'unblock') process.exitCode = await underLock();
+  else if (inBackground) process.exitCode = await waitAndPublish(argument);
   else {
-    const database = openDatabase(dataDirectory, false);
-    try { const count = gateCount(database); removeGate(database); console.log(JSON.stringify({ state: 'unblocked', removedTriggers: count })); }
-    finally { database.close(); }
+    // A waiting release would otherwise replace this one as soon as the deployment is idle.
+    const pending = await pendingRelease();
+    if (pending) throw new Error(`已有等待空闲的发布（${pending.description}）；先执行 cancel 再发布`);
+    const staging = await realpath(resolve(argument));
+    const code = await underLock();
+    if (code === 75 && waitWhenBusy && !cancelled) {
+      await stat(join(staging, 'backend', 'server.js'));
+      await stat(join(staging, 'frontend', 'index.html'));
+      await scheduleRelease(staging);
+      console.log(JSON.stringify({ state: 'scheduled', unit: waiterUnit, staging }));
+    } else process.exitCode = code;
   }
 } catch (error) {
   console.error(error.message);
-  process.exitCode = 1;
+  process.exitCode = error.exitCode ?? 1;
 }

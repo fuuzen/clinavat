@@ -10,8 +10,8 @@ export const services = ['clinavat-hub.service', 'clinavat-web.service'];
 const gateSuffixes = ['sessions_insert', 'sessions_update', 'turns_insert', 'turns_update'];
 const gateNames = gateSuffixes.map(name => `clinavat_release_${name}`);
 
-export async function serviceState(service) {
-  const { stdout } = await execute('systemctl', ['--user', 'show', service, '--property=LoadState,ActiveState,SubState,MainPID,ControlGroup,UnitFileState'], { timeout: 10000 });
+export async function serviceState(service, properties = 'LoadState,ActiveState,SubState,MainPID,ControlGroup,UnitFileState') {
+  const { stdout } = await execute('systemctl', ['--user', 'show', service, `--property=${properties}`], { timeout: 10000 });
   return Object.fromEntries(stdout.trim().split('\n').map(line => {
     const separator = line.indexOf('=');
     return [line.slice(0, separator), line.slice(separator + 1)];
@@ -130,7 +130,7 @@ export function hasRuntimeActivity(runtime, includeUsageProbes = true) {
 export async function deploymentStatus(dataDirectory) {
   const database = openDatabase(dataDirectory);
   try {
-    const [hub, web] = await Promise.all(services.map(serviceState));
+    const [hub, web] = await Promise.all(services.map(service => serviceState(service)));
     const activity = activityCounts(database);
     const runtime = await runtimeCounts(database, dataDirectory, hub);
     return { checkedAt: new Date().toISOString(), state: hasActivity(activity) || hasRuntimeActivity(runtime) ? 'waiting' : 'idle',

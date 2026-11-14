@@ -186,6 +186,7 @@ node $scripts/build-release.mjs --repo <项目目录> <提交>       # 输出下
 node $scripts/build-release.mjs --repo <项目目录> --working-tree   # 或：不提交，按工作区现状构建
 node --no-warnings $scripts/release.mjs status
 node --no-warnings $scripts/release.mjs publish <暂存目录>
+node --no-warnings $scripts/release.mjs publish <暂存目录> --wait   # 忙时转入后台，空闲后自动发布
 # 依赖或部署脚本也有变化时，改用完整安装（会重启服务）：
 node $scripts/host.mjs install --source <源码目录>
 ```
@@ -199,6 +200,7 @@ node $scripts/host.mjs install --source <源码目录>
 发布脚本的行为：
 
 - **只在空闲时发布**：有任何运行中的对话、待处理的审批或账号切换进程时，脚本不做任何改动，返回退出码 `75`，稍后重试即可。
+- **等待空闲后发布**：加 `--wait` 时，空闲则立即发布；忙时输出 `{"state":"scheduled",…}` 并以 `0` 退出，由 systemd 用户单元 `clinavat-release-wait.service` 在后台每 15 秒检查一次，空闲后自动发布（断开 SSH 不受影响）。同一时间只能有一个等待中的发布，此时再执行 `publish` 会被拒绝。`status` 的 `pendingRelease` 显示等待中的发布，`release.mjs cancel` 取消它（如果已经开始发布，会像按 Ctrl-C 一样回滚）。发布结果和失败原因用 `journalctl --user -u clinavat-release-wait` 查看；遇到退出码 `75` 以外的错误时，后台任务结束，不再重试。
 - **防止发布途中有新任务**：空闲时先在数据库中设置发布锁，阻止新任务启动，再更新并重启服务。
 - **自动验证和回滚**：发布后检查后端健康接口和前端页面；失败时自动恢复旧版本。旧版本保存在 `~/.local/state/clinavat/releases/<发布编号>/previous`，需要手动回滚时把这个目录传给同一个 `publish` 命令。
 

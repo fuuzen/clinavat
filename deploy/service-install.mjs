@@ -60,7 +60,7 @@ export async function ensureInstallIdle(dataDirectory) {
 }
 
 export async function activateServices(dataDirectory, restoreUnits) {
-  const previousStates = await Promise.all(services.map(serviceState));
+  const previousStates = await Promise.all(services.map(service => serviceState(service)));
   const active = state => ['active', 'activating', 'reloading', 'deactivating'].includes(state.ActiveState);
   const database = existsSync(databasePath(dataDirectory)) ? openDatabase(dataDirectory, false) : undefined;
   let gated = false;
