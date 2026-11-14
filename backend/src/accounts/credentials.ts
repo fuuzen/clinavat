@@ -5,7 +5,7 @@ import { HttpError } from '../models.js';
 import { credentialHash, privateDirectory, readAccountCredential, readPrivateJson, writePrivateJson } from './credential-files.js';
 import { accountIdentifier, type AccountEngine } from './paths.js';
 import { assertSlotSessionState, bindSlotSessionState, detachSlotSessionState } from './session-state/index.js';
-import { initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
+import { archiveUnboundSlotProfile, initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
 import type { SlotAuthMethod, SlotTokens } from './slot-tokens.js';
 import type { ExecutionHost } from '../execution/types.js';
 
@@ -304,6 +304,7 @@ export class AccountCredentials {
       throw new HttpError(409, `授权槽位尚未完成 ${journal.engine} 登录，请联系管理员`);
     }
     await initializeSlotProfile(this.dataDir, journal.slotId, journal.home, journal.engine);
+    await archiveUnboundSlotProfile(this.dataDir, journal.slotId, journal.home, journal.engine);
     await writePrivateJson(this.file(journal.slotId), JSON.stringify(journal));
     await restoreSlotProfile(this.dataDir, journal.userId, journal.slotId, journal.home, journal.engine);
     const key = `${journal.userId}:${journal.engine}`;

@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto';
+import { readdir, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import { accountIdentifier, type AccountEngine } from '../paths.js';
 import { moveSlotProfile, pathExists } from './profile-files.js';
 import { archiveAccountArtifacts, assertNoAccountArtifacts } from './profile-artifacts.js';
 import { ensureClaudeSlotIdentity } from '../claude-identity.js';
+import { metadata } from '../session-state/files.js';
+import { engineDirectory, sessionStateDirectories, sessionStateFiles } from '../session-state/layout.js';
 
 interface Initialization { version: 1; slotId: string; home: string; engine: AccountEngine; phase: 'prepared' | 'complete' }
 interface ProfileMarker { version: 1; userId: string; slotId: string; engine: AccountEngine }
@@ -16,8 +20,18 @@ function profileHome(dataDir: string, userId: string, slotId: string): string {
   return join(dataDir, 'users', accountIdentifier(userId), 'slot-state', accountIdentifier(slotId), 'runtime');
 }
 
+async function assertUnboundSessionState(home: string, engine: AccountEngine): Promise<void> {
+  if (await pathExists(join(home, '.slot-session-state.json'))) throw new Error('槽位仍有原生会话映射记录，已停止归档未归属配置');
+  for (const name of [...sessionStateDirectories(engine), ...sessionStateFiles(engine)]) {
+    if ((await metadata(join(engineDirectory(home, engine), name)))?.isSymbolicLink()) {
+      throw new Error('槽位仍有原生会话映射，已停止归档未归属配置');
+    }
+  }
+}
+
 export async function initializeSlotProfile(dataDir: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
   slotHome(dataDir, slotId, home);
+  await assertUnboundSessionState(home, engine);
   if (engine === 'claude') await ensureClaudeSlotIdentity(dataDir, slotId, home);
   const markerFile = join(dataDir, 'accounts', 'slot-profiles-v3', `${slotId}.json`);
   const archive = join(dataDir, 'backups', 'slot-runtime-v3', slotId, 'runtime');
@@ -36,6 +50,22 @@ export async function initializeSlotProfile(dataDir: string, slotId: string, hom
   await moveSlotProfile(home, archive, engine, 'archive');
   marker.phase = 'complete';
   await writePrivateJson(markerFile, JSON.stringify(marker));
+}
+
+/** Login and diagnostic CLIs can create runtime files after the previous user's profile was saved. */
+export async function archiveUnboundSlotProfile(dataDir: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
+  slotHome(dataDir, slotId, home);
+  await assertUnboundSessionState(home, engine);
+  const directory = join(dataDir, 'backups', 'slot-unbound-runtime', slotId, randomUUID());
+  const runtime = join(directory, 'runtime');
+  await writePrivateJson(join(directory, 'source.json'), JSON.stringify({ version: 1, slotId, home, engine, createdAt: new Date().toISOString() }));
+  await archiveAccountArtifacts(dataDir, slotId, home, engine);
+  await moveSlotProfile(home, runtime, engine, 'archive');
+  const entries = await readdir(runtime);
+  const engineName = engine === 'claude' ? '.claude' : '.codex';
+  const onlyEmptyEngine = entries.length === 1 && entries[0] === engineName
+    && (await readdir(join(runtime, engineName))).length === 0;
+  if (!entries.length || onlyEmptyEngine) await rm(directory, { recursive: true });
 }
 
 async function ensureProfile(dataDir: string, userId: string, slotId: string, engine: AccountEngine): Promise<string> {
