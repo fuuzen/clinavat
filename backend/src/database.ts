@@ -181,6 +181,8 @@ export class Store {
     this.addColumn('account_slots', 'model_catalog', 'TEXT');
     this.addColumn('account_slots', 'model_catalog_at', 'TEXT');
     this.addColumn('account_slots', 'auth_method', "TEXT NOT NULL DEFAULT 'oauth' CHECK(auth_method IN ('oauth','token'))");
+    // Whether the slot's assigned members may spend its rate-limit resets; administrators always may.
+    this.addColumn('account_slots', 'members_can_reset', 'INTEGER NOT NULL DEFAULT 0 CHECK(members_can_reset IN (0,1))');
     this.addColumn('user_agent_defaults', 'permission_mode',
       "TEXT CHECK(permission_mode IN ('manual','accept-edits','auto','full-access','yolo'))");
     // IDs of the images attached to a user message, as JSON; NULL when there are none.

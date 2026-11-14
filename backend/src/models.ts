@@ -12,6 +12,7 @@ export interface Slot {
   /** `token` slots authenticate with a long-lived `claude setup-token` token instead of a browser login. */
   auth_method: 'oauth' | 'token';
   token_expires_at: string | null;
+  members_can_reset: 0 | 1;
   /** The saved model catalog as JSON, and when it was read from the slot's CLI. */
   model_catalog: string | null;
   model_catalog_at: string | null;

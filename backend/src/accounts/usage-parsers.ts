@@ -4,6 +4,7 @@ export interface UsageUpdate {
   plan?: string | null;
   windows: UsageWindow[];
   credits?: SlotUsageView['credits'];
+  resetCredits?: SlotUsageView['resetCredits'];
   limited?: boolean | null;
   limitingWindow?: string | null;
   unavailable?: string;
@@ -101,6 +102,20 @@ function codexCredits(snapshot: any): SlotUsageView['credits'] | undefined {
   return { balance: typeof credits.balance === 'string' ? credits.balance : null, unlimited: credits.unlimited === true };
 }
 
+// The backend may cap the detail rows, and `credits: null` means only the count is known.
+function codexResetCredits(summary: any): SlotUsageView['resetCredits'] {
+  if (!summary || typeof summary.availableCount !== 'number') return null;
+  const credits = Array.isArray(summary.credits) ? summary.credits
+    .filter((credit: any) => typeof credit?.id === 'string' && credit.status === 'available')
+    .map((credit: any) => ({
+      id: credit.id,
+      title: typeof credit.title === 'string' ? credit.title : null,
+      description: typeof credit.description === 'string' ? credit.description : null,
+      expiresAt: timestamp(credit.expiresAt),
+    })) : null;
+  return { available: summary.availableCount, credits };
+}
+
 export function parseCodexRead(response: any): UsageUpdate {
   const buckets = Object.values(response?.rateLimitsByLimitId ?? {}).filter(Boolean);
   const list = buckets.length ? buckets : response?.rateLimits ? [response.rateLimits] : [];
@@ -110,6 +125,7 @@ export function parseCodexRead(response: any): UsageUpdate {
     windows: list.flatMap((bucket: any) => codexBucket(bucket, list.length > 1 && bucket?.limitId !== 'codex')),
     plan: typeof primary?.planType === 'string' ? primary.planType : null,
     credits: codexCredits(primary) ?? null,
+    resetCredits: codexResetCredits(response?.rateLimitResetCredits),
     limited: response?.ordinaryUsageAllowed === false || reached ? true : response?.ordinaryUsageAllowed === true ? false : null,
   };
 }

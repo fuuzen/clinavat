@@ -262,7 +262,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     if (signal.aborted) { abort(); throw new Error('会话已停止'); }
     await initializeCodexServer(rpc);
     // A full snapshot at run start; later notifications only carry changed values.
-    if (services.config.usage) void rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true }, 15000)
+    if (services.config.usage) void rpc.request('account/rateLimits/read', {}, 15000)
       .then(result => services.config.usage?.observe(services.context.slot, 'codex-read', result,
         services.context.account_identity)).catch(() => undefined);
     const selection = services.context.session;
@@ -377,8 +377,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
   }
   return {
     process: child, completion, stop: abort,
-    readUsage: async () => parseCodexRead(await rpc.request('account/rateLimits/read',
-      { excludeResetCreditDetails: true }, 30000, false)),
+    readUsage: async () => parseCodexRead(await rpc.request('account/rateLimits/read', {}, 30000, false)),
     startTurn: (input) => mutate(async () => {
       if (finished || stopped) throw new Error('当前执行已结束');
       turnActive = true;

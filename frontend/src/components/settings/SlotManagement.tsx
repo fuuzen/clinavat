@@ -86,7 +86,9 @@ export default function SlotManagement({
       setSlots((current) => current.map((item) => item.id === updated.id ? updated : item));
       setAssignmentVersions((current) => ({ ...current, [slot.id]: (current[slot.id] || 0) + 1 }));
       setSuccess(values.allowedUserIds !== undefined ? `「${slot.label}」的用户分配已保存`
-        : values.label !== undefined ? `已将「${slot.label}」改名为「${updated.label}」` : "槽位配置已更新");
+        : values.label !== undefined ? `已将「${slot.label}」改名为「${updated.label}」`
+          : values.membersCanReset !== undefined ? `已${updated.members_can_reset ? "允许" : "取消允许"}「${slot.label}」的成员使用额度重置`
+            : "槽位配置已更新");
       const [reloadResult, overviewResult] = await Promise.allSettled([load(), onRefresh()]);
       if (reloadResult.status === "rejected") {
         setRequiresReload(true);

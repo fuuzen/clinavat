@@ -10,6 +10,7 @@ interface SlotUpdate {
   label?: string;
   status?: Slot['status'];
   allowedUserIds?: string[];
+  membersCanReset?: boolean;
   expectedRevision?: number;
 }
 
@@ -43,8 +44,9 @@ export async function updateSlot(context: Context, slotId: string, input: SlotUp
         store.run('DELETE FROM slot_user_access WHERE slot_id=?', slotId);
         for (const userId of allowedUsers) store.run('INSERT INTO slot_user_access(slot_id,user_id) VALUES(?,?)', slotId, userId);
       }
-      store.run(`UPDATE account_slots SET label=?,status=?,credential_revision=credential_revision+?,updated_at=datetime('now') WHERE id=?`,
-        input.label ?? slot.label, status, accountChanged ? 1 : 0, slotId);
+      store.run(`UPDATE account_slots SET label=?,status=?,members_can_reset=?,credential_revision=credential_revision+?,
+        updated_at=datetime('now') WHERE id=?`, input.label ?? slot.label, status,
+      input.membersCanReset === undefined ? slot.members_can_reset : input.membersCanReset ? 1 : 0, accountChanged ? 1 : 0, slotId);
       return store.get<Slot>('SELECT * FROM account_slots WHERE id=?', slotId)!;
     });
     announceSlotChange(context, [...previousUsers, ...allowedUsers]);

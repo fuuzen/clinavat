@@ -9,7 +9,7 @@ const PROBE_TIMEOUT = 30_000;
 
 export interface Probe { execution: ExecutionHost; scope: ExecutionScope; binary: string; home: string }
 
-function probeEnvironment({ execution, scope, home }: Probe): NodeJS.ProcessEnv {
+export function probeEnvironment({ execution, scope, home }: Probe): NodeJS.ProcessEnv {
   return { ...execution.baseEnvironment(scope), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
     CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), SHELL: '/bin/bash' };
 }
@@ -53,6 +53,11 @@ export async function claudeProbe(probe: Probe): Promise<UsageUpdate> {
 }
 
 export async function codexProbe(probe: Probe): Promise<UsageUpdate> {
+  return withCodexServer(probe, async rpc => parseCodexRead(await rpc.request('account/rateLimits/read', {}, PROBE_TIMEOUT)));
+}
+
+/** A short-lived app-server on the probe's login, answering nothing the server asks of a client. */
+export async function withCodexServer<T>(probe: Probe, task: (rpc: RpcClient) => Promise<T>): Promise<T> {
   const child = await probe.execution.spawn(probe.binary, ['-c', 'cli_auth_credentials_store="file"', 'app-server'], {
     scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe),
   });
@@ -66,7 +71,7 @@ export async function codexProbe(probe: Probe): Promise<UsageUpdate> {
       clientInfo: { name: 'clinavat_usage', title: 'Clinavat Usage', version: '0.1.0' }, capabilities: { experimentalApi: true },
     }, PROBE_TIMEOUT);
     rpc.send({ method: 'initialized', params: {} });
-    return parseCodexRead(await rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true }, PROBE_TIMEOUT));
+    return await task(rpc);
   } finally {
     rpc.close();
     child.stdin.end();

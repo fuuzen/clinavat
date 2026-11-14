@@ -18,6 +18,10 @@ export interface Slot {
   /** When the slot's model catalog was last read from its CLI. */
   model_catalog_at?: string | null;
   allowed_user_ids?: string[];
+  /** Whether the administrator lets the slot's assigned members spend its rate-limit resets. */
+  members_can_reset: boolean;
+  /** Whether the current user may spend this slot's resets; listed for the user's own slots. */
+  can_reset_limits?: boolean;
   max_concurrent_users: 1;
   in_use: boolean;
   in_use_by_you: boolean;
@@ -234,12 +238,28 @@ export interface UsageWindow {
   limited?: boolean;
 }
 
+export interface ResetCredit {
+  id: string;
+  title: string | null;
+  description: string | null;
+  expiresAt: string | null;
+}
+
+export interface LimitResetResult {
+  outcome: string;
+  message: string;
+  detail: string | null;
+  usage: SlotUsage;
+}
+
 export interface SlotUsage {
   slotId: string;
   state: "pending" | "ok" | "error" | "unavailable";
   plan: string | null;
   windows: UsageWindow[];
   credits: { balance: string | null; unlimited: boolean } | null;
+  /** Codex resets the account has earned; `credits` is null when only the count is known. */
+  resetCredits: { available: number; credits: ResetCredit[] | null } | null;
   limited: boolean | null;
   observedAt: string | null;
   /** When the reading stops counting as current; set by the administrator's validity period. */

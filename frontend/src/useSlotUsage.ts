@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, post } from "./api";
-import type { SlotUsage } from "./types";
+import type { LimitResetResult, SlotUsage } from "./types";
 
 // One store shared by every view, so open pages do not multiply backend queries.
 let snapshot: Record<string, SlotUsage> = {};
@@ -90,6 +90,12 @@ function acquirePolling() {
 
 export async function refreshSlotUsage(slotId: string) {
   receiveSlotUsage(await post<SlotUsage>(`/slots/${slotId}/usage/refresh`));
+}
+
+export async function resetSlotLimit(slotId: string, creditId?: string): Promise<LimitResetResult> {
+  const result = await post<LimitResetResult>(`/slots/${slotId}/limit-reset`, creditId ? { creditId } : {});
+  receiveSlotUsage(result.usage);
+  return result;
 }
 
 // While active, asks the backend to re-query entries older than its minimum interval.

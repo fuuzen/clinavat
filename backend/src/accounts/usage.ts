@@ -7,7 +7,7 @@ import { accountIdentifier, credentialPath, type AccountEngine } from './paths.j
 import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
-import { claudeProbe, codexProbe } from './usage-probes.js';
+import { claudeProbe, codexProbe, type Probe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
 import { readLogin, readSubscription, type SlotLogin, type SlotSubscription } from './subscription.js';
 import type { UsageSettings } from './usage-settings.js';
@@ -24,12 +24,21 @@ export interface UsageWindow {
   observedAt?: string;
 }
 
+export interface ResetCredit {
+  id: string;
+  title: string | null;
+  description: string | null;
+  expiresAt: string | null;
+}
+
 export interface SlotUsageView {
   slotId: string;
   state: 'pending' | 'ok' | 'error' | 'unavailable';
   plan: string | null;
   windows: UsageWindow[];
   credits: { balance: string | null; unlimited: boolean } | null;
+  /** Codex rate-limit resets the account has earned; Claude reports none. */
+  resetCredits: { available: number; credits: ResetCredit[] | null } | null;
   // Explicit server signal only; never derived from percentages or reset times.
   limited: boolean | null;
   limitingWindow?: string | null;
@@ -56,6 +65,7 @@ interface Snapshot {
   plan: string | null;
   windows: Map<string, UsageWindow>;
   credits: SlotUsageView['credits'];
+  resetCredits?: SlotUsageView['resetCredits'];
   limited: boolean | null;
   limitingWindow?: string | null;
   observedAt: number;
@@ -284,6 +294,7 @@ export class SlotUsage {
       plan: snapshot?.plan ?? null,
       windows: [...(snapshot?.windows.values() ?? [])],
       credits: snapshot?.credits ?? null,
+      resetCredits: snapshot?.resetCredits ?? null,
       limited: snapshot?.limited ?? null,
       limitingWindow: snapshot?.limitingWindow ?? null,
       observedAt: snapshot ? new Date(snapshot.observedAt).toISOString() : null,
@@ -341,6 +352,7 @@ export class SlotUsage {
     }
     if (update.plan !== undefined) snapshot.plan = update.plan ?? snapshot.plan;
     if (update.credits !== undefined) snapshot.credits = update.credits;
+    if (update.resetCredits !== undefined) snapshot.resetCredits = update.resetCredits;
     if (update.limited !== undefined) snapshot.limited = update.limited;
     if (update.limitingWindow !== undefined) snapshot.limitingWindow = update.limitingWindow;
     else if (update.limited !== undefined) snapshot.limitingWindow = null;
@@ -392,21 +404,47 @@ export class SlotUsage {
   }
 
   private async probe(slot: UsageSlot): Promise<UsageUpdate> {
-    const credential = await inspectCredential(slot.home_dir, slot.engine);
-    if (credential.kind === 'none') throw new Error('槽位尚未完成登录');
-    if (credential.kind === 'apikey') return { windows: [], unavailable: 'API key 账号没有订阅额度窗口' };
-    // Idle slots are paused for the probe, so a token refresh can be written back safely. A parked slot is
-    // only given up when its token needs that refresh; otherwise its last user keeps it prepared.
-    const idle = await this.credentials.whileIdle(slot.id, async () => {
-      if (slot.engine === 'claude') await ensureClaudeSlotIdentity(this.config.dataDir, slot.id, slot.home_dir);
-      return this.isolatedProbe(slot);
-    }, credential.fresh);
-    if (idle) return idle.value;
-    if (!credential.fresh) throw new Error('槽位正在使用且访问令牌临近刷新，等待对话中的额度事件更新');
-    return this.isolatedProbe(slot);
+    if ((await inspectCredential(slot.home_dir, slot.engine)).kind === 'apikey') {
+      return { windows: [], unavailable: 'API key 账号没有订阅额度窗口' };
+    }
+    const source = credentialPath(slot.home_dir, slot.engine);
+    return this.isolated(slot, async probe => {
+      const original = await readPrivateJson(source, slot.home_dir);
+      const update = await (slot.engine === 'claude' ? claudeProbe(probe) : codexProbe(probe));
+      if (await readPrivateJson(source, slot.home_dir) !== original) {
+        throw new Error('额度查询期间登录凭据已变化，已丢弃原账号的额度结果');
+      }
+      return update;
+    }, '槽位正在使用且访问令牌临近刷新，等待对话中的额度事件更新');
   }
 
-  private async isolatedProbe(slot: UsageSlot): Promise<UsageUpdate> {
+  /**
+   * Runs CLI work against a private copy of the slot's login, writing back any token the CLI rotates.
+   * Idle slots are paused for it, so a token refresh can be written back safely. A parked slot is
+   * only given up when its token needs that refresh; otherwise its last user keeps it prepared.
+   */
+  async isolated<T>(slot: UsageSlot, task: (probe: Probe) => Promise<T>,
+    busyMessage = '槽位正在使用且访问令牌临近刷新，请在对话结束后再试'): Promise<T> {
+    const credential = await inspectCredential(slot.home_dir, slot.engine);
+    if (credential.kind === 'none') throw new Error('槽位尚未完成登录');
+    if (credential.kind === 'apikey') throw new Error('API key 账号没有订阅额度');
+    const idle = await this.credentials.whileIdle(slot.id, async () => {
+      if (slot.engine === 'claude') await ensureClaudeSlotIdentity(this.config.dataDir, slot.id, slot.home_dir);
+      return this.isolatedRun(slot, task);
+    }, credential.fresh);
+    if (idle) return idle.value;
+    if (!credential.fresh) throw new Error(busyMessage);
+    return this.isolatedRun(slot, task);
+  }
+
+  /** Applies a reading taken outside the regular queries, such as one right after a limit reset. */
+  async record(slot: UsageSlot, update: UsageUpdate, identity: string | null): Promise<SlotUsageView> {
+    await this.apply(slot, update, 'replace', 'query', identity);
+    this.state(slot.id).checkedAt = Date.now();
+    return this.view(slot.id);
+  }
+
+  private async isolatedRun<T>(slot: UsageSlot, task: (probe: Probe) => Promise<T>): Promise<T> {
     const source = credentialPath(slot.home_dir, slot.engine);
     const original = await readPrivateJson(source, slot.home_dir);
     if (original === undefined) throw new Error('槽位尚未完成登录');
@@ -430,12 +468,7 @@ export class SlotUsage {
             .filter(key => account?.[key] !== undefined).map(key => [key, account[key]]))));
         await writePrivateJson(join(home, '.claude', '.claude.json'), JSON.stringify({ ...identity, ...installation }));
       }
-      const probe = { execution, scope, home, binary: await execution.binary(scope, slot.engine) };
-      const update = await (slot.engine === 'claude' ? claudeProbe(probe) : codexProbe(probe));
-      if (await readPrivateJson(source, slot.home_dir) !== original) {
-        throw new Error('额度查询期间登录凭据已变化，已丢弃原账号的额度结果');
-      }
-      return update;
+      return await task({ execution, scope, home, binary: await execution.binary(scope, slot.engine) });
     } finally {
       try {
         const after = await readFile(copy, 'utf8').catch(() => original);

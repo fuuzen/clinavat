@@ -1,8 +1,9 @@
-import { Check, ChevronDown, LoaderCircle, RefreshCw, ShieldCheck, Shuffle } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, Shuffle } from "lucide-react";
 import { useState } from "react";
 import { statusLabel } from "../../api";
 import type { AccountSelection, Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow, useSlotUsage } from "../../useSlotUsage";
+import LimitResetDialog, { limitResetOffer } from "../usage/LimitReset";
 import SlotUsageRing from "../usage/SlotUsageRing";
 import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
 import { planName } from "../usage/subscription";
@@ -22,6 +23,8 @@ interface Props {
 export default function SlotPicker({ slots, slotId, selection, engine, disabled, saving, onChange }: Props) {
   const usage = useSlotUsage(slots.length > 0);
   const now = useNow();
+  // The dialog lives outside the menu, which closes as soon as focus leaves it.
+  const [resetting, setResetting] = useState<Slot | null>(null);
   const selected = slots.find((slot) => slot.id === slotId);
   const available = slots.filter((slot) => !engine || slot.engine === engine);
   const name = selection.slotMode === "auto" ? selected ? `自动 · ${selected.label}` : "自动选择"
@@ -31,24 +34,28 @@ export default function SlotPicker({ slots, slotId, selection, engine, disabled,
   const plan = selected ? planName(selected.engine, usage[selected.id]) : null;
   const title = `当前对话的授权槽位：${name}${selected ? ` · ${selected.engine === "claude" ? "Claude Code" : "Codex"}${plan ? ` ${plan}` : ""}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
   return (
-    <SettingsMenu
-      label="授权槽位"
-      title={title}
-      className="slot-trigger"
-      disabled={disabled || saving}
-      trigger={(
-        <>
-          {selected ? <SlotUsageRing engine={selected.engine} usage={usage[selected.id]} now={now} saving={saving}
-            slotLimited={selected.status === "RATE_LIMITED"} /> : <span className="engine-symbol" aria-hidden="true">
-              {saving ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
-            </span>}
-          <span className="settings-trigger-label">{name}</span>
-          {!saving && <ChevronDown size={12} className="settings-trigger-chevron" aria-hidden="true" />}
-        </>
-      )}
-    >
-      {(close) => <SlotMenu available={available} slotId={slotId} selection={selection} engine={engine} usage={usage} now={now} onChange={onChange} close={close} />}
-    </SettingsMenu>
+    <>
+      <SettingsMenu
+        label="授权槽位"
+        title={title}
+        className="slot-trigger"
+        disabled={disabled || saving}
+        trigger={(
+          <>
+            {selected ? <SlotUsageRing engine={selected.engine} usage={usage[selected.id]} now={now} saving={saving}
+              slotLimited={selected.status === "RATE_LIMITED"} /> : <span className="engine-symbol" aria-hidden="true">
+                {saving ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
+              </span>}
+            <span className="settings-trigger-label">{name}</span>
+            {!saving && <ChevronDown size={12} className="settings-trigger-chevron" aria-hidden="true" />}
+          </>
+        )}
+      >
+        {(close) => <SlotMenu available={available} slotId={slotId} selection={selection} engine={engine} usage={usage} now={now}
+          onChange={onChange} onReset={setResetting} close={close} />}
+      </SettingsMenu>
+      {resetting && <LimitResetDialog slot={resetting} usage={usage[resetting.id]} onClose={() => setResetting(null)} />}
+    </>
   );
 }
 
@@ -112,9 +119,9 @@ function SlotRefresh({ slot, usage }: { slot: Slot; usage?: SlotUsage }) {
   );
 }
 
-function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, close }: {
+function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, onReset, close }: {
   available: Slot[]; slotId: string; selection: AccountSelection; engine?: "claude" | "codex"; usage: Record<string, SlotUsage>; now: number;
-  onChange: (selection: AccountSelection) => void; close: () => void;
+  onChange: (selection: AccountSelection) => void; onReset: (slot: Slot) => void; close: () => void;
 }) {
   return (
         <>
@@ -141,6 +148,8 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
                 {matching.map((slot) => {
                   const slotUsage = usage[slot.id];
                   const limited = slot.status === "RATE_LIMITED";
+                  const resetOffer = slot.can_reset_limits && slot.status !== "DISABLED" && slot.auth_method !== "token"
+                    ? limitResetOffer(slot.engine, slotUsage) : null;
                   return (
                     <div className="settings-menu-entry" key={slot.id}>
                       <button
@@ -163,6 +172,13 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
                         {slot.status !== "DISABLED" && <SlotQuota slot={slot} usage={slotUsage} now={now} />}
                         <Check size={14} className="settings-item-check" aria-hidden="true" />
                       </button>
+                      {resetOffer && (
+                        <button type="button" className="icon-button slot-menu-reset" role="menuitem" tabIndex={-1}
+                          aria-label={`使用 ${slot.label} 的额度重置：${resetOffer}`} title={`使用额度重置：${resetOffer}`}
+                          onClick={() => { onReset(slot); close(); }}>
+                          <RotateCcw size={12} aria-hidden="true" />
+                        </button>
+                      )}
                       {slot.status !== "DISABLED" && slot.auth_method !== "token" && <SlotRefresh slot={slot} usage={slotUsage} />}
                     </div>
                   );

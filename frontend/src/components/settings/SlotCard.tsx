@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { Check, LoaderCircle, Pencil, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { Check, LoaderCircle, Pencil, RefreshCw, RotateCcw, ShieldCheck, Trash2, X } from "lucide-react";
 import { errorText, post } from "../../api";
 import type { ModelCatalog, Slot, SlotUsage, User } from "../../types";
 import SlotUsageMeter from "../usage/SlotUsageMeter";
+import LimitResetDialog, { limitResetOffer, resetCreditsText } from "../usage/LimitReset";
 import MobileCardDetails from "../admin/MobileCardDetails";
 import SlotLogin from "./SlotLogin";
 import SlotUserPicker from "./SlotUserPicker";
@@ -48,6 +49,9 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginCh
           disabled={busy || running} onSave={(userId) => onUpdate(slot, { allowedUserIds: userId ? [userId] : [] })} />
         {assignmentError && <p className="slot-user-error">{assignmentError}</p>}
         {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={usage} refreshable={slot.auth_method !== "token"} />}
+        {slot.status !== "DISABLED" && slot.auth_method !== "token" && (
+          <SlotResetAccess slot={slot} usage={usage} disabled={busy} onChange={(membersCanReset) => onUpdate(slot, { membersCanReset })} />
+        )}
         {slot.status !== "DISABLED" && <SlotModels slot={slot} />}
         {slot.home_dir && <SlotLogin slot={slot} disabled={busy || running} onChanged={onLoginChanged} />}
         <button type="button" className="text-button danger-text slot-delete" disabled={busy || running || enabled}
@@ -96,6 +100,33 @@ function SlotLabel({ slot, disabled, onSave }: { slot: Slot; disabled: boolean; 
         <X size={12} />
       </button>
     </form>
+  );
+}
+
+/** Whether assigned members may spend the slot's rate-limit resets, and the administrator's own way to spend one. */
+function SlotResetAccess({ slot, usage, disabled, onChange }: {
+  slot: Slot; usage?: SlotUsage; disabled: boolean; onChange: (membersCanReset: boolean) => Promise<void>;
+}) {
+  const [resetting, setResetting] = useState(false);
+  const offer = limitResetOffer(slot.engine, usage);
+  return (
+    <div className="slot-reset-access">
+      <label>
+        <input type="checkbox" checked={slot.members_can_reset} disabled={disabled}
+          onChange={(event) => void onChange(event.target.checked).catch(() => {})} />
+        允许被分配的成员使用额度重置
+      </label>
+      <small>
+        {slot.engine === "claude" ? "Claude 每周可重置 1 次 5 小时额度，5 小时额度用尽后可用"
+          : resetCreditsText(usage) ?? "暂无可用的重置卡"}
+      </small>
+      {offer && (
+        <button type="button" className="button button-ghost" onClick={() => setResetting(true)}>
+          <RotateCcw size={12} />使用重置 · {offer}
+        </button>
+      )}
+      {resetting && <LimitResetDialog slot={slot} usage={usage} onClose={() => setResetting(false)} />}
+    </div>
   );
 }
 

@@ -73,7 +73,7 @@ export const adminHandlers = [
     const engine = input.engine || "claude";
     const slot: Slot = {
       id: input.id || crypto.randomUUID(), label: input.label || "新槽位", engine, status: "IDLE", auth_method: "oauth", allowed_user_ids: [],
-      max_concurrent_users: 1, in_use: false, in_use_by_you: false, active_user_id: null,
+      members_can_reset: false, max_concurrent_users: 1, in_use: false, in_use_by_you: false, active_user_id: null,
       home_dir: `/data/slots/${input.id || engine}`, credential_revision: 1, updated_at: timestamp(),
     };
     db.slots.push(slot);
@@ -102,10 +102,11 @@ export const adminHandlers = [
   http.patch("/api/admin/slots/:id", async ({ params, request }) => {
     const slot = db.slots.find((item) => item.id === params.id);
     if (!slot) return fail(404, "槽位不存在");
-    const input = await readBody<{ label?: string; status?: Slot["status"]; allowedUserIds?: string[] }>(request);
+    const input = await readBody<{ label?: string; status?: Slot["status"]; allowedUserIds?: string[]; membersCanReset?: boolean }>(request);
     Object.assign(slot, {
       label: input.label ?? slot.label, status: input.status ?? slot.status,
-      allowed_user_ids: input.allowedUserIds ?? slot.allowed_user_ids, updated_at: timestamp(),
+      allowed_user_ids: input.allowedUserIds ?? slot.allowed_user_ids, members_can_reset: input.membersCanReset ?? slot.members_can_reset,
+      updated_at: timestamp(),
     });
     slot.credential_revision += 1;
     return HttpResponse.json(slot);

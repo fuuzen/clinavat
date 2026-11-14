@@ -21,8 +21,8 @@ const demoKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoOnlyPublicKeyForPrevie
 
 function slot(id: string, label: string, engine: Slot["engine"]): Slot {
   return {
-    id, label, engine, status: "IDLE", auth_method: "oauth", allowed_user_ids: [], max_concurrent_users: 1,
-    in_use: false, in_use_by_you: false, active_user_id: null,
+    id, label, engine, status: "IDLE", auth_method: "oauth", allowed_user_ids: [], members_can_reset: false, can_reset_limits: true,
+    max_concurrent_users: 1, in_use: false, in_use_by_you: false, active_user_id: null,
     home_dir: `/data/slots/${id}`, credential_revision: 1, updated_at: ago(600),
   };
 }

@@ -1,0 +1,9 @@
+.limit-reset .danger-dialog-body > small,
+.limit-reset-result > small { display: block; margin-top: 8px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.limit-reset .danger-dialog-body > label { margin-top: 12px; }
+.limit-reset-result { font-size: 13px; line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
+.limit-reset-result > p { margin: 0; }
+.slot-menu-reset { flex-shrink: 0; width: 24px; height: 24px; color: var(--warning); }
+.slot-reset-access { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--muted); }
+.slot-reset-access > label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.slot-reset-access > .button { align-self: flex-start; font-size: 11px; padding: 3px 7px; }

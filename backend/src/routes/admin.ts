@@ -8,6 +8,7 @@ import { createUser, credentials } from '../users.js';
 import { deleteSlot, setSlotToken, updateSlot } from '../accounts/assignments.js';
 import { availableSlots, serializeAdminSlot, serializeUserSlot } from '../accounts/access.js';
 import { privateDirectory } from '../accounts/credential-files.js';
+import { resetSlotLimit } from '../accounts/limit-resets/service.js';
 import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
 import { parseSetupToken } from '../accounts/slot-tokens.js';
 import { usageSettingsSchema } from '../accounts/usage-settings.js';
@@ -32,6 +33,13 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     if (!slot) throw new HttpError(404, '槽位不存在或无权查看');
     try { return await config.usage!.refresh(slot); }
     catch (error) { throw new HttpError(409, error instanceof Error ? error.message : String(error)); }
+  });
+  app.post('/api/slots/:id/limit-reset', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async request => {
+    const { id } = z.object({ id: slotId }).parse(request.params);
+    const { creditId } = z.object({ creditId: z.string().min(1).max(200).optional() }).strict().parse(request.body ?? {});
+    const result = await resetSlotLimit(context, id, request.user, creditId);
+    request.log.info({ slotId: id, userId: request.user.id, outcome: result.outcome }, 'slot rate-limit reset');
+    return result;
   });
   app.get('/api/admin/settings/usage', async request => {
     requireAdmin(request);
@@ -154,9 +162,9 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     const input = z.object({
       status: z.enum(['IDLE', 'RATE_LIMITED', 'DISABLED']).optional(),
       label: z.string().trim().min(1).max(100).optional(), allowedUserIds: z.array(z.uuid()).max(10000).optional(),
-      expectedRevision: z.number().int().nonnegative().optional(),
-    }).strict().refine(value => value.label !== undefined || value.status !== undefined || value.allowedUserIds !== undefined,
-      { message: '请提供槽位变更内容' }).parse(request.body);
+      membersCanReset: z.boolean().optional(), expectedRevision: z.number().int().nonnegative().optional(),
+    }).strict().refine(value => value.label !== undefined || value.status !== undefined || value.allowedUserIds !== undefined
+      || value.membersCanReset !== undefined, { message: '请提供槽位变更内容' }).parse(request.body);
     return serializeAdminSlot(context, await updateSlot(context, id, input));
   });
   app.delete('/api/admin/slots/:id', async request => {

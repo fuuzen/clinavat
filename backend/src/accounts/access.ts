@@ -19,12 +19,17 @@ export function slotForUser(store: Store, slotId: string, userId: string, engine
 
 export function serializeSlot(slot: Slot) {
   const { home_dir: _home, model_catalog: _catalog, ...publicSlot } = slot;
-  return { ...publicSlot, max_concurrent_users: 1 as const };
+  return { ...publicSlot, members_can_reset: slot.members_can_reset === 1, max_concurrent_users: 1 as const };
+}
+
+export function canResetLimits(store: Store, slot: Slot, userId: string): boolean {
+  return slot.members_can_reset === 1 || store.get<{ role: string }>('SELECT role FROM users WHERE id=?', userId)?.role === 'admin';
 }
 
 export function serializeUserSlot(context: Context, slot: Slot, userId: string) {
   const activeUserId = context.config.credentials.activeUserId(slot.id);
-  return { ...serializeSlot(slot), in_use: activeUserId !== null, in_use_by_you: activeUserId === userId };
+  return { ...serializeSlot(slot), in_use: activeUserId !== null, in_use_by_you: activeUserId === userId,
+    can_reset_limits: canResetLimits(context.store, slot, userId) };
 }
 
 export function serializeAdminSlot(context: Context, slot: Slot) {

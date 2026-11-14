@@ -46,13 +46,15 @@ function usage(slotId: string): SlotUsage {
   const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
   const slot = db.slots.find((item) => item.id === slotId);
   if (slot?.auth_method === "token") {
-    return { slotId, state: "unavailable", plan: null, credits: null, limited: null, observedAt: now, expiresAt: inHours(12), checkedAt: null,
+    return { slotId, state: "unavailable", plan: null, credits: null, resetCredits: null, limited: null, observedAt: now, expiresAt: inHours(12), checkedAt: null,
       source: "query", stale: false, refreshing: false, windows: [], subscription: null,
       login: { method: "token", expiresAt: slot.token_expires_at ?? null, accessExpiresAt: null, refreshedAt: null },
       error: "长期令牌（setup-token）没有额度查询权限，额度只在对话运行时更新" };
   }
   return {
-    slotId, state: "ok", plan: "Max", credits: null, limited: false, observedAt: now, expiresAt: inHours(12), checkedAt: now,
+    slotId, state: "ok", plan: "Max", credits: null, limited: false,
+    resetCredits: slot?.engine === "codex"
+      ? { available: 1, credits: [{ id: "demo-reset", title: "额度重置", description: null, expiresAt: inHours(24 * 20) }] } : null, observedAt: now, expiresAt: inHours(12), checkedAt: now,
     source: "query", stale: false, refreshing: false, error: null,
     login: { method: "oauth", expiresAt: null, accessExpiresAt: inHours(5), refreshedAt: slot?.engine === "codex" ? inHours(-30) : null },
     subscription: slot?.engine === "codex"
@@ -87,6 +89,9 @@ export const workspaceHandlers = [
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),
   http.post("/api/slots/:id/usage/refresh", ({ params }) => HttpResponse.json(usage(String(params.id)))),
+  http.post("/api/slots/:id/limit-reset", ({ params }) => HttpResponse.json({
+    outcome: "nothingToReset", message: "预览环境不会执行真实的额度重置", detail: null, usage: usage(String(params.id)),
+  })),
   http.get("/api/token-usage", ({ request }) => HttpResponse.json(
     tokenUsageReport(Number(new URL(request.url).searchParams.get("days") ?? 30), db.user.id))),
   http.get("/api/agent/models", ({ request }) =>
