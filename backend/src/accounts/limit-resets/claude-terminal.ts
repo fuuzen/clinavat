@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { observeProcessClose, terminateProcess } from '../../agent/environment.js';
@@ -161,8 +162,10 @@ function commandReply(text: string): string | null {
 
 /** The isolated home skips first-run screens and trusts the empty working directory. */
 async function prepareConfiguration(home: string, workspace: string): Promise<void> {
-  const file = join(home, '.claude', '.claude.json');
-  const current = JSON.parse(await readPrivateJson(file, home) ?? '{}');
+  // The deployment's run directory is a symlink; use one canonical root for the containment check.
+  const actualHome = await realpath(home);
+  const file = join(actualHome, '.claude', '.claude.json');
+  const current = JSON.parse(await readPrivateJson(file, actualHome) ?? '{}');
   await writePrivateJson(file, JSON.stringify({
     ...current, hasCompletedOnboarding: true, theme: current.theme ?? 'dark',
     projects: { [workspace]: { hasTrustDialogAccepted: true, allowedTools: [] } },

@@ -24,6 +24,17 @@ export function limitResetOffer(engine: Slot["engine"], usage?: SlotUsage): stri
   return used(usage, "five_hour") >= 100 && used(usage, "seven_day") < 100 ? "可重置 5 小时额度（每周 1 次）" : null;
 }
 
+export function limitResetDisabledReason(slot: Slot, usage?: SlotUsage): string | null {
+  if (slot.status === "DISABLED") return "槽位已停用，暂不能使用额度重置";
+  if (slot.auth_method === "token") return "长期令牌账号不支持额度重置";
+  if (!usage || usage.state === "pending") return "额度尚未就绪，请先刷新额度";
+  if (usage.state !== "ok") return "暂时无法确认重置条件，请刷新额度后重试";
+  if (limitResetOffer(slot.engine, usage)) return null;
+  if (slot.engine === "codex") return "暂无可用的重置卡";
+  if (used(usage, "seven_day") >= 100) return "每周额度已用尽，重置 5 小时额度无法恢复使用";
+  return "5 小时额度用尽后可重置（每周 1 次）";
+}
+
 /** The earliest expiry among the Codex credits the service listed. */
 export function resetCreditsText(usage?: SlotUsage): string | null {
   const summary = usage?.resetCredits;

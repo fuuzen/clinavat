@@ -1,13 +1,16 @@
 import {
   CircleUserRound,
   KeyRound,
+  RotateCcw,
   ShieldCheck,
 } from "lucide-react";
+import { useState } from "react";
 import { statusLabel } from "../../api";
 import type { Overview } from "../../types";
-import { useNow, useSlotUsage } from "../../useSlotUsage";
+import { useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
-import { loginStatus, planName, subscriptionStatus } from "../usage/subscription";
+import LimitResetDialog, { limitResetDisabledReason, limitResetOffer, resetCreditsText } from "../usage/LimitReset";
+import SlotUsageMeter from "../usage/SlotUsageMeter";
 
 export default function AccountSettings({
   overview,
@@ -15,7 +18,8 @@ export default function AccountSettings({
   overview: Overview;
 }) {
   const usage = useSlotUsage(overview.slots.length > 0);
-  const now = useNow();
+  const [resetting, setResetting] = useState("");
+  const resettingSlot = overview.slots.find((slot) => slot.id === resetting && slot.can_reset_limits);
   return (
     <>
       <div className="settings-section-heading">
@@ -37,9 +41,9 @@ export default function AccountSettings({
         <h3>获授权的账号槽位</h3>
       </div>
       {overview.slots.length ? overview.slots.map((slot) => {
-        const plan = planName(slot.engine, usage[slot.id]);
-        const status = subscriptionStatus(usage[slot.id]?.subscription ?? null, now);
-        const login = loginStatus(usage[slot.id]?.login ?? null, now);
+        const slotUsage = usage[slot.id];
+        const resetReason = limitResetDisabledReason(slot, slotUsage);
+        const resetDescription = resetReason ?? (slot.engine === "codex" ? resetCreditsText(slotUsage) : limitResetOffer(slot.engine, slotUsage));
         return (
           <div className="settings-detail-card" key={slot.id}>
             <div>
@@ -48,9 +52,19 @@ export default function AccountSettings({
                 {slot.status === "IDLE" ? slot.in_use ? slot.in_use_by_you ? "你正在使用" : "其他用户使用中" : "可用" : statusLabel(slot.status)}
               </span>
             </div>
-            <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}{plan && ` · ${plan}`}</p>
-            {status && <small className={`usage-subscription ${status.level}`}>{status.text}</small>}
-            {login && <small className={`usage-subscription ${login.level}`}>{login.text}</small>}
+            <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}</p>
+            <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={slotUsage}
+              refreshable={slot.status !== "DISABLED" && slot.auth_method !== "token"} refreshLabel={`刷新 ${slot.label} 的额度`} />
+            {slot.can_reset_limits && (
+              <section className="account-slot-reset" aria-label={`${slot.label} 的额度重置`}>
+                <small id={`reset-status-${slot.id}`}>{resetDescription}</small>
+                <button type="button" className="button button-ghost" disabled={Boolean(resetReason)}
+                  aria-label={`使用 ${slot.label} 的额度重置`} aria-describedby={`reset-status-${slot.id}`}
+                  onClick={() => setResetting(slot.id)}>
+                  <RotateCcw size={13} aria-hidden="true" />使用额度重置
+                </button>
+              </section>
+            )}
             <small>不同对话可同时使用不同槽位，切换仅影响当前对话；此槽位同时限 1 位用户。</small>
           </div>
         );
@@ -76,6 +90,7 @@ export default function AccountSettings({
       ) : (
         <p className="inline-error">公钥未就绪，请检查服务端用户密钥配置。</p>
       )}
+      {resettingSlot && <LimitResetDialog slot={resettingSlot} usage={usage[resettingSlot.id]} onClose={() => setResetting("")} />}
     </>
   );
 }

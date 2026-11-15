@@ -3,7 +3,7 @@ import { useState } from "react";
 import { statusLabel } from "../../api";
 import type { AccountSelection, Slot, SlotUsage, UsageWindow } from "../../types";
 import { refreshSlotUsage, useNow, useSlotUsage } from "../../useSlotUsage";
-import LimitResetDialog, { limitResetOffer } from "../usage/LimitReset";
+import LimitResetDialog, { limitResetDisabledReason, limitResetOffer } from "../usage/LimitReset";
 import SlotUsageRing from "../usage/SlotUsageRing";
 import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
 import { planName } from "../usage/subscription";
@@ -148,10 +148,10 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
                 {matching.map((slot) => {
                   const slotUsage = usage[slot.id];
                   const limited = slot.status === "RATE_LIMITED";
-                  const resetOffer = slot.can_reset_limits && slot.status !== "DISABLED" && slot.auth_method !== "token"
-                    ? limitResetOffer(slot.engine, slotUsage) : null;
+                  const resetReason = limitResetDisabledReason(slot, slotUsage);
+                  const resetDescription = resetReason ?? limitResetOffer(slot.engine, slotUsage);
                   return (
-                    <div className="settings-menu-entry" key={slot.id}>
+                    <div className="settings-menu-entry slot-menu-entry" key={slot.id}>
                       <button
                         type="button"
                         className="settings-menu-item"
@@ -172,14 +172,18 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
                         {slot.status !== "DISABLED" && <SlotQuota slot={slot} usage={slotUsage} now={now} />}
                         <Check size={14} className="settings-item-check" aria-hidden="true" />
                       </button>
-                      {resetOffer && (
-                        <button type="button" className="icon-button slot-menu-reset" role="menuitem" tabIndex={-1}
-                          aria-label={`使用 ${slot.label} 的额度重置：${resetOffer}`} title={`使用额度重置：${resetOffer}`}
-                          onClick={() => { onReset(slot); close(); }}>
-                          <RotateCcw size={12} aria-hidden="true" />
-                        </button>
+                      {(slot.can_reset_limits || (slot.status !== "DISABLED" && slot.auth_method !== "token")) && (
+                        <span className="slot-menu-actions">
+                          {slot.can_reset_limits && (
+                            <button type="button" className="text-button slot-menu-reset" role="menuitem" tabIndex={-1} disabled={Boolean(resetReason)}
+                              aria-label={`使用 ${slot.label} 的额度重置：${resetDescription}`} title={resetDescription ?? undefined}
+                              onClick={() => { onReset(slot); close(); }}>
+                              <RotateCcw size={12} aria-hidden="true" />重置
+                            </button>
+                          )}
+                          {slot.status !== "DISABLED" && slot.auth_method !== "token" && <SlotRefresh slot={slot} usage={slotUsage} />}
+                        </span>
                       )}
-                      {slot.status !== "DISABLED" && slot.auth_method !== "token" && <SlotRefresh slot={slot} usage={slotUsage} />}
                     </div>
                   );
                 })}

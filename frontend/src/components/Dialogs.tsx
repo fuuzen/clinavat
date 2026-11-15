@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, LoaderCircle, X } from "lucide-react";
 import { api, errorText } from "../api";
@@ -17,15 +17,19 @@ export function Modal({
   onClose: () => void;
   wide?: boolean;
 }) {
+  const backdropRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      const backdrops = document.querySelectorAll(".modal-backdrop");
+      if (backdrops[backdrops.length - 1] === backdropRef.current) onClose();
     };
     document.addEventListener("keydown", keydown);
     return () => document.removeEventListener("keydown", keydown);
   }, [onClose]);
   return createPortal(
     <div
+      ref={backdropRef}
       className="modal-backdrop"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();

@@ -3,7 +3,12 @@
 .limit-reset .danger-dialog-body > label { margin-top: 12px; }
 .limit-reset-result { font-size: 13px; line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
 .limit-reset-result > p { margin: 0; }
-.slot-menu-reset { flex-shrink: 0; width: 24px; height: 24px; color: var(--warning); }
+.slot-menu-entry { flex-wrap: wrap; }
+.slot-menu-entry > .settings-menu-item { flex-basis: 100%; }
+.slot-menu-actions { display: flex; align-items: center; justify-content: flex-end; width: 100%; gap: 4px; padding: 0 4px 4px; }
+.slot-menu-actions > .slot-menu-reset { flex-shrink: 0; padding: 5px; gap: 4px; font-size: 11px; color: var(--warning); }
+.account-slot-reset { display: flex; align-items: flex-start; flex-direction: column; gap: 8px; margin: 12px 0; }
+.account-slot-reset > .button { font-size: 12px; }
 .slot-reset-access { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--muted); }
 .slot-reset-access > label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .slot-reset-access > .button { align-self: flex-start; font-size: 11px; padding: 3px 7px; }
