@@ -3,18 +3,21 @@ import { quoteShell } from './environment.js';
 import type { AgentContext } from './types.js';
 
 export function projectInstructions(project: AgentContext['project'], engine: 'claude' | 'codex'): string {
+  const backgroundInstructions = engine === 'claude'
+    ? 'To run a command in the background, set `run_in_background: true` on the Bash tool call. Keep the command attached to its shell so Claude Code can track it, collect its output, and stop it.'
+    : 'Do not start background or detached commands.';
   if (project.execution_mode === 'local' && project.host_shell) {
     const execution = engine === 'codex'
       ? `Use native tools to read and search files, including local cat, sed and rg commands, and native apply_patch to edit them. Builds, tests, dependency installation, git operations, application commands and services MUST run on the host machine. Execute those through your native command tool using ${quoteShell(project.host_shell)} -c '<host command>', from the corresponding project working directory. Local read and search commands do not need this wrapper. If the workspace sandbox blocks SSH, request the sandbox permissions needed for the wrapper command; never fall back to running the workload locally.`
       : 'Use Read, Glob and Grep to inspect source files, and Edit and Write to modify them. Bash commands are automatically routed to the host machine over SSH, in the same directory. Do not invoke the host-shell wrapper manually inside Bash.';
-    return `The project directory ${JSON.stringify(project.local_path)} is shared with the host machine at the same path, so file changes are visible there immediately.\n\n${execution}\n\nDo not edit Git internals or files outside this project. Do not start background or detached commands.`;
+    return `The project directory ${JSON.stringify(project.local_path)} is shared with the host machine at the same path, so file changes are visible there immediately.\n\n${execution}\n\nDo not edit Git internals or files outside this project. ${backgroundInstructions}`;
   }
   if (project.execution_mode === 'local') {
-    return 'Work directly in the current project directory using native file and shell tools. Do not edit Git internals or files outside this project. Do not start background or detached commands.';
+    return `Work directly in the current project directory using native file and shell tools. Do not edit Git internals or files outside this project. ${backgroundInstructions}`;
   }
   const paths = `The project root is ${JSON.stringify(project.local_path)}. File tools and project shell commands use this same project path.`;
   const execution = engine === 'codex'
     ? `Use native tools to read and search the local source mirror, including local cat, sed and rg commands. Use native apply_patch to edit local source files. Builds, tests, dependency installation, git operations, application commands and services MUST run on the development host. Execute those through your native command tool using ${quoteShell(path.join(project.local_path, '.bin', 'remote-shell'))} -c '<remote command>', from the corresponding local project working directory. Local read and search commands do not need this wrapper. If the workspace sandbox blocks SSH or Mutagen access, request the sandbox permissions needed for the wrapper command; never fall back to running the workload locally.`
     : 'Use Read, Glob and Grep to inspect source files, and Edit and Write to modify them. Bash commands are automatically routed to the development host by the workspace hook, with synchronization barriers before and after execution. Do not invoke the remote-shell wrapper manually inside Bash.';
-  return `This project uses a split execution environment. ${paths}\n\n${execution}\n\nLocal source edits are synchronized to the development host. Do not edit .bin, .git, .claude, .codex or files outside this project. Do not start background or detached commands.`;
+  return `This project uses a split execution environment. ${paths}\n\n${execution}\n\nLocal source edits are synchronized to the development host. Do not edit .bin, .git, .claude, .codex or files outside this project. ${backgroundInstructions}`;
 }
