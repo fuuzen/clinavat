@@ -894,6 +894,28 @@ def op_nodes_delay(args):
     return result
 
 
+def op_nodes_location(args):
+    state, infra = read_json(STATE_PATH), read_json(INFRA_PATH)
+    node = next((item for item in state['nodes'] if item['tag'] == args.get('tag')), None)
+    if node is None:
+        raise GatewayError('所选代理节点不存在，请刷新后重试')
+    helper = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'gateway-location.py')
+    if not os.path.isfile(helper):
+        raise GatewayError('网关缺少 gateway-location.py，请更新网关控制器；也可手动选择时区')
+    chain = CHAIN['render_chain'](state, infra, target=node['tag'], isolated=True)
+    response = run([sys.executable, '-I', helper], timeout=45, check=False,
+                   stdin=json.dumps({'node': chain['nodes'][0], 'infra': infra,
+                                     'outbounds': [*chain['nodes'], *chain['front'], *chain['groups']],
+                                     'bootstrap_dns': chain['dns'][0]}))
+    try:
+        result = json.loads(response.stdout)
+    except json.JSONDecodeError as error:
+        raise GatewayError('出口位置探测失败，请重试或手动选择时区') from error
+    if not result.get('ok'):
+        raise GatewayError(result.get('error', '出口位置探测失败'))
+    return result['result']
+
+
 def op_connections(args):
     data = clash(read_json(INFRA_PATH), 'GET', '/connections') or {}
     connections = data.get('connections') or []
@@ -1068,14 +1090,14 @@ REMOTE_OPS = {
     'preproxy.put': op_preproxy_put, 'preproxy.delay': op_preproxy_delay, 'proxies.put': op_proxies_put,
     'selector.select': op_selector_select, 'rules.put': op_rules_put, 'dev_direct.put': op_dev_direct_put,
     'binding.set': op_binding_set, 'source_policy.set': op_source_policy_set,
-    'forwards.put': op_forwards_put, 'sites.put': op_sites_put, 'nodes.delay': op_nodes_delay,
+    'forwards.put': op_forwards_put, 'sites.put': op_sites_put, 'nodes.delay': op_nodes_delay, 'nodes.location': op_nodes_location,
     'connections': op_connections, 'cert.issue': op_cert_issue, 'confirm': op_confirm,
     'rollback': op_rollback, 'revisions.list': op_revisions_list, 'audit.tail': op_audit_tail,
 }
 LOCAL_OPS = {**REMOTE_OPS, 'import': op_import, 'render': op_render, 'activate': op_activate, 'certs.sync': op_certs_sync,
              'timer-rollback': op_timer_rollback, 'pin': op_pin, 'vm_subnet.set': op_vm_subnet_set}
 # pin runs from sing-box's ExecStartPost, while a change holding the lock may be waiting for that restart.
-READ_ONLY = {'status', 'state.get', 'preproxy.delay', 'nodes.delay', 'connections', 'revisions.list', 'audit.tail', 'render', 'pin'}
+READ_ONLY = {'status', 'state.get', 'preproxy.delay', 'nodes.delay', 'nodes.location', 'connections', 'revisions.list', 'audit.tail', 'render', 'pin'}
 
 
 def main():

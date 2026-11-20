@@ -29,6 +29,7 @@ fi
 
 install -d -m 755 "$LIB"
 install -m 700 "$SOURCE/gateway-chain.py" "$LIB/gateway-chain.py"
+install -m 700 "$SOURCE/gateway-location.py" "$LIB/gateway-location.py"
 install -m 700 "$SOURCE/gwctl.py" "$LIB/gwctl.py"
 install -m 755 "$SOURCE/gateway-rules.sh" /usr/local/bin/gateway-rules.sh
 install -m 644 "$SOURCE/gateway-rules.service" /etc/systemd/system/gateway-rules.service

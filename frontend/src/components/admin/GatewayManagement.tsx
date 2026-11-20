@@ -6,6 +6,8 @@ import { api, ApiError, errorText } from "../../api";
 import SiteAccessSettings from "./SiteAccessSettings";
 import GatewayProxyConfiguration from "./gateway/GatewayProxyConfiguration";
 import type { GatewayPreproxyState } from "./gateway/gateway-proxy-state";
+import GatewayBindingRow, { type GatewaySource as Source } from "./GatewayBindingRow";
+import { browserTimezones, type TimezoneOptions } from "./TimezonePicker";
 import "../../styles/admin-gateway.css";
 
 interface Info { configured: boolean; target: string | null; publicKey: string; fingerprint: string | null; gwctl: string; installCommand: string }
@@ -20,7 +22,6 @@ interface GatewayState {
   nodes: Node[]; selected: string; rules: Record<string, unknown>[]; dev_direct: string[]; forwards: Forward[]; sites: string[];
   source_policy: "shared" | "bound"; bindings: Record<string, Binding>; preproxy?: GatewayPreproxyState;
 }
-interface Source { address: string; kind: "host" | "builder" | "slot" | "workspace"; label: string }
 interface AuditEntry { at: string; action: string; status: string; via: string; revision?: number; error?: string; problems?: string[]; reason?: string }
 interface HubAudit { id: number; username: string | null; action: string; revision: number | null; status: string; detail: string | null; created_at: string }
 interface Overview {
@@ -103,37 +104,13 @@ function Section({ icon: Icon, title, description, children, actions }: { icon: 
   );
 }
 
-function BindingRow({ source, binding, nodes, disabled, bound, onSave }: {
-  source: Source; binding?: Binding; nodes: Node[]; disabled: boolean; bound: boolean;
-  onSave: (node: string | null, interrupt: boolean) => void;
-}) {
-  const current = binding?.node ?? "";
-  const [draft, setDraft] = useState(current);
-  const [interrupt, setInterrupt] = useState(false);
-  useEffect(() => { setDraft(current); setInterrupt(false); }, [current]);
-  return (
-    <div className="gateway-row gateway-binding">
-      <div><strong>{source.label}</strong><small><code>{source.address}</code></small></div>
-      <select value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} aria-label={`${source.label}的出口节点`}>
-        <option value="">未绑定{bound ? "（断网）" : ""}</option>
-        {nodes.map((node) => <option key={node.tag} value={node.tag}>{node.tag}</option>)}
-      </select>
-      <label className="gateway-force" title="切换后已有连接默认继续使用原节点，直到它们自然结束">
-        <input type="checkbox" checked={interrupt} disabled={disabled || draft === current} onChange={(event) => setInterrupt(event.target.checked)} />
-        中断已有连接
-      </label>
-      <button type="button" className="button button-primary button-small" disabled={disabled || draft === current}
-        onClick={() => onSave(draft || null, interrupt)}><Save size={14} />应用</button>
-    </div>
-  );
-}
-
 function copy(text: string) { void navigator.clipboard?.writeText(text); }
 
 export default function GatewayManagement() {
   const [info, setInfo] = useState<Info | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [devHosts, setDevHosts] = useState<DevHost[] | null>(null);
+  const [timezones, setTimezones] = useState<TimezoneOptions>(() => ({ timezones: browserTimezones(), defaultTimezone: "" }));
   const [publicHosts, setPublicHosts] = useState<string[]>([]);
   const [proxyDirty, setProxyDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -152,13 +129,15 @@ export default function GatewayManagement() {
     setLoadError("");
     try {
       setInfo(await api<Info>("/admin/gateway"));
-      const [latest, hosts, site] = await Promise.all([
+      const [latest, hosts, site, timezoneOptions] = await Promise.all([
         api<Overview>("/admin/gateway/overview"),
         api<DevHost[]>("/admin/gateway/dev-hosts").catch(() => null),
         api<{ publicUrls: string[] }>("/admin/site-access").catch(() => null),
+        api<TimezoneOptions>("/admin/gateway/timezones").catch(() => null),
       ]);
       setOverview(latest);
       setDevHosts(hosts);
+      if (timezoneOptions) setTimezones(timezoneOptions);
       updatePublicHosts(site?.publicUrls ?? []);
     } catch (cause) {
       setLoadError(errorText(cause));
@@ -261,13 +240,13 @@ export default function GatewayManagement() {
           <div className="gateway-bindings">
             {[...overview.sources, ...Object.keys(state.bindings).filter((address) => !overview.sources.some((source) => source.address === address))
               .map((address): Source => ({ address, kind: "workspace", label: state.bindings[address]?.label || "未知来源" }))].map((source) => (
-              <BindingRow key={source.address} source={source} binding={state.bindings[source.address]} nodes={state.nodes}
+              <GatewayBindingRow key={source.address} source={source} binding={state.bindings[source.address]} nodes={state.nodes} timezones={timezones}
                 disabled={disabled} bound={state.source_policy === "bound"}
-                onSave={(node, interrupt) => void change(`绑定 ${source.label}`, `/admin/gateway/bindings/${source.address}`, "PUT",
-                  { node, label: source.label.slice(0, 80), interrupt })} />
+                onSave={(node, interrupt, timezone) => void change(`更新 ${source.label}`, `/admin/gateway/bindings/${source.address}`, "PUT",
+                  { node, label: source.label.slice(0, 80), interrupt, ...(timezone !== undefined ? { timezone } : {}) })} />
             ))}
           </div>
-          <p className="gateway-hint">工作区容器只运行文件同步，默认不绑定，只能访问直连名单中的开发机；槽位虚拟机需要先绑定节点，才能登录和对话。</p>
+          <p className="gateway-hint">槽位 VM 可独立设置时区；切换出口节点会根据其真实出口 IP 自动预选时区，确认后点击应用。工作区容器只运行文件同步，默认不绑定；槽位虚拟机需要先绑定节点，才能登录和对话。</p>
         </Section>
 
         <Section icon={Route} title="分流规则" description="在默认走 proxy 的基础上追加 sing-box 路由规则。规则只能指向 proxy、某个节点，或 action=reject；直连仅由下方直连名单产生。按来源绑定后，reject 规则对所有来源生效，指向节点的规则只影响网关自身的流量。">
@@ -316,7 +295,7 @@ export default function GatewayManagement() {
             onSave={(sites) => change("修改站点", "/admin/gateway/sites", "PUT", { sites })} />
         </Section>
 
-        <Section icon={History} title="变更记录" description="每次变更保存快照；回滚恢复到该版本生效之前的配置。来源为 hub 的记录显示操作的管理员。">
+        <Section icon={History} title="变更记录" description="每次网关变更保存快照；回滚恢复该版本生效前的网关配置，槽位时区需单独修改。来源为 hub 的记录显示操作的管理员。">
           <div className="gateway-audit">
             {overview.audit.map((entry, index) => {
               const hub = entry.revision !== undefined ? hubByRevision.get(entry.revision) : undefined;
@@ -329,7 +308,7 @@ export default function GatewayManagement() {
                   <span className={`admin-status${entry.status === "ROLLED_BACK" || entry.status === "FAILED" ? " warning" : ""}`}>{statusLabels[entry.status] ?? entry.status}</span>
                   <small className="gateway-hint">{entry.via === "hub" ? hub?.username ?? "hub" : "网关本机"}{entry.error || entry.problems ? ` · ${entry.error ?? entry.problems?.join("；")}` : ""}{entry.reason ? ` · ${entry.reason}` : ""}</small>
                   {rollbackable && <button type="button" className="button button-ghost button-small" disabled={disabled}
-                    onClick={() => { if (window.confirm(`回滚到版本 ${entry.revision} 生效之前？之后的变更也会一并撤销。`)) void change(`回滚版本 ${entry.revision}`, "/admin/gateway/rollback", "POST", { revision: entry.revision }); }}>
+                    onClick={() => { if (window.confirm(`将网关配置回滚到版本 ${entry.revision} 生效之前？之后的网关变更也会一并撤销，槽位时区需单独修改。`)) void change(`回滚版本 ${entry.revision}`, "/admin/gateway/rollback", "POST", { revision: entry.revision }); }}>
                     <Undo2 size={13} />回滚</button>}
                 </div>
               );

@@ -6,7 +6,7 @@
 .gateway-summary-identity h3 { margin: 4px 0 6px; font-size: 18px; letter-spacing: -.3px; }
 .gateway-summary-identity p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .gateway-summary-actions { display: flex; align-items: center; gap: 14px; }
-.gateway-force { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.gateway-force { display: flex; flex-direction: row; align-items: center; gap: 7px; margin: 0; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .gateway-force input { width: auto; }
 .gateway-health { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
 .gateway-summary > .gateway-field-error { grid-column: 1 / -1; }
@@ -45,5 +45,21 @@
   .gateway-summary-actions { justify-content: space-between; }
 }
 .gateway-bindings { display: flex; flex-direction: column; }
-.gateway-binding > div { display: flex; flex: 1 1 220px; flex-direction: column; min-width: 0; }
+.gateway-binding { align-items: flex-start; gap: 12px 20px; padding: 15px 0; }
+.gateway-binding-identity { display: flex; flex: 1 1 220px; flex-direction: column; gap: 5px; min-width: 0; padding-top: 4px; }
+.gateway-binding-controls { display: flex; flex: 3 1 360px; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; }
+.gateway-binding-controls > .button { margin-left: auto; }
+.gateway-binding-node { display: flex; flex-direction: row; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 11px; }
 .gateway-binding select { min-width: 140px; }
+.gateway-timezone { display: flex; flex: 1 1 100%; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding-top: 5px; }
+.gateway-timezone-picker { display: flex; flex: 1 1 260px; flex-direction: column; gap: 5px; min-width: 0; }
+.gateway-timezone-picker > label { color: var(--text-secondary); font-size: 11px; }
+.gateway-timezone-input { display: flex; align-items: center; gap: 6px; }
+.gateway-timezone-input input { min-width: 0; flex: 1; font: 11px var(--mono); }
+.gateway-timezone-input input[aria-invalid="true"] { border-color: var(--danger); }
+.gateway-timezone-result { flex: 1 1 100%; margin: 0; overflow-wrap: anywhere; }
+.gateway-timezone-result .button { margin-left: 6px; }
+@container admin (max-width: 520px) {
+  .gateway-binding-controls { flex-basis: 100%; }
+  .gateway-timezone > .button { margin-left: 0; }
+}

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { childEnvironment, runCommand } from '../runtime/process.js';
@@ -16,6 +16,8 @@ import {
   describeResources, parseProjectQuota, planResources, quotaError, type MachineResourceHost, type MachineResources, type ResourceRow,
 } from './machine-resources.js';
 import { delegateSuspension } from './suspension.js';
+import { defaultTimezone, guestEnvironment, saveSlotTimezone, timezoneScript, missingTimezoneData } from './timezones.js';
+import { workspaceCgroups } from './machine-processes.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScope, ExecutionSpawnOptions } from './types.js';
 import type { SkippedLinks } from '../runtime/sync-status.js';
 
@@ -51,7 +53,6 @@ interface InstanceRow extends ResourceRow {
   name: string; state?: { pid?: number };
 }
 
-const guestPath = '/usr/local/bin:/usr/bin:/bin';
 const ownerKey = 'user.clinavat.owner';
 const kindKey = 'user.clinavat.kind';
 const deviceName = (path: string) => `m-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`;
@@ -81,7 +82,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
       relay: machine => this.service(machine, 'relay', ['python3', '-I', '-c', relayProgram, '/run/clinavat-relay/barrier.sock']),
       worker: async userId => {
         const machine = await this.attach({ userId, paths: [] });
-        const env = { ...this.guestEnvironment(), ...await this.services.mutagenEnvironment(userId) };
+        const env = { ...guestEnvironment(this.services.plan), ...await this.services.mutagenEnvironment(userId) };
         const started = await this.exec(machine, ['bash', '-c', daemonScript, 'clinavat-daemon', String(this.uid), String(this.gid), 'mutagen'], { env });
         if (started.code !== 0) throw new Error(`无法启动虚拟机内的同步服务：${started.stderr.trim().slice(0, 300)}`);
         return this.service(machine, 'flush', ['python3', '-I', '-c', flushProgram, 'mutagen'], env);
@@ -222,6 +223,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     const prepared = await this.exec(machine, ['bash', '-c', prepareScript, 'clinavat-prepare', String(this.uid), String(this.gid),
       this.controlDirectory(), identity.hostname ?? '', identity.machineId ?? '']);
     if (prepared.code !== 0) throw new Error(`虚拟机初始化失败：${prepared.stderr.trim().slice(0, 500)}`);
+    if (!container) await this.applyTimezone(machine, identity.timezone);
     if (row?.status === 'Running') await this.rebindRuntimeMounts(machine, row.devices, true);
     machine.prepared = true;
   }
@@ -254,12 +256,14 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   }
 
   private execArguments(machine: Machine, command: string[], env: NodeJS.ProcessEnv = {}): string[] {
-    const variables = Object.entries(env).filter(([, value]) => value !== undefined).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
+    // A caller may have built its environment before the administrator changed the slot's timezone.
+    const environment = machine.kind === 'slot' ? { ...env, TZ: this.services.plan.get('slot', machine.owner)?.timezone ?? defaultTimezone() } : env;
+    const variables = Object.entries(environment).filter(([, value]) => value !== undefined).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
     return ['exec', this.target(machine.name), '--project', this.config.lxdProject, '--mode', 'non-interactive', ...variables, '--', ...command];
   }
 
   /** A long-lived helper as the unprivileged user; its stdio is the Hub's channel to it. */
-  private service(machine: Machine, name: string, command: string[], env: NodeJS.ProcessEnv = this.guestEnvironment()): ChildProcessWithoutNullStreams {
+  private service(machine: Machine, name: string, command: string[], env: NodeJS.ProcessEnv = guestEnvironment(this.services.plan)): ChildProcessWithoutNullStreams {
     return spawn(this.config.lxcBinary, this.execArguments(machine,
       ['bash', '-c', serviceScript, 'clinavat-service', name, String(this.uid), String(this.gid), ...command], env), {
       env: childEnvironment(), detached: true, stdio: ['pipe', 'pipe', 'pipe'],
@@ -326,15 +330,26 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     });
   }
 
-  private guestEnvironment(): NodeJS.ProcessEnv {
-    return {
-      PATH: guestPath, LANG: 'C.UTF-8', HOME: '/home/clinavat', USER: 'clinavat', LOGNAME: 'clinavat', SHELL: '/bin/bash',
-      // Guests boot in UTC; the CLI must see the same time zone wherever it runs for an account.
-      TZ: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone,
-    };
+  baseEnvironment(scope: ExecutionScope): NodeJS.ProcessEnv { return guestEnvironment(this.services.plan, scope); }
+
+  private async applyTimezone(machine: Machine, timezone: string | null, initializing = true): Promise<void> {
+    const result = await this.exec(machine, ['bash', '-c', timezoneScript, 'clinavat-timezone', timezone ?? defaultTimezone()]);
+    // Keep older images without tzdata bootable when no explicit zone was saved.
+    if (initializing && timezone === null && result.code === missingTimezoneData) return;
+    if (result.code !== 0) throw new Error(`槽位虚拟机时区设置失败：${(result.stderr || result.stdout).trim().slice(0, 500)}`);
   }
 
-  baseEnvironment(_scope: ExecutionScope): NodeJS.ProcessEnv { return this.guestEnvironment(); }
+  async setSlotTimezone(slotId: string, timezone: string | null): Promise<{ applied: boolean }> {
+    await this.load();
+    const machine = this.machine('slot', slotId);
+    return this.serialized(machine, () => saveSlotTimezone(this.services.plan, slotId, machine.name, timezone, async value => {
+      const row = await this.instance(machine.name);
+      if (!row || row.status === 'Stopped') { machine.prepared = false; return false; }
+      if (row.status !== 'Running') throw new Error(`槽位虚拟机当前状态为 ${row.status}，请等待运行或停止后重试`);
+      await this.applyTimezone(machine, value, false);
+      return true;
+    }));
+  }
 
   async binary(_scope: ExecutionScope, name: ExecutionBinary): Promise<string> { return name; }
 
@@ -375,7 +390,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   async run(binary: string, args: string[], options: ExecutionRunOptions) {
     const machine = await this.attach(options.scope);
-    const env = { ...this.guestEnvironment(), ...options.env };
+    const env = { ...guestEnvironment(this.services.plan), ...options.env };
     if (binary === 'mutagen') {
       if (machine.kind !== 'workspace') throw new Error('同步只能在用户的工作区虚拟机中运行');
       // Autostarted from a run's cgroup, the daemon would be killed when that run ends.
@@ -388,31 +403,20 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   async loginCommand(slotId: string, home: string, argv: string[], env: Record<string, string>): Promise<string> {
     const machine = await this.attach({ userId: '', slotId, paths: [home] });
-    const variables = { ...this.guestEnvironment(), ...env };
+    const variables = { ...guestEnvironment(this.services.plan), ...env };
+    delete variables.TZ;
     return [this.config.lxcBinary, 'exec', this.target(machine.name), '--project', this.config.lxdProject, '-t', '--cwd', home,
       ...Object.entries(variables).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
-      '--', 'setpriv', `--reuid=${this.uid}`, `--regid=${this.gid}`, '--clear-groups', '--', ...argv].map(shellQuote).join(' ');
+      // Login commands can be pasted after a timezone change. Resolve the zone from the guest at execution time.
+      '--', 'setpriv', `--reuid=${this.uid}`, `--regid=${this.gid}`, '--clear-groups', '--', 'env', '-u', 'TZ', ...argv].map(shellQuote).join(' ');
   }
 
   async assertReleased(home: string, sessionId?: string): Promise<void> {
     await this.load();
     const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json']);
-    const workspaceCgroups = new Set<string>();
-    for (const row of JSON.parse(shown.stdout) as InstanceRow[]) {
-      if (row.type !== 'container' || row.status !== 'Running' || this.machines.get(row.name)?.kind !== 'workspace') continue;
-      const pid = row.state?.pid;
-      if (!pid || !Number.isSafeInteger(pid) || pid <= 0) continue;
-      const project = this.config.lxdProject === 'default' ? '' : `${this.config.lxdProject}_`;
-      const root = `/lxc.payload.${project}${row.name}`;
-      const cgroups = await readFile(`/proc/${pid}/cgroup`, 'utf8').catch((error: NodeJS.ErrnoException) => {
-        if (['ENOENT', 'ESRCH'].includes(error.code ?? '')) return '';
-        throw error;
-      });
-      const unified = cgroups.split('\n').find(line => line.startsWith('0::'))?.slice(3);
-      // LXD may be remote or its PID may have exited; only the matching kernel cgroup proves local ownership.
-      if (unified === root || unified?.startsWith(`${root}/`)) workspaceCgroups.add(root);
-    }
-    await this.local.assertReleased(home, sessionId, workspaceCgroups);
+    const workspaces = await workspaceCgroups(JSON.parse(shown.stdout) as InstanceRow[], this.config.lxdProject,
+      name => this.machines.get(name)?.kind === 'workspace');
+    await this.local.assertReleased(home, sessionId, workspaces);
     const holders = [...this.machines.values()].filter(machine => machine.mounts.has(home));
     for (const machine of holders) {
       const result = await this.exec(machine, ['bash', '-c', releasedScript, 'clinavat-released', home, sessionId ?? '']);

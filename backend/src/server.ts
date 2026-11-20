@@ -288,8 +288,9 @@ siteAccessRoutes(app, siteAccess);
 siteSettingsRoutes(app, new SiteSettingsService(store), store, events);
 questionDefaultsRoutes(app, context);
 tokenUsageRoutes(app, context);
-gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMachines, config.imageBuilderAddress);
-gatewayRoutes(app, gateway);
+gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMachines, config.imageBuilderAddress,
+  execution instanceof LxdExecutionHost ? execution : undefined);
+gatewayRoutes(app, gateway, context);
 app.get('/api/health', async () => {
   const { kind, ...runtime } = await execution.health();
   return { status: 'ok', version: '0.1.0', execution: kind, runtime };

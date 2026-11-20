@@ -195,6 +195,7 @@ backup() {
 update_gateway() {
   echo "== gateway: controller, return route, VM network"
   lxc file push --project "$GATEWAY_PROJECT" --mode 0700 "$SOURCE/../gateway/gateway-chain.py" "$GATEWAY_VM${GWCTL%/*}/gateway-chain.py"
+  lxc file push --project "$GATEWAY_PROJECT" --mode 0700 "$SOURCE/../gateway/gateway-location.py" "$GATEWAY_VM${GWCTL%/*}/gateway-location.py"
   lxc file push --project "$GATEWAY_PROJECT" --mode 0700 "$SOURCE/../gateway/gwctl.py" "$GATEWAY_VM$GWCTL"
   # cache_file restores selections on restart; this pins them to the gateway's state as well.
   in_gateway sh -c "mkdir -p ${PIN_DROPIN%/*} && printf '[Service]\nExecStartPost=-$GWCTL pin\n' > $PIN_DROPIN && systemctl daemon-reload"

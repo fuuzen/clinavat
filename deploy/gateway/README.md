@@ -18,7 +18,11 @@ sing-box 默认出站、DNS 出站固定为节点选择器 `proxy`；`direct` �
 
 经过 tun 的 DNS 请求由 sing-box 回答，并按来源地址经该来源的选择器解析。绑定只在运行时切换选择器（`binding.set`），不重启 sing-box；sing-box 启动后由 `ExecStartPost=gwctl.py pin` 按状态恢复全部选择。`pin` 不取 gwctl 的锁，因为持锁的变更可能正在等待这次重启完成。`vm_subnet.set` 只能在网关本机执行，用于声明虚拟机网段，并同时把该网段加入 masquerade。迁移见 [按来源绑定出口](../../docs/vm-isolation.md#按来源绑定出口)。
 
-已有网关需同时更新 `gwctl.py` 和 `gateway-chain.py`（安装位置 `/usr/local/lib/clinavat-gw/`，root 所有、权限 `0700`）。更新控制器文件本身不会重启 sing-box；应用前置组配置时才重新渲染并重启。独立主机安装和 LXD 的创建、刷新、出口绑定迁移脚本均会复制这两个文件。
+管理员可以在槽位的出口绑定行同时选择 VM 时区。选择节点时，会经该节点实际访问位置服务，自动选中对应 IANA 时区；推荐结果包含出口 IP 和地理位置，仍可手动更改。只有点击「应用」才保存，查询失败不影响手动选择。
+
+`nodes.location` 由同目录的 `gateway-location.py` 启动独立 sing-box 临时进程，仅监听带随机认证的回环 SOCKS 端口。该进程包含所选出口的前置节点与代理组，按完整链路查询 [IPWHOIS](https://ipwhois.io/documentation) 的 HTTPS 当前 IP 接口，失败后尝试 [ipapi](https://ipapi.co/api/)，目标 DNS 也经所选节点解析；不会切换正在使用的节点、修改来源绑定或重启主 sing-box。请求超时后清理临时进程和配置，节点凭据不会返回 Hub。地理信息依赖服务商数据库，仅供选择时区时参考；服务不可用或限流时可手动指定。
+
+已有网关需同时更新 `gwctl.py`、`gateway-chain.py` 和 `gateway-location.py`（安装位置 `/usr/local/lib/clinavat-gw/`，root 所有、权限 `0700`）。更新控制器文件本身不会重启 sing-box；应用前置组配置时才重新渲染并重启。独立主机安装和 LXD 的创建、刷新、出口绑定迁移脚本均会复制这三个文件。
 
 ## 节点管理与多级链式代理
 
@@ -82,7 +86,7 @@ sing-box 默认出站、DNS 出站固定为节点选择器 `proxy`；`direct` �
 
 `proxies.put` 使用一次事务同时替换落地节点和前置配置。Hub 接口为 `PUT /api/admin/gateway/proxies`，请求体包含 `nodes`、`preproxy`、可选的 `expected_revision` 以及 `force`。`state.get` 顶层的 `proxy_revision` 是代理配置版本，面板提交草稿时携带它；来源绑定等非代理配置的变化不影响该版本。旧的 `nodes.put` 与 `preproxy.put` 接口仍可用。
 
-`preproxy.delay` / `POST /api/admin/gateway/preproxy/delay` 返回前置节点连通性与自动组选择信息。直接测试前置节点不等于测试经过前序节点的完整链路，面板区分两者；落地节点测速按实际完整链路执行。凭据在读取时显示为 `***`，按相同节点标识保存会保留原值；新增和复制节点必须填写实际凭据。
+`preproxy.delay` / `POST /api/admin/gateway/preproxy/delay` 返回前置节点连通性与自动组选择信息。直接测试前置节点不等于测试经过前序节点的完整链路，面板区分两者；落地节点测速和 `nodes.location` 均按实际完整链路执行。凭据在读取时显示为 `***`，按相同节点标识保存会保留原值；新增和复制节点必须填写实际凭据。
 
 应用沿用快照、配置检查、健康检查和 90 秒确认回滚流程，可能中断现有连接。运行中的对话需要管理员选择允许中断。网关凭据仅保存在受限状态、运行配置和版本快照中，前端及审计不会返回原始凭据。
 
@@ -115,6 +119,7 @@ $gwctl state.get
 $gwctl selector.select '{"tag": "home-proxy"}'
 $gwctl dev_direct.put '{"dev_direct": ["203.0.113.7/32", "198.51.100.0/24"]}'
 $gwctl binding.set '{"address": "10.31.0.130", "node": "home-proxy", "label": "槽位 A", "interrupt": false}'
+$gwctl nodes.location '{"tag": "home-proxy"}'                       # 查询节点真实出口及其时区
 $gwctl binding.set '{"address": "10.31.0.130", "node": null}'      # 解除绑定：该来源断网
 $gwctl source_policy.set '{"source_policy": "bound"}'               # 需先绑定号池机地址
 $gwctl confirm 7

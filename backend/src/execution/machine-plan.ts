@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { isIPv4 } from 'node:net';
 import type { Store } from '../database.js';
+import { normalizeTimezone } from './timezones.js';
 
 export type MachineKind = 'workspace' | 'slot';
-export interface MachineIdentity { name: string; address: string; hostname: string | null; machineId: string | null }
+export interface MachineIdentity { name: string; address: string; hostname: string | null; machineId: string | null; timezone: string | null }
+interface MachineRow { name: string; address: string; hostname: string | null; machine_id: string | null; timezone: string | null }
 
 const number = (address: string) => address.split('.').reduce((value, part) => value * 256 + Number(part), 0);
 const address = (value: number) => [24, 16, 8, 0].map(shift => Math.floor(value / 2 ** shift) % 256).join('.');
@@ -24,9 +26,9 @@ export class MachinePlan {
   }
 
   get(kind: MachineKind, ownerId: string): MachineIdentity | undefined {
-    const row = this.store.get<{ name: string; address: string; hostname: string | null; machine_id: string | null }>(
-      'SELECT name,address,hostname,machine_id FROM execution_machines WHERE kind=? AND owner_id=?', kind, ownerId);
-    return row && { name: row.name, address: row.address, hostname: row.hostname, machineId: row.machine_id };
+    const row = this.store.get<MachineRow>(
+      'SELECT name,address,hostname,machine_id,timezone FROM execution_machines WHERE kind=? AND owner_id=?', kind, ownerId);
+    return row && { name: row.name, address: row.address, hostname: row.hostname, machineId: row.machine_id, timezone: row.timezone };
   }
 
   /** Returns the machine's identity, allocating one on first use. */
@@ -43,14 +45,20 @@ export class MachinePlan {
       const machineId = kind === 'slot' ? randomBytes(16).toString('hex') : null;
       this.store.run('INSERT INTO execution_machines(name,kind,owner_id,address,hostname,machine_id) VALUES(?,?,?,?,?,?)',
         name, kind, ownerId, address(next), hostname, machineId);
-      return { name, address: address(next), hostname, machineId };
+      return { name, address: address(next), hostname, machineId, timezone: null };
     });
   }
 
+  setTimezone(slotId: string, timezone: string | null): void {
+    this.store.run("UPDATE execution_machines SET timezone=? WHERE kind='slot' AND owner_id=?",
+      timezone === null ? null : normalizeTimezone(timezone), slotId);
+  }
+
   list(): (MachineIdentity & { kind: MachineKind; ownerId: string })[] {
-    return this.store.all<{ name: string; kind: MachineKind; owner_id: string; address: string; hostname: string | null; machine_id: string | null }>(
-      'SELECT name,kind,owner_id,address,hostname,machine_id FROM execution_machines ORDER BY address').map(row => ({
+    return this.store.all<MachineRow & { kind: MachineKind; owner_id: string }>(
+      'SELECT name,kind,owner_id,address,hostname,machine_id,timezone FROM execution_machines ORDER BY address').map(row => ({
       name: row.name, kind: row.kind, ownerId: row.owner_id, address: row.address, hostname: row.hostname, machineId: row.machine_id,
+      timezone: row.timezone,
     }));
   }
 }

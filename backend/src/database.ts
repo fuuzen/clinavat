@@ -156,6 +156,7 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS local_host_user ON dev_hosts(user_id) WHERE kind='local';
       CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
     `);
+    this.addColumn('execution_machines', 'timezone', 'TEXT');
     this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
     // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
     this.addColumn('sessions', 'token_usage_cursor', 'TEXT');

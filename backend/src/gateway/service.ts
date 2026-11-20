@@ -5,9 +5,12 @@ import { HttpError } from '../models.js';
 import { GatewayClient, gwctlPath } from './client.js';
 import type { MachinePlan } from '../execution/machine-plan.js';
 import { machineName } from '../execution/lxd-host.js';
+import { defaultTimezone } from '../execution/timezones.js';
 
 interface Health { problems: string[]; [key: string]: unknown }
 interface MutationResult { changed: boolean; revision?: number; pending?: boolean; health?: Health }
+export interface BindingInput { node: string | null; label?: string; interrupt: boolean; timezone?: string | null }
+interface SlotTimezoneHost { setSlotTimezone(slotId: string, timezone: string | null): Promise<{ applied: boolean }> }
 export interface GatewayBinding { node: string; label?: string }
 export interface GatewayPreproxy {
   nodes: Record<string, unknown>[];
@@ -40,7 +43,7 @@ export class GatewayService {
   private bindingCache?: { at: number; state: Promise<{ policy: string; bindings: Record<string, GatewayBinding> } | undefined> };
 
   constructor(readonly client: GatewayClient, private readonly store: Store, private readonly machines?: MachinePlan,
-    private readonly builderAddress?: string) {}
+    private readonly builderAddress?: string, private readonly timezoneHost?: SlotTimezoneHost) {}
 
   /** Under per-source binding, a slot machine without a node has no internet at all. */
   async assertBound(slotId: string): Promise<void> {
@@ -89,12 +92,55 @@ export class GatewayService {
       // Image builds need packages and CLI downloads; the builder uses this fixed address.
       ...(this.machines && this.builderAddress ? [{ address: this.builderAddress, kind: 'builder', label: '镜像构建' }] : []),
       ...(this.machines?.list() ?? []).map(machine => machine.kind === 'slot'
-        ? { address: machine.address, kind: 'slot', label: `槽位 ${slots.get(machine.ownerId) ?? '已删除'}（${machine.ownerId}）` }
+        ? { address: machine.address, kind: 'slot', label: `槽位 ${slots.get(machine.ownerId) ?? '已删除'}（${machine.ownerId}）`,
+          ...(slots.has(machine.ownerId) ? { slotId: machine.ownerId, timezone: machine.timezone, defaultTimezone: defaultTimezone() } : {}) }
         : { address: machine.address, kind: 'workspace', label: `工作区 ${users.get(machine.ownerId) ?? '已删除用户'}` }),
     ];
   }
 
   read<T>(op: 'nodes.delay' | 'preproxy.delay' | 'connections') { return this.client.call<T>(op, {}, 60_000); }
+
+  slotAt(address: string) {
+    const machine = this.machines?.list().find(machine => machine.kind === 'slot' && machine.address === address);
+    if (!machine || !this.timezoneHost || !this.store.get('SELECT id FROM account_slots WHERE id=?', machine.ownerId)) {
+      throw new HttpError(409, '只能为现有槽位虚拟机设置时区');
+    }
+    return { id: machine.ownerId, timezone: machine.timezone };
+  }
+
+  async setBinding(userId: string, address: string, input: BindingInput) {
+    const { timezone, ...binding } = input;
+    if (timezone === undefined) return this.mutate(userId, 'binding.set', { address, ...binding });
+    return this.client.serialize(async () => {
+      const slot = this.slotAt(address);
+      const timezoneChanged = timezone !== slot.timezone;
+      let applied = false;
+      if (timezoneChanged) {
+        try { ({ applied } = await this.timezoneHost!.setSlotTimezone(slot.id, timezone)); }
+        catch (error) {
+          this.record(userId, 'slot.timezone', undefined, 'FAILED', String(error));
+          throw error;
+        }
+      }
+      let result: Awaited<ReturnType<GatewayService['applyMutation']>>;
+      try { result = await this.applyMutation(userId, 'binding.set', { address, ...binding }); }
+      catch (error) {
+        if (timezoneChanged) {
+          try { await this.timezoneHost!.setSlotTimezone(slot.id, slot.timezone); }
+          catch (restoreError) {
+            const detail = `出口绑定失败，且时区恢复失败：${String(restoreError)}；原错误：${String(error)}`;
+            this.record(userId, 'slot.timezone', undefined, 'FAILED', detail);
+            throw new HttpError(502, detail);
+          }
+          this.record(userId, 'slot.timezone', undefined, 'ROLLED_BACK', JSON.stringify({ slotId: slot.id, timezone: slot.timezone }));
+        }
+        throw error;
+      }
+      if (timezoneChanged) this.record(userId, 'slot.timezone', result.revision, 'APPLIED',
+        JSON.stringify({ slotId: slot.id, previous: slot.timezone, timezone, applied }));
+      return { ...result, changed: result.changed || timezoneChanged, timezone, timezoneApplied: applied };
+    });
+  }
 
   private busySessions(): number {
     return this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM sessions WHERE status IN ('running','waiting','pausing','paused')")!.count;
@@ -127,33 +173,37 @@ export class GatewayService {
     if (interrupting.has(op) && busy > 0 && !force) {
       throw new HttpError(409, `有 ${busy} 个对话正在运行，此操作会中断它们的网络连接；确认后选择“允许中断”再试`);
     }
-    return this.client.serialize(async () => {
-      let result: MutationResult;
-      try { result = await this.client.call<MutationResult>(op, args, op === 'cert.issue' ? 700_000 : 150_000); }
-      catch (error) {
-        this.record(userId, op, undefined, 'FAILED', error instanceof Error ? error.message : String(error));
-        throw error;
-      }
-      if (op === 'rollback') {
-        this.record(userId, op, Number(args.revision), 'ROLLED_BACK');
-        return result;
-      }
-      if (!result.pending || result.revision === undefined) {
-        this.record(userId, op, result.revision, result.changed ? 'APPLIED' : 'UNCHANGED');
-        return result;
-      }
-      const problems = await this.verify();
-      if (problems.length) {
-        const rollback = await this.client.call('rollback', { revision: result.revision, reason: 'hub verification failed' })
-          .then(() => '已回滚', error => `回滚请求失败，网关将在确认超时后自动回滚：${error instanceof Error ? error.message : String(error)}`);
-        this.record(userId, op, result.revision, 'ROLLED_BACK', problems.join('；'));
-        throw new HttpError(502, `号池机验证未通过，${rollback}：${problems.join('；')}`);
-      }
-      await this.client.call('confirm', { revision: result.revision });
+    return this.client.serialize(() => this.applyMutation(userId, op, args));
+  }
+
+  private async applyMutation(userId: string, op: string, args: Record<string, unknown>) {
+    let result: MutationResult;
+    try { result = await this.client.call<MutationResult>(op, args, op === 'cert.issue' ? 700_000 : 150_000); }
+    catch (error) {
+      this.record(userId, op, undefined, 'FAILED', error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    if (op === 'rollback') {
       this.bindingCache = undefined;
-      this.record(userId, op, result.revision, 'CONFIRMED');
-      return { ...result, confirmed: true };
-    });
+      this.record(userId, op, Number(args.revision), 'ROLLED_BACK');
+      return result;
+    }
+    if (!result.pending || result.revision === undefined) {
+      this.bindingCache = undefined;
+      this.record(userId, op, result.revision, result.changed ? 'APPLIED' : 'UNCHANGED');
+      return result;
+    }
+    const problems = await this.verify();
+    if (problems.length) {
+      const rollback = await this.client.call('rollback', { revision: result.revision, reason: 'hub verification failed' })
+        .then(() => '已回滚', error => `回滚请求失败，网关将在确认超时后自动回滚：${error instanceof Error ? error.message : String(error)}`);
+      this.record(userId, op, result.revision, 'ROLLED_BACK', problems.join('；'));
+      throw new HttpError(502, `号池机验证未通过，${rollback}：${problems.join('；')}`);
+    }
+    await this.client.call('confirm', { revision: result.revision });
+    this.bindingCache = undefined;
+    this.record(userId, op, result.revision, 'CONFIRMED');
+    return { ...result, confirmed: true };
   }
 
   /** Development host addresses, so the admin can approve them for the direct list. */

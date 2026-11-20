@@ -1,7 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth.js';
+import { withResourceLocks, type Context } from '../context.js';
 import type { GatewayService, GatewayState } from '../gateway/service.js';
+import { nodeLocation } from '../gateway/location.js';
+import { defaultTimezone, normalizeTimezone, supportedTimezones } from '../execution/timezones.js';
+import { HttpError, type Slot } from '../models.js';
 
 // Shape checks only; the gateway enforces the egress invariants itself.
 const tag = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/);
@@ -17,7 +21,7 @@ const preproxy = z.object({
 }).strict();
 const mutation = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
 
-export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
+export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService, context: Context) {
   const change = (op: string, schema: { parse(value: unknown): Record<string, unknown> & { force: boolean } }) =>
     async (request: FastifyRequest) => {
       requireAdmin(request);
@@ -32,6 +36,16 @@ export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
   app.get('/api/admin/gateway/overview', async request => {
     requireAdmin(request);
     return gateway.overview();
+  });
+  app.get('/api/admin/gateway/timezones', async request => {
+    requireAdmin(request);
+    const timezone = defaultTimezone();
+    return { timezones: [...new Set([...supportedTimezones(), timezone])].sort(), defaultTimezone: timezone };
+  });
+  app.post('/api/admin/gateway/nodes/:tag/location', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+    requireAdmin(request);
+    const input = z.object({ tag }).parse(request.params);
+    return nodeLocation(gateway.client, input.tag);
   });
   app.get('/api/admin/gateway/dev-hosts', async request => {
     requireAdmin(request);
@@ -63,8 +77,24 @@ export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
     const { address } = z.object({ address: z.ipv4() }).parse(request.params);
     const { force: _force, ...input } = z.object({
       node: tag.nullable(), label: z.string().max(80).optional(), interrupt: z.boolean().default(false), force,
+      timezone: z.string().trim().min(1).max(100).nullable().optional(),
     }).strict().parse(request.body);
-    return gateway.mutate(request.user.id, 'binding.set', { address, ...input });
+    if (typeof input.timezone === 'string') input.timezone = normalizeTimezone(input.timezone);
+    if (input.timezone === undefined) return gateway.setBinding(request.user.id, address, input);
+    const slot = gateway.slotAt(address);
+    return withResourceLocks(context, [`slot-config:${slot.id}`], async () => {
+      if (input.timezone === gateway.slotAt(address).timezone) return gateway.setBinding(request.user.id, address, input);
+      await context.agents.reclaimWhere({ slotId: slot.id });
+      const saved = await context.config.credentials.whileIdle(slot.id, async () => {
+        const current = context.store.get<Slot>('SELECT * FROM account_slots WHERE id=?', slot.id);
+        if (!current) throw new HttpError(404, '槽位不存在');
+        try { await context.config.execution.assertReleased(current.home_dir); }
+        catch (error) { throw new HttpError(409, `无法修改槽位时区：${error instanceof Error ? error.message : String(error)}`); }
+        return gateway.setBinding(request.user.id, address, input);
+      });
+      if (!saved) throw new HttpError(409, '该槽位正在使用或查询额度，请结束后再修改时区');
+      return saved.value;
+    });
   });
   app.post('/api/admin/gateway/source-policy', mutation, change('source_policy.set',
     z.object({ source_policy: z.enum(['shared', 'bound']), force }).strict()));
