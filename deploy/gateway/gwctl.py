@@ -16,6 +16,7 @@ import json
 import os
 import pwd
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,7 @@ PENDING_PATH = f'{VAR}/pending.json'
 AUDIT_PATH = f'{VAR}/audit.jsonl'
 LOCK_PATH = f'{VAR}/lock'
 GWCTL = '/usr/local/lib/clinavat-gw/gwctl.py'
+CHAIN = runpy.run_path(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'gateway-chain.py'))
 
 TARGETS = {
     'sing-box': '/etc/sing-box/config.json',
@@ -46,10 +48,10 @@ TARGETS = {
     'nginx-map': '/etc/nginx/conf.d/clinavat-map.conf',
 }
 CONFIRM_SECONDS = 90
-NODE_TYPES = {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'anytls', 'naive'}
-RESERVED_TAGS = {'proxy', 'direct', 'block', 'dns', 'tun-in', 'unbound'}
+NODE_TYPES = {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'anytls', 'naive', 'socks', 'http'}
+RESERVED_TAGS = {'proxy', 'proxy-dns', 'direct', 'block', 'dns', 'tun-in', 'unbound'}
 # Per-source selectors and DNS servers are named after the source address.
-RESERVED_PREFIXES = ('src-', 'dns-')
+RESERVED_PREFIXES = ('src-', 'dns-', 'chain-')
 # Dial fields that could make a node leave through something other than its own server.
 FORBIDDEN_NODE_FIELDS = {'detour', 'bind_interface', 'inet4_bind_address', 'inet6_bind_address',
                          'routing_mark', 'netns', 'reuse_addr', 'bind_address_no_port'}
@@ -135,15 +137,15 @@ def network(value, label):
         raise GatewayError(f'{label} 不是有效的 CIDR：{value}（{error}）')
 
 
-def validate_nodes(nodes):
-    if not isinstance(nodes, list) or not 1 <= len(nodes) <= MAX_NODES:
-        raise GatewayError(f'节点数量必须在 1 到 {MAX_NODES} 之间')
+def validate_nodes(nodes, minimum=1):
+    if not isinstance(nodes, list) or not minimum <= len(nodes) <= MAX_NODES:
+        raise GatewayError(f'节点数量必须在 {minimum} 到 {MAX_NODES} 之间')
     tags = set()
     for node in nodes:
         if not isinstance(node, dict):
             raise GatewayError('节点必须是对象')
         tag, kind = node.get('tag'), node.get('type')
-        if not isinstance(tag, str) or not TAG.match(tag) or tag in RESERVED_TAGS or tag.startswith(RESERVED_PREFIXES):
+        if not isinstance(tag, str) or not TAG.fullmatch(tag) or tag in RESERVED_TAGS or tag.startswith(RESERVED_PREFIXES):
             raise GatewayError(f'节点标签无效或为保留名：{tag!r}')
         if tag in tags:
             raise GatewayError(f'节点标签重复：{tag}')
@@ -153,7 +155,7 @@ def validate_nodes(nodes):
         bad = FORBIDDEN_NODE_FIELDS & set(node)
         if bad:
             raise GatewayError(f'节点 {tag} 不允许设置：{", ".join(sorted(bad))}')
-        if not isinstance(node.get('server'), str) or not node['server'] or not isinstance(node.get('server_port'), int):
+        if not isinstance(node.get('server'), str) or not node['server'] or type(node.get('server_port')) is not int or not 1 <= node['server_port'] <= 65535:
             raise GatewayError(f'节点 {tag} 缺少 server / server_port')
     return tags
 
@@ -272,6 +274,7 @@ def validate_bindings(state, infra, tags):
 
 def validate_state(state, infra):
     tags = validate_nodes(state['nodes'])
+    CHAIN['validate_preproxy'](state, validate_nodes, GatewayError)
     if state['selected'] not in tags:
         raise GatewayError(f'当前节点 {state["selected"]!r} 不存在')
     validate_bindings(state, infra, tags)
@@ -300,6 +303,7 @@ def dns_tag(address):
 
 
 def render_sing_box(state, infra):
+    chain = CHAIN['render_chain'](state, infra)
     tags = [node['tag'] for node in state['nodes']]
     account = acme_account(infra)
     bound = state.get('source_policy') == 'bound'
@@ -310,7 +314,7 @@ def render_sing_box(state, infra):
     # DNS from the pool network is answered by sing-box, so it can follow the asking source's egress.
     route_rules = [{'inbound': 'tun-in', 'action': 'sniff', 'timeout': '1s'},
                    {'protocol': 'dns', 'action': 'hijack-dns'}, *rejects]
-    dns_servers = [dict(upstream, tag='proxy-dns', detour='proxy')]
+    dns_servers = [dict(upstream, tag='proxy-dns', detour='proxy'), *chain['dns']]
     dns_rules, selectors = [], []
     for address in addresses:
         # Selections change at runtime through the control API; the rendered default stays unbound,
@@ -339,7 +343,7 @@ def render_sing_box(state, infra):
             # The gateway's own traffic, and all pool traffic under the shared policy.
             {'type': 'selector', 'tag': 'proxy', 'outbounds': tags, 'default': state['selected']},
             *selectors,
-            *state['nodes'],
+            *chain['nodes'], *chain['front'], *chain['groups'],
             # A dead end for unbound sources: it can only ever reach this gateway's own loopback.
             {'type': 'socks', 'tag': 'unbound', 'server': '127.0.0.1', 'server_port': 1},
             # Referenced by nothing: excluded addresses never enter tun. Kept for sing-box internals.
@@ -740,8 +744,10 @@ def op_state_get(args):
     state = read_json(STATE_PATH)
     infra = read_json(INFRA_PATH)
     public_infra = {key: value for key, value in infra.items() if key != 'clash_secret'}
-    return {'state': {'source_policy': 'shared', 'bindings': {}, **state, 'nodes': mask(state['nodes'])},
-            'infra': {**public_infra, 'bindable': bindable_addresses(infra)}}
+    return {'state': {'source_policy': 'shared', 'bindings': {}, **state, 'nodes': mask(state['nodes']),
+                      'preproxy': {**CHAIN['settings'](state), 'nodes': mask(CHAIN['settings'](state)['nodes'])}},
+            'infra': {**public_infra, 'bindable': bindable_addresses(infra)},
+            'proxy_revision': CHAIN['proxy_revision'](state)}
 
 
 def merge_secret_fields(new, old):
@@ -757,18 +763,35 @@ def merge_secret_fields(new, old):
 
 
 def op_nodes_put(args):
-    nodes = args.get('nodes')
-
     def mutate(state):
         previous = {node['tag']: node for node in state['nodes']}
-        merged = [merge_secret_fields(node, previous.get(node.get('tag'))) for node in nodes]
-        if any('***' in json.dumps(node) for node in merged):
-            raise GatewayError('新节点的密钥字段不能为 ***')
+        merged = CHAIN['merge_nodes'](args.get('nodes'), previous, merge_secret_fields, GatewayError)
         state['nodes'] = merged
-        if state['selected'] not in {node['tag'] for node in merged}:
+        if merged and state['selected'] not in {node['tag'] for node in merged}:
             state['selected'] = merged[0]['tag']
         return state
     return transact('nodes.put', mutate, args)
+
+
+def op_proxies_put(args):
+    def mutate(state):
+        expected = args.get('expected_revision')
+        if expected is not None and expected != CHAIN['proxy_revision'](state):
+            raise GatewayError('代理配置已被其他管理员修改，请刷新后重新应用')
+        return CHAIN['replace_proxies'](state, args.get('nodes'), args.get('preproxy'), merge_secret_fields, GatewayError)
+    return transact('proxies.put', mutate, args)
+
+
+def op_preproxy_put(args):
+    def mutate(state):
+        state['preproxy'] = CHAIN['merge_preproxy'](args.get('preproxy'), CHAIN['settings'](state),
+                                                   merge_secret_fields, GatewayError)
+        return state
+    return transact('preproxy.put', mutate, args)
+
+
+def op_preproxy_delay(args):
+    return CHAIN['preproxy_delay'](read_json(STATE_PATH), read_json(INFRA_PATH), clash)
 
 
 def op_selector_select(args):
@@ -1042,6 +1065,7 @@ def op_activate(args):
 
 REMOTE_OPS = {
     'status': op_status, 'state.get': op_state_get, 'nodes.put': op_nodes_put,
+    'preproxy.put': op_preproxy_put, 'preproxy.delay': op_preproxy_delay, 'proxies.put': op_proxies_put,
     'selector.select': op_selector_select, 'rules.put': op_rules_put, 'dev_direct.put': op_dev_direct_put,
     'binding.set': op_binding_set, 'source_policy.set': op_source_policy_set,
     'forwards.put': op_forwards_put, 'sites.put': op_sites_put, 'nodes.delay': op_nodes_delay,
@@ -1051,7 +1075,7 @@ REMOTE_OPS = {
 LOCAL_OPS = {**REMOTE_OPS, 'import': op_import, 'render': op_render, 'activate': op_activate, 'certs.sync': op_certs_sync,
              'timer-rollback': op_timer_rollback, 'pin': op_pin, 'vm_subnet.set': op_vm_subnet_set}
 # pin runs from sing-box's ExecStartPost, while a change holding the lock may be waiting for that restart.
-READ_ONLY = {'status', 'state.get', 'nodes.delay', 'connections', 'revisions.list', 'audit.tail', 'render', 'pin'}
+READ_ONLY = {'status', 'state.get', 'preproxy.delay', 'nodes.delay', 'connections', 'revisions.list', 'audit.tail', 'render', 'pin'}
 
 
 def main():

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  Activity, Check, Copy, FileJson, Globe2, History, KeyRound, LoaderCircle, Network, RefreshCw, Route, Save, ShieldCheck, Split, Undo2, Waypoints, Zap,
+  Activity, Check, Copy, Globe2, History, KeyRound, LoaderCircle, Network, RefreshCw, Route, Save, ShieldCheck, Split, Undo2, Waypoints,
 } from "lucide-react";
 import { api, ApiError, errorText } from "../../api";
 import SiteAccessSettings from "./SiteAccessSettings";
+import GatewayProxyConfiguration from "./gateway/GatewayProxyConfiguration";
+import type { GatewayPreproxyState } from "./gateway/gateway-proxy-state";
 import "../../styles/admin-gateway.css";
 
 interface Info { configured: boolean; target: string | null; publicKey: string; fingerprint: string | null; gwctl: string; installCommand: string }
@@ -16,12 +18,13 @@ interface Forward { proto: "tcp" | "udp"; port: number; to_port: number; note?: 
 interface Binding { node: string; label?: string }
 interface GatewayState {
   nodes: Node[]; selected: string; rules: Record<string, unknown>[]; dev_direct: string[]; forwards: Forward[]; sites: string[];
-  source_policy: "shared" | "bound"; bindings: Record<string, Binding>;
+  source_policy: "shared" | "bound"; bindings: Record<string, Binding>; preproxy?: GatewayPreproxyState;
 }
 interface Source { address: string; kind: "host" | "builder" | "slot" | "workspace"; label: string }
 interface AuditEntry { at: string; action: string; status: string; via: string; revision?: number; error?: string; problems?: string[]; reason?: string }
 interface HubAudit { id: number; username: string | null; action: string; revision: number | null; status: string; detail: string | null; created_at: string }
 interface Overview {
+  proxy_revision?: string;
   status: { health: Health; drift: string[]; pending: { revision: number } | null; certificates: Record<string, string | null>; selected: string; nginx_installed: boolean };
   state: GatewayState; infra: { lan_direct: string[]; pool_ip: string; wan_ip: string; forbidden_egress_ips?: string[]; bindable?: string[] };
   sources: Source[];
@@ -33,7 +36,7 @@ const actionLabels: Record<string, string> = {
   import: "导入配置", activate: "激活", "nodes.put": "修改节点", "selector.select": "切换节点", "rules.put": "修改分流规则",
   "dev_direct.put": "修改直连名单", "forwards.put": "修改端口映射", "sites.put": "修改站点", "cert.issue": "签发证书",
   "cert.enable": "启用证书", "certs.sync": "证书续期", confirm: "确认", rollback: "回滚",
-  "binding.set": "修改出口绑定", "source_policy.set": "切换来源策略", "vm_subnet.set": "设置虚拟机网段",
+  "proxies.put": "统一修改节点与代理链", "preproxy.put": "修改链式代理", "binding.set": "修改出口绑定", "source_policy.set": "切换来源策略", "vm_subnet.set": "设置虚拟机网段",
 };
 const statusLabels: Record<string, string> = {
   PENDING: "待确认", CONFIRMED: "已确认", APPLIED: "已应用", UNCHANGED: "无变化", ROLLED_BACK: "已回滚",
@@ -44,7 +47,7 @@ function Status({ ok, label }: { ok: boolean | null; label: string }) {
   return <span className={`admin-status${ok === null ? "" : ok ? " success" : " warning"}`}>{label}</span>;
 }
 
-function JsonEditor({ value, disabled, hint, onSave }: { value: unknown; disabled: boolean; hint: string; onSave: (value: unknown) => Promise<void> }) {
+function JsonEditor({ value, disabled, hint, onSave }: { value: unknown; disabled: boolean; hint: string; onSave: (value: unknown) => Promise<unknown> }) {
   const initial = JSON.stringify(value, null, 2);
   const [draft, setDraft] = useState(initial);
   const [error, setError] = useState("");
@@ -69,7 +72,7 @@ function JsonEditor({ value, disabled, hint, onSave }: { value: unknown; disable
   );
 }
 
-function ListEditor({ value, disabled, placeholder, extra, onSave }: { value: string[]; disabled: boolean; placeholder: string; extra?: string[]; onSave: (value: string[]) => Promise<void> }) {
+function ListEditor({ value, disabled, placeholder, extra, onSave }: { value: string[]; disabled: boolean; placeholder: string; extra?: string[]; onSave: (value: string[]) => Promise<unknown> }) {
   const initial = value.join("\n");
   const [draft, setDraft] = useState(initial);
   useEffect(() => { setDraft(initial); }, [initial]);
@@ -132,7 +135,7 @@ export default function GatewayManagement() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [devHosts, setDevHosts] = useState<DevHost[] | null>(null);
   const [publicHosts, setPublicHosts] = useState<string[]>([]);
-  const [delays, setDelays] = useState<Record<string, number | null> | null>(null);
+  const [proxyDirty, setProxyDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [force, setForce] = useState(false);
@@ -158,7 +161,6 @@ export default function GatewayManagement() {
       setDevHosts(hosts);
       updatePublicHosts(site?.publicUrls ?? []);
     } catch (cause) {
-      setOverview(null);
       setLoadError(errorText(cause));
     } finally {
       setLoading(false);
@@ -167,7 +169,7 @@ export default function GatewayManagement() {
   useEffect(() => { void load(); }, [load]);
 
   async function change(label: string, path: string, method: "PUT" | "POST", body: Record<string, unknown>) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(label);
     setError("");
     setMessage("");
@@ -176,22 +178,18 @@ export default function GatewayManagement() {
       setMessage(result.changed === false ? `${label}：配置没有变化。` : `${label}：已生效${result.revision ? `（版本 ${result.revision}${result.confirmed ? "，号池机验证通过" : ""}）` : ""}。`);
       setExtraDirect([]);
       await load();
+      return true;
     } catch (cause) {
       setError(`${label}失败：${errorText(cause)}`);
       if (!(cause instanceof ApiError && cause.status === 400)) await load();
+      return false;
     } finally {
       setBusy("");
     }
   }
 
-  async function testDelay() {
-    setBusy("测试延迟");
-    try { setDelays(await api<Record<string, number | null>>("/admin/gateway/delay", { method: "POST", body: "{}" })); }
-    catch (cause) { setError(`测试延迟失败：${errorText(cause)}`); }
-    finally { setBusy(""); }
-  }
-
-  const disabled = !!busy || loading || !overview;
+  const proxyDisabled = !!busy || loading || !overview;
+  const disabled = proxyDisabled || proxyDirty;
   const needsGatewaySetup = !!info && (!info.configured || loadError.includes("网关拒绝了 Hub 密钥"));
   const health = overview?.status.health;
   const state = overview?.state;
@@ -216,7 +214,7 @@ export default function GatewayManagement() {
             <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} disabled={!!busy} />
             允许中断运行中的对话{overview.busySessions ? `（${overview.busySessions} 个运行中）` : ""}
           </label>}
-          <button type="button" className="button button-secondary button-small" onClick={() => void load()} disabled={loading || !!busy}>
+          <button type="button" className="button button-secondary button-small" onClick={() => void load()} disabled={loading || !!busy || proxyDirty} title={proxyDirty ? "请先应用或放弃代理配置草稿" : undefined}>
             <RefreshCw size={14} className={loading ? "spin" : ""} />刷新
           </button>
         </div>
@@ -245,24 +243,11 @@ export default function GatewayManagement() {
       </Section>}
 
       {overview && state && <>
-        <Section icon={Network} title="代理节点" description="出站流量经节点选择器 proxy 发出。切换节点不重启 sing-box；修改节点会重启 sing-box。密钥字段显示为 ***，保持不变即沿用原值。"
-          actions={<button type="button" className="button button-secondary button-small" disabled={disabled} onClick={() => void testDelay()}><Zap size={14} />测试延迟</button>}>
-          <div className="gateway-nodes">
-            {state.nodes.map((node) => (
-              <div className={`gateway-node${node.tag === state.selected ? " active" : ""}`} key={node.tag}>
-                <div><strong>{node.tag}</strong><small>{node.type} · {node.server}:{node.server_port}</small></div>
-                <span className="gateway-delay">{delays ? delays[node.tag] ? `${delays[node.tag]} ms` : "超时" : ""}</span>
-                {node.tag === state.selected ? <span className="admin-status success">当前</span>
-                  : <button type="button" className="button button-ghost button-small" disabled={disabled}
-                    onClick={() => void change(`切换到 ${node.tag}`, "/admin/gateway/select", "POST", { tag: node.tag })}>设为当前</button>}
-              </div>
-            ))}
-          </div>
-          <details className="gateway-details"><summary><FileJson size={14} />编辑节点 JSON</summary>
-            <JsonEditor value={state.nodes} disabled={disabled} hint="sing-box 出站数组。允许 vless / vmess / trojan / shadowsocks / hysteria(2) / tuic / anytls / naive，不允许 detour、bind_interface 等绕行字段。"
-              onSave={(nodes) => change("修改节点", "/admin/gateway/nodes", "PUT", { nodes })} />
-          </details>
-        </Section>
+        <GatewayProxyConfiguration nodes={state.nodes} preproxy={state.preproxy} selected={state.selected}
+          boundTags={[...Object.values(state.bindings).map((binding) => binding.node), ...state.rules.flatMap((rule) => typeof rule.outbound === "string" ? [rule.outbound] : [])]}
+          revision={overview.proxy_revision} disabled={proxyDisabled} onDirtyChange={setProxyDirty}
+          onApply={(draft) => change("统一修改节点与代理链", "/admin/gateway/proxies", "PUT", { ...draft })}
+          onSelect={(tag) => change(`切换到 ${tag}`, "/admin/gateway/select", "POST", { tag })} />
 
         <Section icon={Split} title="出口绑定" description={state.source_policy === "bound"
           ? "按来源绑定：号池机和每台虚拟机只经各自绑定的节点出站，DNS 也经同一节点解析；未绑定的来源断网，节点失败时不会改走其他出口。切换绑定不重启 sing-box。"

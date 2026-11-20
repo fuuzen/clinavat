@@ -117,7 +117,7 @@ CHECK
   echo "macvlan OK"
 
   echo "== provision"
-  tar -C "$GATEWAY_SOURCE" -cf - gwctl.py gateway-rules.sh gateway-rules.service \
+  tar -C "$GATEWAY_SOURCE" -cf - gwctl.py gateway-chain.py gateway-rules.sh gateway-rules.service \
     | lxc exec "$VM" --project "$PROJECT" -- bash -c 'install -d -m 700 /root/clinavat-gateway && tar -C /root/clinavat-gateway -xf -'
   cat "$GATEWAY_SOURCE/acme-units.sh" "$SOURCE/gateway-provision.sh" | lxc exec "$VM" --project "$PROJECT" -- bash -s
 
@@ -171,8 +171,9 @@ refresh() {
   wan_mac="$(vm config device get "$VM" wan hwaddr)"
   lan_mac="$(vm config device get "$VM" lan hwaddr)"
   start_isolated
-  tar -C "$GATEWAY_SOURCE" -cf - gwctl.py gateway-rules.sh gateway-rules.service \
+  tar -C "$GATEWAY_SOURCE" -cf - gwctl.py gateway-chain.py gateway-rules.sh gateway-rules.service \
     | lxc exec "$VM" --project "$PROJECT" -- bash -c 'install -d -m 700 /root/clinavat-gateway && tar -C /root/clinavat-gateway -xf - &&
+      install -m 700 /root/clinavat-gateway/gateway-chain.py /usr/local/lib/clinavat-gw/gateway-chain.py &&
       install -m 700 /root/clinavat-gateway/gwctl.py /usr/local/lib/clinavat-gw/gwctl.py &&
       install -m 755 /root/clinavat-gateway/gateway-rules.sh /usr/local/bin/gateway-rules.sh'
   import_from_old "$wan_mac" "$lan_mac"

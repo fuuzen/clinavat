@@ -9,16 +9,21 @@ import { machineName } from '../execution/lxd-host.js';
 interface Health { problems: string[]; [key: string]: unknown }
 interface MutationResult { changed: boolean; revision?: number; pending?: boolean; health?: Health }
 export interface GatewayBinding { node: string; label?: string }
+export interface GatewayPreproxy {
+  nodes: Record<string, unknown>[];
+  groups: { tag: string; nodes: string[]; url?: string; interval?: string; tolerance?: number }[];
+  routes: Record<string, string | string[]>;
+}
 export interface GatewayState {
   nodes: Record<string, unknown>[]; selected: string; rules: Record<string, unknown>[];
   dev_direct: string[]; forwards: Record<string, unknown>[]; sites: string[];
-  source_policy: 'shared' | 'bound'; bindings: Record<string, GatewayBinding>;
+  source_policy: 'shared' | 'bound'; bindings: Record<string, GatewayBinding>; preproxy?: GatewayPreproxy;
 }
 interface GatewayAuditRow { id: number; username: string | null; action: string; revision: number | null; status: string; detail: string | null; created_at: string }
 
 // These restart sing-box or switch the egress node, which drops running CLI connections.
 // A single source binding switches at runtime and only cuts that source's connections when asked to.
-const interrupting = new Set(['nodes.put', 'selector.select', 'rules.put', 'dev_direct.put', 'source_policy.set', 'rollback']);
+const interrupting = new Set(['nodes.put', 'preproxy.put', 'proxies.put', 'selector.select', 'rules.put', 'dev_direct.put', 'source_policy.set', 'rollback']);
 
 function ipv4Number(address: string): number {
   return address.split('.').reduce((value, part) => value * 256 + Number(part), 0);
@@ -89,7 +94,7 @@ export class GatewayService {
     ];
   }
 
-  read<T>(op: 'nodes.delay' | 'connections') { return this.client.call<T>(op, {}, 60_000); }
+  read<T>(op: 'nodes.delay' | 'preproxy.delay' | 'connections') { return this.client.call<T>(op, {}, 60_000); }
 
   private busySessions(): number {
     return this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM sessions WHERE status IN ('running','waiting','pausing','paused')")!.count;

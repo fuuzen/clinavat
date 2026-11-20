@@ -188,12 +188,13 @@ backup() {
   install -d -m 700 "$BACKUP"
   lxc network show "$VM_BRIDGE" >"$BACKUP/network.yaml"
   lxc project get "$USER_PROJECT" restricted.devices.disk.paths >"$BACKUP/disk-paths"
-  in_gateway tar -C / -cf - etc/clinavat-gw usr/local/lib/clinavat-gw/gwctl.py etc/systemd/network/lan0.network >"$BACKUP/gateway.tar"
+  in_gateway tar -C / -cf - etc/clinavat-gw usr/local/lib/clinavat-gw etc/systemd/network/lan0.network >"$BACKUP/gateway.tar"
   in_gateway sh -c "test -f $PIN_DROPIN && cat $PIN_DROPIN || true" >"$BACKUP/pin.conf"
 }
 
 update_gateway() {
   echo "== gateway: controller, return route, VM network"
+  lxc file push --project "$GATEWAY_PROJECT" --mode 0700 "$SOURCE/../gateway/gateway-chain.py" "$GATEWAY_VM${GWCTL%/*}/gateway-chain.py"
   lxc file push --project "$GATEWAY_PROJECT" --mode 0700 "$SOURCE/../gateway/gwctl.py" "$GATEWAY_VM$GWCTL"
   # cache_file restores selections on restart; this pins them to the gateway's state as well.
   in_gateway sh -c "mkdir -p ${PIN_DROPIN%/*} && printf '[Service]\nExecStartPost=-$GWCTL pin\n' > $PIN_DROPIN && systemctl daemon-reload"

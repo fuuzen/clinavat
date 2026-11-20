@@ -1,6 +1,7 @@
 #!/bin/bash
 # One-time Clinavat gateway control plane installation. Run as root on the gateway from a
-# directory containing this script, gwctl.py, gateway-rules.sh and gateway-rules.service.
+# directory containing this script, gwctl.py, gateway-chain.py,
+# gateway-rules.sh and gateway-rules.service.
 #
 #   ./install.sh --wan-ip 192.0.2.10 --site clinavat.example.com [--drop-direct 17.0.0.0/8] \
 #                [--acme-dns dns_ali] [--hub-key 'ssh-ed25519 AAAA... clinavat-hub']
@@ -96,6 +97,7 @@ if [[ ! -f "$ETC/state.json" ]]; then
   [[ -f /etc/systemd/system/gateway-rules.service ]] && cp -a /etc/systemd/system/gateway-rules.service "$BACKUP/"
   echo "backup: $BACKUP"
 fi
+install -m 700 "$SOURCE/gateway-chain.py" "$LIB/gateway-chain.py"
 install -m 700 "$SOURCE/gwctl.py" "$GWCTL"
 # acme.sh runs unprivileged; sing-box excludes this uid from tun so DNS API calls leave directly.
 id "$ACME_USER" >/dev/null 2>&1 || useradd --system --home-dir "$ACME_HOME" --no-create-home --shell /usr/sbin/nologin "$ACME_USER"

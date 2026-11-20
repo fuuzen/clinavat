@@ -7,6 +7,14 @@ import type { GatewayService, GatewayState } from '../gateway/service.js';
 const tag = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/);
 const force = z.boolean().default(false);
 const node = z.record(z.string(), z.unknown()).refine(value => typeof value.tag === 'string' && typeof value.type === 'string', '节点需包含 tag 与 type');
+const preproxy = z.object({
+  nodes: z.array(node).max(64),
+  groups: z.array(z.object({
+    tag, nodes: z.array(tag).min(1).max(64), url: z.string().url().max(2048).optional(),
+    interval: z.string().max(32).optional(), tolerance: z.number().int().min(0).max(10000).optional(),
+  }).strict()).max(16),
+  routes: z.record(tag, z.union([tag, z.array(tag).min(1).max(8)])),
+}).strict();
 const mutation = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
 
 export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
@@ -34,6 +42,15 @@ export function gatewayRoutes(app: FastifyInstance, gateway: GatewayService) {
     requireAdmin(request);
     return gateway.read('nodes.delay');
   });
+  app.post('/api/admin/gateway/preproxy/delay', mutation, async request => {
+    requireAdmin(request);
+    return gateway.read('preproxy.delay');
+  });
+  app.put('/api/admin/gateway/proxies', mutation, change('proxies.put',
+    z.object({ nodes: z.array(node).min(1).max(64), preproxy,
+      expected_revision: z.string().regex(/^[a-f0-9]{64}$/).optional(), force }).strict()));
+  app.put('/api/admin/gateway/preproxy', mutation, change('preproxy.put',
+    z.object({ preproxy, force }).strict()));
   app.get('/api/admin/gateway/connections', async request => {
     requireAdmin(request);
     return gateway.read('connections');
