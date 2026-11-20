@@ -31,6 +31,10 @@ sed -E -e 's#CC_POOL_GW_REMOTE=1#CLINAVAT_GW_REMOTE=1#' -e 's#/usr/local/lib/cc-
 chmod 600 /root/.ssh/authorized_keys
 cp -a "$IMPORT"/etc/ssh/ssh_host_* /etc/ssh/
 
+# Preserve sing-box auto_route rules when networkd reconfigures the WAN.
+install -d -m 755 /etc/systemd/networkd.conf.d
+printf '[Network]\nManageForeignRoutingPolicyRules=no\n' > /etc/systemd/networkd.conf.d/90-clinavat-proxy-routing.conf
+
 # Same addresses and MACs as the old gateway, so nothing upstream or on the pool side has to change. The names must
 # not be eth0 or eth1: the kernel hands those out in probe order, and swapping them fails and crosses the configs,
 # which would also invert the guard's rules.

@@ -127,6 +127,16 @@ cat "$VAR/review/guard"
 confirm "Apply this configuration?" || exit 1
 
 echo "== activate"
+# networkd otherwise removes sing-box policy rules during link reconfiguration.
+if systemctl is-active --quiet systemd-networkd; then
+  install -d -m 755 /etc/systemd/networkd.conf.d
+  networkd_config=/etc/systemd/networkd.conf.d/90-clinavat-proxy-routing.conf
+  if ! cmp -s "$networkd_config" <(printf '[Network]\nManageForeignRoutingPolicyRules=no\n'); then
+    printf '[Network]\nManageForeignRoutingPolicyRules=no\n' > "$networkd_config"
+    systemctl restart systemd-networkd
+    systemctl restart sing-box
+  fi
+fi
 install -m 755 "$SOURCE/gateway-rules.sh" /usr/local/bin/gateway-rules.sh
 install -m 644 "$SOURCE/gateway-rules.service" /etc/systemd/system/gateway-rules.service
 systemctl daemon-reload

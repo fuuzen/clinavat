@@ -10,6 +10,8 @@ nft 表 `inet clinavat_guard` 负责 DNAT 和地址转换。号池网段（`eth1
 
 sing-box 默认出站、DNS 出站固定为节点选择器 `proxy`；`direct` 只用于直连名单，任何请求都不能把规则、默认出站或节点 `detour` 指向直连，也不能新增入站。开发机 SSH 通过直连名单绕过 tun，其他 SSH 目标（如 GitHub）经代理。
 
+网关安装会设置 `/etc/systemd/networkd.conf.d/90-clinavat-proxy-routing.conf` 中的 `ManageForeignRoutingPolicyRules=no`，防止 `systemd-networkd` 在网卡重配时删除 sing-box 的自动策略路由。已有网关新增此配置后，先重启 `systemd-networkd`，再重启 `sing-box`；随后检查 `ip rule` 中的代理规则和虚拟机内 DNS/HTTPS，单独检查网关本机连通性不能验证转发链路。
+
 ## 按来源绑定出口
 
 `source_policy` 为 `shared`（默认）时，所有来源经共享选择器 `proxy` 出站。改为 `bound` 后，号池机和 `infra.json` 中 `vm_subnet` 的每个地址各有一个选择器 `src-<地址>`，按 `state.json` 的 `bindings` 指向节点。未绑定的地址指向只能连到网关回环地址的死路出口 `unbound`，路由和 DNS 末尾再拒绝号池网段与虚拟机网段的其余来源。网关自身的流量仍经 `proxy`。
