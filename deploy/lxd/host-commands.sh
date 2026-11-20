@@ -113,6 +113,26 @@ for rule in json.load(sys.stdin).get("egress") or []:
 sys.exit(1)' "$bridge" "$port"
 }
 
+check_key_path_modes() {
+  local home="$1" keys="$2" path owner mode hub_uid
+  home="$(realpath -m -- "$home")" || { problem "cannot resolve $home (sshd StrictModes)"; return; }
+  path="$(realpath -m -- "$keys")" || { problem "cannot resolve $keys (sshd StrictModes)"; return; }
+  hub_uid="$(id -u "$hub_user")"
+
+  # sshd follows the resolved key path up to the home directory, or to / if the key resolves outside home.
+  while :; do
+    if [[ -e "$path" ]]; then
+      if ! read -r owner mode < <(stat -c '%u %a' -- "$path"); then
+        problem "cannot read ownership and permissions of $path (sshd StrictModes)"
+      elif (( (owner != 0 && owner != hub_uid) || (8#$mode & 0022) )); then
+        problem "$path (owner UID $owner, mode $mode) must belong to root or $hub_user and have no group or other write permission (sshd StrictModes)"
+      fi
+    fi
+    [[ "$path" == "$home" || "$path" == / ]] && break
+    path="$(dirname -- "$path")"
+  done
+}
+
 check() {
   echo "== check: guests on $subnet log in to $bridge:$port"
   local listening effective home keys
@@ -138,10 +158,11 @@ check() {
   fi
   home="$(getent passwd "$hub_user" | cut -d: -f6)"
   keys="$home/.ssh/authorized_keys"
+  if grep -qx 'strictmodes yes' <<<"$effective"; then check_key_path_modes "$home" "$keys"; fi
   if grep -q ' clinavat-host-commands$' "$keys" 2>/dev/null; then ok "$keys holds the Hub's host command key"
   else warn "$keys has no host command key yet; the Hub adds it when it starts in VM mode"; fi
   ((problems == 0)) || fail "$problems problem(s) found"
-  echo "ready. The Hub uses $hub_user@$bridge:$port; the admin panel's 宿主机 page shows whether it logs in."
+  echo "Host-side checks passed. The Hub uses $hub_user@$bridge:$port; the admin panel's 宿主机 page shows whether it logs in."
 }
 
 case "$command" in

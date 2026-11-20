@@ -77,7 +77,8 @@ export class HostCommands {
     } catch (error) {
       // OpenSSH frames some errors in lines of @; only the words matter here.
       const message = (error instanceof Error ? error.message : String(error)).split(/\r?\n/)
-        .filter(line => line.trim() && !/^@+$/.test(line.trim())).join(' ').replace(/@/g, '').replace(/\s+/g, ' ').trim();
+        .map(line => line.trim().replace(/^@+(?:\s+|$)|\s+@+$/g, ''))
+        .filter(Boolean).join(' ').replace(/\s+/g, ' ');
       this.state = { ready: false, checkedAt: new Date().toISOString(),
         error: `${message}（在宿主机上以 root 运行 deploy/lxd/host-commands.sh check --hub-user ${this.user} 排查）` };
     }
