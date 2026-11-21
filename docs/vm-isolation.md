@@ -347,6 +347,26 @@ sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户>
 
 管理面板「网关 → 出口绑定」列出号池机、每个槽位和每个用户的工作区，可以分别选择节点。槽位在创建后即分配地址，可以在首次登录前绑定；未绑定的槽位不能开始对话。
 
+### Linux 系统用户出口
+
+在 Fedora 系列宿主机上，管理员可以用 `deploy/lxd/user-egress.py` 把 Linux 用户的公网出口绑定到网关的落地节点。脚本按套接字的 UID 选择来源 IP，已登录的桌面、SSH 会话和以该 UID 运行的后台进程都会使用该策略。已有网络连接可能需要重连。脚本需要宿主机上的 LXD、Python 3、iproute2、nftables、arping、curl、setfacl 和运行中的 `systemd-resolved-varlink.socket`。网关须已启用按来源绑定。
+
+首次绑定为每个用户预留一个 VM 网段中的固定 IPv4 地址。它必须在 Hub 的实例分配范围、镜像构建地址和 LXD DHCP 地址池之外。下面是 Lily 的示例，网段或分配范围变化后请相应调整。审阅脚本后，把两个文件安装到 root 所有的目录。已有部署也可以单独安装此工具：
+
+```bash
+sudo install -Dt /usr/local/lib/clinavat-user-egress \
+  /home/clinavat/clinavat/deploy/lxd/{user-egress.py,user_egress_policy.py}
+tool=/usr/local/lib/clinavat-user-egress/user-egress.py
+sudo "$tool" apply june malaysia-wepc --address 10.31.0.2
+sudo "$tool" check june
+sudo "$tool" status
+sudo "$tool" remove june
+```
+
+切换节点时重新运行 `apply <用户名> <节点名>`，沿用已有来源地址。`apply` 验证系统域名解析和公网出口，失败时恢复本次修改前的绑定。脚本在宿主机和网关安装 systemd 配置，开机恢复路由和防火墙。使用自定义网关实例或项目名时，首次绑定可传入 `--gateway`、`--gateway-project`。系统 DNS 经指定节点，网关的公网直连名单不会绕过此绑定，故障时阻断外网。当前只提供 IPv4 公网出站。
+
+策略覆盖目标 UID 自己创建的 IP 套接字。通过本机代理、`sudo` 或系统服务代发的请求由实际创建连接的进程决定；用户间共享本机代理时应在代理侧另行配置访问权限。应通过脚本修改这些 Linux 来源和节点的对应关系。
+
 ### 槽位时区
 
 管理员可在槽位的出口绑定中同时指定 IANA 时区，例如 `America/Los_Angeles` 或 `Asia/Tokyo`，也可保留默认值，沿用 Hub 的时区。时区属于槽位 VM 的固定配置，槽位换人、Hub 重启或 VM 重建后仍保留；工作区容器和其他槽位不受影响。
