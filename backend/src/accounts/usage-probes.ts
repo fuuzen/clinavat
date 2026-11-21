@@ -3,6 +3,7 @@ import { observeProcessClose, terminateProcess } from '../agent/environment.js';
 import { readJsonLines } from '../agent/ndjson.js';
 import { RpcClient } from '../agent/rpc.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
+import type { AgentEngine } from '../agent/engines.js';
 import { parseClaudeUsage, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 
 const PROBE_TIMEOUT = 30_000;
@@ -79,3 +80,9 @@ export async function withCodexServer<T>(probe: Probe, task: (rpc: RpcClient) =>
     await closed;
   }
 }
+
+/** Reads a slot's subscription quota through its CLI, without starting a conversation. */
+export const usageProbes: Record<AgentEngine, (probe: Probe) => Promise<UsageUpdate>> = {
+  claude: claudeProbe,
+  codex: codexProbe,
+};

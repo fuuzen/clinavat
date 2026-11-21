@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { startClaude } from './claude.js';
-import { startCodex } from './codex.js';
+import { startClaude } from './claude/run.js';
+import { startCodex } from './codex/run.js';
+import { engineProfiles, type AgentEngine } from './engines.js';
 import { getPermissionMode } from './permissions.js';
 import { UserInputRequests } from './user-input.js';
 import { RunControl } from './run-control.js';
@@ -11,9 +12,14 @@ import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
 import { settingsKey, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
-import type { AgentCallbacks, AgentConfig, AgentContext, ApprovalDecision, InputMode, QueuedInput, RunServices,
+import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, QueuedInput, RunServices,
   TurnOrigin, TurnOutcome } from './types.js';
-import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
+import type { CodexGoal, CodexGoalChange } from './codex/goal.js';
+
+const starters: Record<AgentEngine, (services: RunServices, prompt: AgentPrompt, signal: AbortSignal) => Promise<AgentRun>> = {
+  claude: startClaude,
+  codex: startCodex,
+};
 
 /**
  * Keeps one CLI process per conversation across turns. The process holds the slot lease until it has been
@@ -66,7 +72,7 @@ export class AgentManager {
   /** `images` are the IDs of the images attached to the first message. */
   async start(context: AgentContext, prompt: string, continuation?: RunContinuation, images: string[] = []): Promise<void> {
     if (this.closing) throw new DOMException('服务正在关闭', 'AbortError');
-    if (!prompt.trim() && !images.length && !(context.session.engine === 'codex' && context.session.goal)) throw new Error('消息不能为空');
+    if (!prompt.trim() && !images.length && !(engineProfiles[context.session.engine].goal && context.session.goal)) throw new Error('消息不能为空');
     if (context.slot.engine !== context.session.engine) throw new Error('当前账号槽位未启用此引擎');
     if (this.active.has(context.session.id)) throw new Error('当前会话正在运行');
     const input = { text: prompt, images: this.callbacks.loadImages(context.session.id, images) };
@@ -161,9 +167,7 @@ export class AgentManager {
       }
       await this.callbacks.updateSession(sessionId, { status: 'running' });
       state.cliStarting = true;
-      state.run = context.session.engine === 'claude'
-        ? await startClaude(services, input, state.abort.signal)
-        : await startCodex(services, input, state.abort.signal);
+      state.run = await starters[context.session.engine](services, input, state.abort.signal);
       if (state.abort.signal.aborted) state.run.stop();
       this.publish(state);
       // A turn ends through turnEnded; the process ending only settles a turn the CLI left open.

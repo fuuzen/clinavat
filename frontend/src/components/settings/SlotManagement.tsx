@@ -12,6 +12,7 @@ import SlotCard from "./SlotCard";
 import DangerDialog from "./DangerDialog";
 import SlotUsageSettings from "./SlotUsageSettings";
 import { useSlotUsage } from "../../useSlotUsage";
+import { agentEngines, engineLabel, type AgentEngine } from "../../engines";
 
 export default function SlotManagement({
   onRefresh,
@@ -25,7 +26,7 @@ export default function SlotManagement({
   const [requiresReload, setRequiresReload] = useState(false);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
-  const [engine, setEngine] = useState<"claude" | "codex">("claude");
+  const [engine, setEngine] = useState<AgentEngine>("claude");
   const [success, setSuccess] = useState("");
   const [assignmentVersions, setAssignmentVersions] = useState<Record<string, number>>({});
   const [assignmentErrors, setAssignmentErrors] = useState<Record<string, string>>({});
@@ -204,9 +205,8 @@ export default function SlotManagement({
             </div>
             <label>
               CLI 引擎
-              <select value={engine} onChange={(event) => setEngine(event.target.value as "claude" | "codex")}>
-                <option value="claude">Claude Code</option>
-                <option value="codex">Codex</option>
+              <select value={engine} onChange={(event) => setEngine(event.target.value as AgentEngine)}>
+                {agentEngines.map((item) => <option key={item} value={item}>{engineLabel(item)}</option>)}
               </select>
             </label>
             <button

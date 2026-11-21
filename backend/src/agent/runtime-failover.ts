@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ActiveRun, RunContinuation, RuntimeView } from './resident-run.js';
 import type { AgentCallbacks, AgentContext, QueuedInput, QuotaFailure } from './types.js';
+import { engineProfiles } from './engines.js';
 
 const MAX_SWITCHES = 3;
 const continuationPrompt = '继续当前任务。先检查已有文件、任务和工具执行结果，确认哪些步骤已完成；不要重复已经产生副作用的操作，再完成尚未完成的工作。';
@@ -89,7 +90,7 @@ export class RuntimeFailovers {
       return false;
     }
     const sessionId = state.context.session.id;
-    if (state.context.session.engine !== 'claude' || state.context.session.slot_mode !== 'auto'
+    if (!engineProfiles[state.context.session.engine].automaticSlot || state.context.session.slot_mode !== 'auto'
       || state.context.session.command || !this.callbacks.prepareFailover || state.abort.signal.aborted) return false;
     const existing = this.pending.get(sessionId);
     if (existing) { existing.quota = quota; return !existing.terminal && existing.state === state; }

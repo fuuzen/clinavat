@@ -7,17 +7,18 @@ import { slotForUser } from '../accounts/access.js';
 import { announceSlotChange } from '../accounts/assignments.js';
 import { selectedSlotId } from './session-messages.js';
 import { agentPreferenceSchema, userModels } from '../agent-defaults.js';
+import { agentEngines } from '../agent/engines.js';
 
 const catalogError = (error: unknown) => error instanceof HttpError ? error
   : new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败');
 
 export function agentModelRoutes(app: FastifyInstance, context: Context) {
   const { store, config, agentDefaults, events } = context;
-  const engine = z.enum(['claude', 'codex']);
+  const engine = z.enum(agentEngines);
   // Only saved catalogs are offered, so opening the settings never starts a CLI.
   const settingsView = (userId: string) => ({
     defaults: agentDefaults.user(userId),
-    catalogs: { claude: userModels(store, userId, 'claude'), codex: userModels(store, userId, 'codex') },
+    catalogs: Object.fromEntries(agentEngines.map(name => [name, userModels(store, userId, name)])),
   });
   app.get('/api/settings/agent', async request => settingsView(request.user.id));
   app.put('/api/settings/agent/:engine', async request => {

@@ -3,14 +3,15 @@ import { readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { AccountCredentials } from './credentials.js';
 import { privateDirectory, readPrivateJson, writePrivateJson } from './credential-files.js';
-import { accountIdentifier, credentialPath, type AccountEngine } from './paths.js';
+import { accountIdentifier, credentialPath } from './paths.js';
 import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
-import { claudeProbe, codexProbe, type Probe } from './usage-probes.js';
+import { usageProbes, type Probe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
 import { readLogin, readSubscription, type SlotLogin, type SlotSubscription } from './subscription.js';
 import type { UsageSettings } from './usage-settings.js';
+import { engineProfiles, type AgentEngine } from '../agent/engines.js';
 
 export { parseClaudeEvent, parseClaudeUsage, parseCodexEvent, parseCodexRead } from './usage-parsers.js';
 
@@ -56,7 +57,7 @@ export interface SlotUsageView {
 }
 
 export interface UsageSlot {
-  id: string; home_dir: string; engine: AccountEngine; status: string; auth_method?: SlotAuthMethod; token_expires_at?: string | null;
+  id: string; home_dir: string; engine: AgentEngine; status: string; auth_method?: SlotAuthMethod; token_expires_at?: string | null;
 }
 export interface ResidentUsage { update: UsageUpdate; identity: string | null }
 
@@ -96,13 +97,9 @@ async function readJson(file: string, home: string): Promise<any> {
   return content ? JSON.parse(content) : undefined;
 }
 
-async function accountKey(home: string, engine: AccountEngine): Promise<string | null> {
-  try {
-    if (engine === 'codex') {
-      const auth = await readJson(credentialPath(home, 'codex'), home);
-      const id = auth?.tokens?.account_id ?? (typeof auth?.OPENAI_API_KEY === 'string' ? `key:${auth.OPENAI_API_KEY}` : null);
-      return typeof id === 'string' ? digest(`codex:${id}`) : null;
-    }
+/** A stable digest of the account a slot's login belongs to. */
+const accountKeys: Record<AgentEngine, (home: string) => Promise<string | null>> = {
+  async claude(home) {
     for (const file of ['.claude.json', join('.claude', '.claude.json')]) {
       const uuid = (await readJson(join(home, file), home))?.oauthAccount?.accountUuid;
       if (typeof uuid === 'string') return digest(`claude:${uuid}`);
@@ -110,7 +107,17 @@ async function accountKey(home: string, engine: AccountEngine): Promise<string |
     // Without account metadata the refresh token is the best identity, but it rotates; see sameAccount.
     const token = (await readJson(credentialPath(home, 'claude'), home))?.claudeAiOauth?.refreshToken;
     return typeof token === 'string' ? `token:${digest(`claude-token:${token}`)}` : null;
-  } catch { return null; }
+  },
+  async codex(home) {
+    const auth = await readJson(credentialPath(home, 'codex'), home);
+    const id = auth?.tokens?.account_id ?? (typeof auth?.OPENAI_API_KEY === 'string' ? `key:${auth.OPENAI_API_KEY}` : null);
+    return typeof id === 'string' ? digest(`codex:${id}`) : null;
+  },
+};
+
+async function accountKey(home: string, engine: AgentEngine): Promise<string | null> {
+  try { return await accountKeys[engine](home); }
+  catch { return null; }
 }
 
 // Cooldowns remain conservative when identity is unreadable or only a rotating token is known.
@@ -132,24 +139,29 @@ interface CachedSnapshot extends Omit<Snapshot, 'windows'> { windows: UsageWindo
 
 type Credential = { kind: 'none' } | { kind: 'apikey' } | { kind: 'oauth'; fresh: boolean };
 
-async function inspectCredential(home: string, engine: AccountEngine): Promise<Credential> {
-  const document = await readJson(credentialPath(home, engine), home);
-  const deadline = Date.now() + TOKEN_MARGIN;
-  if (engine === 'claude') {
+/** What each CLI's login file holds, and whether its access token outlasts `deadline`. */
+const credentialStates: Record<AgentEngine, (document: any, deadline: number) => Credential> = {
+  claude(document, deadline) {
     const oauth = document?.claudeAiOauth;
     if (typeof oauth?.accessToken !== 'string') return { kind: 'none' };
     const hasAccess = oauth.accessToken.length > 0;
     const hasRefresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken.length > 0;
     if (!hasAccess && !hasRefresh) return { kind: 'none' };
     return { kind: 'oauth', fresh: hasAccess && typeof oauth.expiresAt === 'number' && oauth.expiresAt > deadline };
-  }
-  const token = document?.tokens?.access_token;
-  if (typeof token !== 'string') return typeof document?.OPENAI_API_KEY === 'string' ? { kind: 'apikey' } : { kind: 'none' };
-  let expires = 0;
-  try { expires = Number(JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString()).exp) * 1000; }
-  catch { /* Unknown expiry is treated as stale. */ }
-  const refreshed = Date.parse(String(document?.last_refresh ?? ''));
-  return { kind: 'oauth', fresh: expires > deadline && Date.now() - refreshed < CODEX_REFRESH_AGE };
+  },
+  codex(document, deadline) {
+    const token = document?.tokens?.access_token;
+    if (typeof token !== 'string') return typeof document?.OPENAI_API_KEY === 'string' ? { kind: 'apikey' } : { kind: 'none' };
+    let expires = 0;
+    try { expires = Number(JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString()).exp) * 1000; }
+    catch { /* Unknown expiry is treated as stale. */ }
+    const refreshed = Date.parse(String(document?.last_refresh ?? ''));
+    return { kind: 'oauth', fresh: expires > deadline && Date.now() - refreshed < CODEX_REFRESH_AGE };
+  },
+};
+
+async function inspectCredential(home: string, engine: AgentEngine): Promise<Credential> {
+  return credentialStates[engine](await readJson(credentialPath(home, engine), home), Date.now() + TOKEN_MARGIN);
 }
 
 export class SlotUsage {
@@ -410,7 +422,7 @@ export class SlotUsage {
     const source = credentialPath(slot.home_dir, slot.engine);
     return this.isolated(slot, async probe => {
       const original = await readPrivateJson(source, slot.home_dir);
-      const update = await (slot.engine === 'claude' ? claudeProbe(probe) : codexProbe(probe));
+      const update = await usageProbes[slot.engine](probe);
       if (await readPrivateJson(source, slot.home_dir) !== original) {
         throw new Error('额度查询期间登录凭据已变化，已丢弃原账号的额度结果');
       }
@@ -468,7 +480,7 @@ export class SlotUsage {
             .filter(key => account?.[key] !== undefined).map(key => [key, account[key]]))));
         await writePrivateJson(join(home, '.claude', '.claude.json'), JSON.stringify({ ...identity, ...installation }));
       }
-      return await task({ execution, scope, home, binary: await execution.binary(scope, slot.engine) });
+      return await task({ execution, scope, home, binary: await execution.binary(scope, engineProfiles[slot.engine].binary) });
     } finally {
       try {
         const after = await readFile(copy, 'utf8').catch(() => original);

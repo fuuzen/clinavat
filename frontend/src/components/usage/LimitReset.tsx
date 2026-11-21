@@ -5,6 +5,7 @@ import type { LimitResetResult, Slot, SlotUsage } from "../../types";
 import { resetSlotLimit } from "../../useSlotUsage";
 import { Modal } from "../Dialogs";
 import "../../styles/limit-reset.css";
+import { engineLabel, engineProfiles } from "../../engines";
 
 function used(usage: SlotUsage, key: string): number {
   return usage.windows.find((window) => window.key === key)?.usedPercent ?? 0;
@@ -20,8 +21,10 @@ function date(value: string): string {
  */
 export function limitResetOffer(engine: Slot["engine"], usage?: SlotUsage): string | null {
   if (!usage || usage.state !== "ok") return null;
-  if (engine === "codex") return usage.resetCredits?.available ? `可用重置卡 ${usage.resetCredits.available} 张` : null;
-  return used(usage, "five_hour") >= 100 && used(usage, "seven_day") < 100 ? "可重置 5 小时额度（每周 1 次）" : null;
+  const kind = engineProfiles[engine].limitReset;
+  if (kind === "credits") return usage.resetCredits?.available ? `可用重置卡 ${usage.resetCredits.available} 张` : null;
+  if (kind === "weekly") return used(usage, "five_hour") >= 100 && used(usage, "seven_day") < 100 ? "可重置 5 小时额度（每周 1 次）" : null;
+  return null;
 }
 
 export function limitResetDisabledReason(slot: Slot, usage?: SlotUsage): string | null {
@@ -30,7 +33,9 @@ export function limitResetDisabledReason(slot: Slot, usage?: SlotUsage): string 
   if (!usage || usage.state === "pending") return "额度尚未就绪，请先刷新额度";
   if (usage.state !== "ok") return "暂时无法确认重置条件，请刷新额度后重试";
   if (limitResetOffer(slot.engine, usage)) return null;
-  if (slot.engine === "codex") return "暂无可用的重置卡";
+  const kind = engineProfiles[slot.engine].limitReset;
+  if (kind === "credits") return "暂无可用的重置卡";
+  if (kind !== "weekly") return "该账号不支持额度重置";
   if (used(usage, "seven_day") >= 100) return "每周额度已用尽，重置 5 小时额度无法恢复使用";
   return "5 小时额度用尽后可重置（每周 1 次）";
 }
@@ -48,7 +53,8 @@ export default function LimitResetDialog({ slot, usage, onClose }: { slot: Slot;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<LimitResetResult | null>(null);
-  const credits = slot.engine === "codex" ? usage?.resetCredits?.credits ?? [] : [];
+  const kind = engineProfiles[slot.engine].limitReset;
+  const credits = kind === "credits" ? usage?.resetCredits?.credits ?? [] : [];
   async function confirm() {
     setBusy(true);
     setError("");
@@ -66,9 +72,9 @@ export default function LimitResetDialog({ slot, usage, onClose }: { slot: Slot;
         {result ? (
           <div className="limit-reset-result" role="status">
             <p>{result.message}</p>
-            {result.detail && <small>{slot.engine === "claude" ? "Claude Code" : "Codex"}：{result.detail}</small>}
+            {result.detail && <small>{engineLabel(slot.engine)}：{result.detail}</small>}
           </div>
-        ) : slot.engine === "claude" ? (
+        ) : kind === "weekly" ? (
           <div className="danger-dialog-body">
             <p>将立即重置该账号的 5 小时额度。Claude 每周只提供 1 次，重置后的用量仍计入每周额度，用掉后无法撤销。</p>
             <small>后台会启动 Claude Code，先发送一条会被额度拒绝的消息，再执行 <code>/limit-reset</code>，约需 1 分钟。</small>

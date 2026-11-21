@@ -1,4 +1,4 @@
-import type { QuotaFailure } from './types.js';
+import type { QuotaFailure } from '../types.js';
 
 const subscriptionWindows = new Set(['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']);
 

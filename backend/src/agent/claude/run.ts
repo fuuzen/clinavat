@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { ClaudeControl } from './claude-control.js';
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
-import { readJsonLines } from './ndjson.js';
-import { claudePermissionMode } from './permissions.js';
-import { projectInstructions } from './project-instructions.js';
-import { ClaudeQuotaTracker } from './claude-quota.js';
-import { ClaudeUsageMeter } from '../token-usage/meters.js';
-import { parseClaudeUsage } from '../accounts/usage-parsers.js';
-import { ClaudeSubagents } from './claude-subagents.js';
-import type { AgentPrompt, AgentRun, RunServices, RunTask } from './types.js';
+import { ClaudeControl } from './control.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { readJsonLines } from '../ndjson.js';
+import { claudePermissionMode } from '../permissions.js';
+import { projectInstructions } from '../project-instructions.js';
+import { ClaudeQuotaTracker } from './quota.js';
+import { ClaudeUsageMeter } from '../../token-usage/meters.js';
+import { parseClaudeUsage } from '../../accounts/usage-parsers.js';
+import { ClaudeSubagents } from './subagents.js';
+import type { AgentPrompt, AgentRun, RunServices, RunTask } from '../types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
 const EXIT_GRACE_MS = 10_000;

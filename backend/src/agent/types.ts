@@ -5,10 +5,11 @@ import type { UsageUpdate } from '../accounts/usage-parsers.js';
 import type { DeferredQuestion, UserInputOutcome, UserInputQuestion } from './user-input.js';
 import type { QuestionPolicy } from './session-settings.js';
 import type { RunControl } from './run-control.js';
-import type { CodexGoal, CodexGoalChange } from './codex-goal.js';
+import type { CodexGoal, CodexGoalChange } from './codex/goal.js';
 import type { ExecutionHost } from '../execution/types.js';
 import type { TokenUsageUpdate, UsageOwner } from '../token-usage/ledger.js';
 import type { SlotModelCatalogs } from './model-catalog.js';
+import type { AgentEngine } from './engines.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -31,7 +32,7 @@ export interface AgentContext {
   account_identity?: string | null;
   runtime_home: string;
   runtime_kind?: 'conversation' | 'probe';
-  slot: { id: string; home_dir: string; engine: 'claude' | 'codex'; credential_revision: number; updated_at?: string };
+  slot: { id: string; home_dir: string; engine: AgentEngine; credential_revision: number; updated_at?: string };
   project: {
     id: string; local_path: string; remote_path: string; sync_name: string;
     execution_mode?: 'local' | 'direct' | 'bwrap' | 'symlink' | null;
@@ -40,7 +41,7 @@ export interface AgentContext {
   };
   session: {
     id: string;
-    engine: 'claude' | 'codex';
+    engine: AgentEngine;
     slot_mode?: 'manual' | 'auto';
     native_session_id?: string | null;
     /** Set for a branch whose CLI has not yet forked its source's native session. */

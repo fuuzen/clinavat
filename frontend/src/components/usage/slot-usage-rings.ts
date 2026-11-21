@@ -1,4 +1,5 @@
 import type { SlotUsage, UsageWindow } from "../../types";
+import type { AgentEngine } from "../../engines";
 
 export interface UsageRing {
   /** Outer: the account's main allowance; inner: the 5-hour window; core: a per-model weekly window such as Fable. */
@@ -10,8 +11,11 @@ export interface UsageRing {
   description: string;
 }
 
-export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[]) {
-  if (engine === "claude") {
+interface AccountWindows { main?: UsageWindow; fiveHour?: UsageWindow; model?: UsageWindow }
+
+/** Which of each CLI's quota windows the rings draw. */
+const windowLayouts: Record<AgentEngine, (windows: UsageWindow[]) => AccountWindows> = {
+  claude(windows) {
     // Per-model weekly windows, such as Fable's, have their own allowance; the busiest one is drawn.
     const model = windows.filter((window) => window.key.startsWith("model:"))
       .sort((left, right) => (right.usedPercent ?? -1) - (left.usedPercent ?? -1))[0];
@@ -20,17 +24,22 @@ export function accountWindows(engine: "claude" | "codex", windows: UsageWindow[
       fiveHour: windows.find((window) => window.key === "five_hour"),
       model,
     };
-  }
-  // Model-specific Codex buckets are not the account's total allowance.
-  const account = windows.filter((window) => /^codex:(primary|secondary)$/.test(window.key));
-  const fiveHour = account.find((window) => window.windowMinutes === 300);
-  const remaining = account.filter((window) => window !== fiveHour && window.windowMinutes !== 300);
-  return {
-    main: remaining.find((window) => window.windowMinutes === 10080)
-      || remaining.find((window) => window.key === "codex:primary") || remaining[0],
-    fiveHour,
-    model: undefined as UsageWindow | undefined,
-  };
+  },
+  codex(windows) {
+    // Model-specific Codex buckets are not the account's total allowance.
+    const account = windows.filter((window) => /^codex:(primary|secondary)$/.test(window.key));
+    const fiveHour = account.find((window) => window.windowMinutes === 300);
+    const remaining = account.filter((window) => window !== fiveHour && window.windowMinutes !== 300);
+    return {
+      main: remaining.find((window) => window.windowMinutes === 10080)
+        || remaining.find((window) => window.key === "codex:primary") || remaining[0],
+      fiveHour,
+    };
+  },
+};
+
+export function accountWindows(engine: AgentEngine, windows: UsageWindow[]): AccountWindows {
+  return windowLayouts[engine](windows);
 }
 
 /** Why no usage can be drawn at all; a stale snapshot is still drawn, dimmed. */
@@ -73,7 +82,7 @@ function ring(window: UsageWindow, position: UsageRing["position"], circle: stri
   };
 }
 
-export function slotUsageRings(engine: "claude" | "codex", usage: SlotUsage | undefined, now: number, slotLimited = false) {
+export function slotUsageRings(engine: AgentEngine, usage: SlotUsage | undefined, now: number, slotLimited = false) {
   const { main, fiveHour, model } = accountWindows(engine, usage?.windows || []);
   const reason = unavailableReason(usage);
   const staleness = reason ? null : staleReason(usage, now);

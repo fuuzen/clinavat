@@ -5,6 +5,7 @@ import type { SlotUsage, SlotUsageView } from '../usage.js';
 import { claudeProbe, type Probe } from '../usage-probes.js';
 import { claudeLimitReset } from './claude-terminal.js';
 import { codexLimitReset } from './codex.js';
+import type { AgentEngine } from '../../agent/engines.js';
 
 export interface LimitResetResult {
   outcome: string;
@@ -37,11 +38,7 @@ export async function resetSlotLimit(context: Context, slotId: string, user: Pic
   resetting.add(slot.id);
   try {
     const identity = await usage.captureIdentity(slot);
-    return await usage.isolated(slot, async probe => {
-      if (slot.engine === 'claude') return resetClaude(usage, slot, probe, identity);
-      const result = await codexLimitReset(probe, creditId);
-      return { outcome: result.outcome, message: result.message, detail: null, usage: await usage.record(slot, result.usage, identity) };
-    });
+    return await usage.isolated(slot, probe => resets[slot.engine](usage, slot, probe, identity, creditId));
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(409, `额度重置失败：${error instanceof Error ? error.message : String(error)}`);
@@ -65,3 +62,10 @@ async function resetClaude(usage: SlotUsage, slot: Slot, probe: Probe, identity:
   const after = await claudeProbe(probe).then(update => usage.record(slot, update, identity), () => usage.view(slot.id));
   return { ...result, usage: after };
 }
+
+async function resetCodex(usage: SlotUsage, slot: Slot, probe: Probe, identity: string | null, creditId?: string): Promise<LimitResetResult> {
+  const result = await codexLimitReset(probe, creditId);
+  return { outcome: result.outcome, message: result.message, detail: null, usage: await usage.record(slot, result.usage, identity) };
+}
+
+const resets: Record<AgentEngine, typeof resetCodex> = { claude: resetClaude, codex: resetCodex };

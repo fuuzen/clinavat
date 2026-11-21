@@ -1,5 +1,6 @@
 import type { PermissionMode } from './agent/permissions.js';
 import type { AgentMode, QuestionMode, RolePreset } from './agent/session-settings.js';
+import type { AgentEngine } from './agent/engines.js';
 
 export interface User {
   id: string; username: string; password_hash: string; role: 'admin' | 'user'; created_at: string;
@@ -7,7 +8,7 @@ export interface User {
   question_mode?: QuestionMode | null; question_timeout_ms?: number | null;
 }
 export interface Slot {
-  id: string; label: string; home_dir: string; engine: 'claude' | 'codex';
+  id: string; label: string; home_dir: string; engine: AgentEngine;
   status: 'IDLE' | 'RATE_LIMITED' | 'DISABLED';
   /** `token` slots authenticate with a long-lived `claude setup-token` token instead of a browser login. */
   auth_method: 'oauth' | 'token';
@@ -34,7 +35,7 @@ export interface Project {
   sync_skipped_links?: string | null;
 }
 export interface Session {
-  id: string; project_id: string; user_id: string; engine: 'claude' | 'codex'; slot_id: string | null;
+  id: string; project_id: string; user_id: string; engine: AgentEngine; slot_id: string | null;
   slot_mode: 'manual' | 'auto';
   title: string; status: string; native_session_id: string | null;
   jsonl_file_path: string | null; created_at: string; updated_at: string;

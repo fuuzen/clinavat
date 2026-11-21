@@ -11,6 +11,7 @@ import { useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
 import LimitResetDialog, { limitResetDisabledReason, limitResetOffer, resetCreditsText } from "../usage/LimitReset";
 import SlotUsageMeter from "../usage/SlotUsageMeter";
+import { engineLabel, engineProfiles } from "../../engines";
 
 export default function AccountSettings({
   overview,
@@ -43,7 +44,7 @@ export default function AccountSettings({
       {overview.slots.length ? overview.slots.map((slot) => {
         const slotUsage = usage[slot.id];
         const resetReason = limitResetDisabledReason(slot, slotUsage);
-        const resetDescription = resetReason ?? (slot.engine === "codex" ? resetCreditsText(slotUsage) : limitResetOffer(slot.engine, slotUsage));
+        const resetDescription = resetReason ?? (engineProfiles[slot.engine].limitReset === "credits" ? resetCreditsText(slotUsage) : limitResetOffer(slot.engine, slotUsage));
         return (
           <div className="settings-detail-card" key={slot.id}>
             <div>
@@ -52,7 +53,7 @@ export default function AccountSettings({
                 {slot.status === "IDLE" ? slot.in_use ? slot.in_use_by_you ? "你正在使用" : "其他用户使用中" : "可用" : statusLabel(slot.status)}
               </span>
             </div>
-            <p>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}</p>
+            <p>{slot.id} · {engineLabel(slot.engine)}</p>
             <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={slotUsage}
               refreshable={slot.status !== "DISABLED" && slot.auth_method !== "token"} refreshLabel={`刷新 ${slot.label} 的额度`} />
             {slot.can_reset_limits && (

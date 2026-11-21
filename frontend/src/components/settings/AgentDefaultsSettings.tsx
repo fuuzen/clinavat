@@ -5,15 +5,13 @@ import type { AgentModel, AgentPreference, AgentPreferences, PermissionMode } fr
 import { effortName } from "../chat/ReasoningEffortControl";
 import { defaultPermissionMode, permissionOptions } from "../chat/PermissionPicker";
 import "../../styles/agent-defaults.css";
+import { agentEngines, engineLabel, type AgentEngine } from "../../engines";
 
-type Engine = "claude" | "codex";
 interface CatalogSlot { id: string; label: string; model_catalog_at: string | null }
 interface AgentSettingsView {
   defaults: AgentPreferences;
-  catalogs: Record<Engine, { models: AgentModel[]; slots: CatalogSlot[] }>;
+  catalogs: Record<AgentEngine, { models: AgentModel[]; slots: CatalogSlot[] }>;
 }
-
-const engineNames: Record<Engine, string> = { claude: "Claude Code", codex: "Codex" };
 
 /**
  * The user's defaults per CLI: model and reasoning effort, chosen from the catalogs of the slots they may use,
@@ -29,7 +27,7 @@ export default function AgentDefaultsSettings() {
       .catch((cause) => { if (!controller.signal.aborted) setError(errorText(cause)); });
     return () => controller.abort();
   }, []);
-  const engines = view ? (["claude", "codex"] as const).filter((engine) => view.catalogs[engine].slots.length) : [];
+  const engines = view ? agentEngines.filter((engine) => view.catalogs[engine].slots.length) : [];
   return (
     <>
       <div className="settings-section-heading">
@@ -50,7 +48,7 @@ export default function AgentDefaultsSettings() {
   );
 }
 
-function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: AgentSettingsView; onSaved: (view: AgentSettingsView) => void }) {
+function EngineDefaults({ engine, view, onSaved }: { engine: AgentEngine; view: AgentSettingsView; onSaved: (view: AgentSettingsView) => void }) {
   const saved = view.defaults[engine];
   const { models, slots } = view.catalogs[engine];
   const [draft, setDraft] = useState<AgentPreference>(saved);
@@ -77,7 +75,7 @@ function EngineDefaults({ engine, view, onSaved }: { engine: Engine; view: Agent
       void run("save", () => api<AgentSettingsView>(`/settings/agent/${engine}`, { method: "PUT", body: JSON.stringify(draft) }),
         "已保存。模型和思考强度从下一条消息起生效，授权模式用于之后新建的对话。");
     }}>
-      <strong>{engineNames[engine]}</strong>
+      <strong>{engineLabel(engine)}</strong>
       <div className="agent-defaults-fields">
         <label>
           默认模型

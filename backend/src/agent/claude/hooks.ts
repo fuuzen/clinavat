@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { quoteShell, workspacePath } from './environment.js';
-import { getPermissionMode } from './permissions.js';
-import type { RunServices } from './types.js';
-import { answerClaudeQuestions } from './claude-questions.js';
+import { quoteShell, workspacePath } from '../environment.js';
+import { getPermissionMode } from '../permissions.js';
+import type { RunServices } from '../types.js';
+import { answerClaudeQuestions } from './questions.js';
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {

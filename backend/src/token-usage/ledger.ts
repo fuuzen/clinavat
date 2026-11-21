@@ -2,14 +2,15 @@ import type { Store } from '../database.js';
 import { codexTotals, codexUsage, type UsageRecord } from './meters.js';
 import type { PriceBook } from './price-book.js';
 import { costOf, type TokenCounts } from './prices.js';
+import type { AgentEngine } from '../agent/engines.js';
 
-export interface UsageOwner { userId: string; slotId: string; sessionId: string; turnId: string | null; engine: 'claude' | 'codex' }
+export interface UsageOwner { userId: string; slotId: string; sessionId: string; turnId: string | null; engine: AgentEngine }
 
 export type TokenUsageUpdate = { records: UsageRecord[] } | { codex: { model: string; tokenUsage: unknown } };
 
 export interface UsageRow {
   user_id: string; username: string | null; slot_id: string; slot_label: string | null;
-  engine: 'claude' | 'codex'; model: string;
+  engine: AgentEngine; model: string;
   input_tokens: number; cache_read_tokens: number; cache_write_tokens: number; output_tokens: number; reasoning_tokens: number;
   cost_usd: number | null;
   /** Records whose model has neither a CLI estimate nor a price, so `cost_usd` leaves them out. */

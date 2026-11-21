@@ -13,6 +13,8 @@ import { sessionGoalRoutes } from './session-goals.js';
 import { sessionQuestionRoutes } from './session-questions.js';
 import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { questionTimeout } from '../question-defaults.js';
+import { agentEngines } from '../agent/engines.js';
+import { assertAutomaticSlot } from '../accounts/selection.js';
 
 const identifier = z.object({ id: z.uuid() });
 
@@ -50,7 +52,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     };
   });
   app.post('/api/sessions', async (request, reply) => {
-    const input = z.object({ projectId: z.uuid(), engine: z.enum(['claude', 'codex']), slotId: selectedSlotId.optional(),
+    const input = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
       slotMode: z.enum(['manual', 'auto']).default('manual'),
       title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
     return withResourceLocks(context, [], async () => {
@@ -120,7 +122,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       const { agentMode, rolePreset } = validateSessionSettings(current.engine,
         input.agentMode ?? current.agent_mode, input.rolePreset ?? current.role_preset);
       const slotMode = input.slotMode ?? (input.slotId !== undefined ? 'manual' : current.slot_mode);
-      if (slotMode === 'auto' && current.engine !== 'claude') throw new HttpError(409, 'Codex 尚未完成跨账号验证，请选择固定账号');
+      if (slotMode === 'auto') assertAutomaticSlot(current.engine);
       if (slotMode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
       const changedMode = slotMode !== current.slot_mode;

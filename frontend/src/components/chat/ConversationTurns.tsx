@@ -4,6 +4,7 @@ import ExecutionGroup from "./ExecutionGroup";
 import MessageView, { AgentAvatar, Markdown } from "./MessageView";
 import TurnProcess from "./TurnProcess";
 import { isActive } from "../../api";
+import { engineLabel, type AgentEngine } from "../../engines";
 
 interface Props {
   messages: Message[];
@@ -11,7 +12,7 @@ interface Props {
   streaming: string;
   tools: ToolEvent[];
   username: string;
-  engine?: "claude" | "codex";
+  engine?: AgentEngine;
   onFork?: (turn: Turn) => void;
 }
 
@@ -19,7 +20,7 @@ const finished = new Set<Turn["status"]>(["completed", "interrupted", "error"]);
 
 export default function ConversationTurns(props: Props) {
   const engine = props.engine ?? "claude";
-  const agentName = engine === "codex" ? "Codex" : "Claude Code";
+  const agentName = engineLabel(engine);
   const messageIds = new Set(props.messages.map((message) => message.id));
   const turnsByMessage = new Map<string, Turn[]>();
   const previousByUser = new Map<string, Turn>();

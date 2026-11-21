@@ -2,9 +2,9 @@ import { lstat, readdir, readlink, rename, rm, rmdir, symlink } from 'node:fs/pr
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
-import type { AccountEngine } from '../paths.js';
 import { sessionStateDirectories, sessionStateFiles } from '../session-state/index.js';
 import { claudeInstallationKeys } from '../claude-identity.js';
+import { engineProfiles, type AgentEngine } from '../../agent/engines.js';
 
 type Document = Record<string, unknown>;
 type Transfer = 'archive' | 'save' | 'restore';
@@ -97,12 +97,8 @@ async function transferMixed(source: string, target: string, keys: string[], dir
   await saveDocument(source, from.account);
 }
 
-function protectedEngineEntry(name: string, engine: AccountEngine): boolean {
-  return engine === 'codex'
-    ? ['auth.json', 'auth.json.lock', 'auth.json.lock.owner', '.auth.json.lock', '.auth-refresh.lock'].includes(name)
-    : ['.credentials.json', '.claude.json', '.oauth_refresh.lock', '.oauth_refresh.lock.owner',
-      '.credentials.json.lock', '.credentials.json.lock.owner', '.claude.json.lock', '.claude.json.lock.owner',
-      '.storage-write', '.storage-write.lock'].includes(name);
+function protectedEngineEntry(name: string, engine: AgentEngine): boolean {
+  return engineProfiles[engine].protectedEntries.includes(name);
 }
 
 async function moveEntry(source: string, target: string): Promise<void> {
@@ -118,7 +114,7 @@ async function moveEntry(source: string, target: string): Promise<void> {
   await rename(source, target);
 }
 
-async function transferEngine(source: string, target: string, engine: AccountEngine, direction: Transfer): Promise<void> {
+async function transferEngine(source: string, target: string, engine: AgentEngine, direction: Transfer): Promise<void> {
   if (!await pathExists(source)) return;
   await privateDirectory(source);
   await privateDirectory(target);
@@ -139,10 +135,10 @@ async function transferEngine(source: string, target: string, engine: AccountEng
   }
 }
 
-export async function moveSlotProfile(source: string, target: string, engine: AccountEngine, direction: Transfer): Promise<void> {
+export async function moveSlotProfile(source: string, target: string, engine: AgentEngine, direction: Transfer): Promise<void> {
   await privateDirectory(source);
   await privateDirectory(target);
-  const engineDirectory = engine === 'claude' ? '.claude' : '.codex';
+  const engineDirectory = engineProfiles[engine].configDirectory;
   await transferEngine(join(source, engineDirectory), join(target, engineDirectory), engine, direction);
   if (engine === 'claude') {
     for (const file of mixedFiles) await transferMixed(join(source, file.path), join(target, file.path), file.keys, direction);

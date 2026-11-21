@@ -1,3 +1,5 @@
+import type { AgentEngine } from "./engines";
+
 export interface User {
   id: string;
   username: string;
@@ -11,7 +13,7 @@ export interface User {
 export interface Slot {
   id: string;
   label: string;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   status: "IDLE" | "RATE_LIMITED" | "DISABLED";
   auth_method: "oauth" | "token";
   token_expires_at?: string | null;
@@ -74,7 +76,7 @@ export interface SkippedLinks {
 export interface Session {
   id: string;
   project_id: string;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   slot_mode: SlotMode;
   slot_id: string | null;
   title: string;
@@ -142,7 +144,7 @@ export interface AgentPreference {
   permissionMode: PermissionMode | null;
 }
 
-export type AgentPreferences = Record<"claude" | "codex", AgentPreference>;
+export type AgentPreferences = Record<AgentEngine, AgentPreference>;
 
 /** A slot's saved model list and when it was read from the slot's CLI. */
 export interface ModelCatalog {
@@ -365,7 +367,7 @@ export interface TokenUsageRow {
   username: string | null;
   slot_id: string;
   slot_label: string | null;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   model: string;
   input_tokens: number;
   cache_read_tokens: number;

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Session } from '../models.js';
 import { slotForUser } from '../accounts/access.js';
-import { accessCodexGoal, type CodexGoal } from '../agent/codex-goal.js';
+import { accessCodexGoal, type CodexGoal } from '../agent/codex/goal.js';
 import { resolveAgentSelection } from '../agent/model-catalog.js';
 import { validatePermissionMode } from '../agent/permissions.js';
 import { validateSessionSettings } from '../agent/session-settings.js';

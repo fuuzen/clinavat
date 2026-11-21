@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import { HttpError } from '../models.js';
 import { openContained } from '../runtime/contained-files.js';
 import { atomicWrite } from '../runtime/process.js';
-import { credentialPath, type AccountEngine } from './paths.js';
+import { credentialPath } from './paths.js';
+import type { AgentEngine } from '../agent/engines.js';
 
 export async function privateDirectory(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -44,30 +45,35 @@ export async function writePrivateJson(file: string, content: string): Promise<v
 const claudeConfigFiles = ['.claude.json', join('.claude', '.claude.json')];
 const codexAccountKeys = ['auth_mode', 'OPENAI_API_KEY', 'tokens', 'last_refresh'];
 
-function accountFields(document: Record<string, unknown>, engine: AccountEngine): Record<string, unknown> {
-  if (engine === 'claude') {
+type Document = Record<string, unknown>;
+
+/** The part of each CLI's login file that identifies the account; empty when the file holds no usable login. */
+const accountFields: Record<AgentEngine, (document: Document) => Document> = {
+  claude(document) {
     if (document.claudeAiOauth === undefined) return {};
     const oauth = document.claudeAiOauth;
     if (!oauth || typeof oauth !== 'object' || Array.isArray(oauth)
-      || typeof (oauth as Record<string, unknown>).accessToken !== 'string') {
+      || typeof (oauth as Document).accessToken !== 'string') {
       throw new HttpError(409, 'Claude OAuth 凭据格式无效，请重新登录');
     }
     return { claudeAiOauth: oauth };
-  }
-  if (document.auth_mode !== undefined && !['apikey', 'chatgpt'].includes(String(document.auth_mode))) {
-    throw new HttpError(409, '当前槽位仅支持 Codex 文件登录凭据，请使用 codex login 登录');
-  }
-  const fields = Object.fromEntries(codexAccountKeys.filter(key => key in document).map(key => [key, document[key]]));
-  const tokens = fields.tokens;
-  const hasToken = tokens && typeof tokens === 'object' && !Array.isArray(tokens)
-    && typeof (tokens as Record<string, unknown>).access_token === 'string';
-  if (!hasToken && !(typeof fields.OPENAI_API_KEY === 'string' && fields.OPENAI_API_KEY)) return {};
-  return fields;
-}
+  },
+  codex(document) {
+    if (document.auth_mode !== undefined && !['apikey', 'chatgpt'].includes(String(document.auth_mode))) {
+      throw new HttpError(409, '当前槽位仅支持 Codex 文件登录凭据，请使用 codex login 登录');
+    }
+    const fields = Object.fromEntries(codexAccountKeys.filter(key => key in document).map(key => [key, document[key]]));
+    const tokens = fields.tokens;
+    const hasToken = tokens && typeof tokens === 'object' && !Array.isArray(tokens)
+      && typeof (tokens as Document).access_token === 'string';
+    if (!hasToken && !(typeof fields.OPENAI_API_KEY === 'string' && fields.OPENAI_API_KEY)) return {};
+    return fields;
+  },
+};
 
-export async function readAccountCredential(home: string, engine: AccountEngine): Promise<string | undefined> {
+export async function readAccountCredential(home: string, engine: AgentEngine): Promise<string | undefined> {
   const content = await readPrivateJson(credentialPath(home, engine), home);
-  const fields = accountFields(content ? JSON.parse(content) as Record<string, unknown> : {}, engine);
+  const fields = accountFields[engine](content ? JSON.parse(content) as Document : {});
   if (engine === 'claude' && !fields.claudeAiOauth) {
     for (const relative of claudeConfigFiles) {
       const settings = await readPrivateJson(join(home, relative), home);

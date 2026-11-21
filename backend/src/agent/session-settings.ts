@@ -1,4 +1,5 @@
 import { HttpError } from '../models.js';
+import { engineProfiles, type AgentEngine } from './engines.js';
 
 export const agentModes = ['normal', 'plan'] as const;
 export type AgentMode = typeof agentModes[number];
@@ -10,10 +11,10 @@ export type QuestionMode = typeof questionModes[number];
 export interface QuestionPolicy { mode: QuestionMode; timeoutMs: number }
 export const questionTimeoutRange = { min: 60_000, max: 24 * 3_600_000 } as const;
 
-export function validateSessionSettings(engine: 'claude' | 'codex', agentMode: unknown, rolePreset: unknown) {
+export function validateSessionSettings(engine: AgentEngine, agentMode: unknown, rolePreset: unknown) {
   if (!agentModes.includes(agentMode as AgentMode)) throw new HttpError(400, '不支持的工作模式');
   if (!rolePresets.includes(rolePreset as RolePreset)) throw new HttpError(400, '不支持的角色预设');
-  if (engine !== 'codex' && rolePreset !== 'default') throw new HttpError(400, '角色预设仅适用于 Codex');
+  if (!engineProfiles[engine].rolePresets && rolePreset !== 'default') throw new HttpError(400, '角色预设仅适用于 Codex');
   return { agentMode: agentMode as AgentMode, rolePreset: rolePreset as RolePreset };
 }
 

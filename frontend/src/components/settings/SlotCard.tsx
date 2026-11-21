@@ -7,6 +7,7 @@ import LimitResetDialog, { limitResetOffer, resetCreditsText } from "../usage/Li
 import MobileCardDetails from "../admin/MobileCardDetails";
 import SlotLogin from "./SlotLogin";
 import SlotUserPicker from "./SlotUserPicker";
+import { engineLabel, engineProfiles } from "../../engines";
 import "../../styles/slot-admin-card.css";
 
 interface Props {
@@ -34,7 +35,7 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginCh
         <span className="slot-icon"><ShieldCheck size={17} /></span>
         <div>
           <SlotLabel slot={slot} disabled={busy} onSave={(label) => onUpdate(slot, { label })} />
-          <small>{slot.id} · {slot.engine === "claude" ? "Claude Code" : "Codex"}{slot.auth_method === "token" ? " · 长期令牌" : ""}</small>
+          <small>{slot.id} · {engineLabel(slot.engine)}{slot.auth_method === "token" ? " · 长期令牌" : ""}</small>
         </div>
         <button type="button" role="switch" className="slot-enabled-switch" aria-label={`${slot.label}启用状态`}
           aria-checked={enabled} disabled={busy || running}
@@ -117,7 +118,7 @@ function SlotResetAccess({ slot, usage, disabled, onChange }: {
         允许被分配的成员使用额度重置
       </label>
       <small>
-        {slot.engine === "claude" ? "Claude 每周可重置 1 次 5 小时额度，5 小时额度用尽后可用"
+        {engineProfiles[slot.engine].limitReset === "weekly" ? "Claude 每周可重置 1 次 5 小时额度，5 小时额度用尽后可用"
           : resetCreditsText(usage) ?? "暂无可用的重置卡"}
       </small>
       {offer && (

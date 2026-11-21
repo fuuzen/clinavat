@@ -32,8 +32,6 @@ export function sumUsage(rows: TokenUsageRow[]): UsageTotals {
   }, { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: 0, unpriced: 0, lastUsedAt: "" });
 }
 
-export const engineLabel = (engine: TokenUsageRow["engine"]) => engine === "claude" ? "Claude Code" : "Codex";
-
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
 export function formatTokens(value: number): string {

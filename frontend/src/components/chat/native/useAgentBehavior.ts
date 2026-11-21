@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentBehavior, Session } from "../../../types";
+import { engineProfiles, type AgentEngine } from "../../../engines";
 
 export function useAgentBehavior(session: Session | undefined, projectId: string | undefined,
-  engine: "claude" | "codex", active: boolean,
+  engine: AgentEngine, active: boolean,
   onChange: (sessionId: string, value: AgentBehavior) => Promise<void>) {
   const [behavior, setBehavior] = useState<AgentBehavior>({ agentMode: session?.agent_mode || "normal", rolePreset: session?.role_preset || "default" });
   const [saving, setSaving] = useState(false);
   const requestRef = useRef(0);
   useEffect(() => {
     requestRef.current++;
-    setBehavior({ agentMode: session?.agent_mode || "normal", rolePreset: engine === "codex" ? session?.role_preset || "default" : "default" });
+    setBehavior({ agentMode: session?.agent_mode || "normal", rolePreset: engineProfiles[engine].rolePresets ? session?.role_preset || "default" : "default" });
     setSaving(false);
   }, [session?.id, projectId, engine, session?.agent_mode, session?.role_preset]);
 

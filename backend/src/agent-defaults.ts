@@ -4,8 +4,8 @@ import { HttpError, type Slot } from './models.js';
 import type { AgentModel, AgentPreference } from './agent/model-catalog.js';
 import { availableSlots } from './accounts/access.js';
 import { permissionModes, validatePermissionMode, type PermissionMode } from './agent/permissions.js';
+import { agentEngines, type AgentEngine } from './agent/engines.js';
 
-type Engine = 'claude' | 'codex';
 export const agentPreferenceSchema = z.object({
   model: z.string().trim().min(1).max(200).nullable(),
   reasoningEffort: z.string().trim().min(1).max(32).nullable(),
@@ -13,14 +13,14 @@ export const agentPreferenceSchema = z.object({
 }).strict();
 /** A field left null follows the CLI's default, or for the permission mode the site's. */
 export type AgentDefaultsEntry = AgentPreference & { permissionMode: PermissionMode | null };
-export type AgentPreferences = Record<Engine, AgentDefaultsEntry>;
+export type AgentPreferences = Record<AgentEngine, AgentDefaultsEntry>;
 
 interface StoredPreference {
-  engine: Engine; model: string | null; reasoning_effort: string | null; permission_mode: PermissionMode | null;
+  engine: AgentEngine; model: string | null; reasoning_effort: string | null; permission_mode: PermissionMode | null;
 }
 
 /** The models a user can choose from: those saved for the slots of this engine the user may use. */
-export function userModels(store: Store, userId: string, engine: Engine): { models: AgentModel[]; slots: Pick<Slot, 'id' | 'label' | 'model_catalog_at'>[] } {
+export function userModels(store: Store, userId: string, engine: AgentEngine): { models: AgentModel[]; slots: Pick<Slot, 'id' | 'label' | 'model_catalog_at'>[] } {
   const slots = availableSlots(store, userId).filter(slot => slot.engine === engine);
   const models = new Map<string, AgentModel>();
   for (const slot of slots) {
@@ -44,7 +44,7 @@ export class AgentDefaults {
 
   user(userId: string): AgentPreferences {
     const unset = { model: null, reasoningEffort: null, permissionMode: null };
-    const preferences: AgentPreferences = { claude: { ...unset }, codex: { ...unset } };
+    const preferences = Object.fromEntries(agentEngines.map(engine => [engine, { ...unset }])) as AgentPreferences;
     for (const row of this.store.all<StoredPreference>(
       'SELECT engine,model,reasoning_effort,permission_mode FROM user_agent_defaults WHERE user_id=?', userId)) {
       preferences[row.engine] = { model: row.model, reasoningEffort: row.reasoning_effort, permissionMode: row.permission_mode };
@@ -52,11 +52,11 @@ export class AgentDefaults {
     return preferences;
   }
 
-  forUser(userId: string, engine: Engine): AgentDefaultsEntry {
+  forUser(userId: string, engine: AgentEngine): AgentDefaultsEntry {
     return this.user(userId)[engine];
   }
 
-  update(userId: string, engine: Engine, preference: AgentDefaultsEntry): AgentPreferences {
+  update(userId: string, engine: AgentEngine, preference: AgentDefaultsEntry): AgentPreferences {
     if (preference.permissionMode) validatePermissionMode(engine, preference.permissionMode);
     const { models } = userModels(this.store, userId, engine);
     const model = preference.model ? models.find(item => item.id === preference.model) : undefined;

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { readPrivateJson } from './credential-files.js';
-import { credentialPath, type AccountEngine } from './paths.js';
+import { credentialPath } from './paths.js';
+import type { AgentEngine } from '../agent/engines.js';
 
 /** What a slot's own login files say about its subscription; nothing here is fetched from the provider. */
 export interface SlotSubscription {
@@ -49,8 +50,13 @@ async function codexSubscription(home: string): Promise<SlotSubscription | null>
     expiresAt: timestamp(claims.chatgpt_subscription_active_until), verifiedAt: timestamp(claims.chatgpt_subscription_last_checked) };
 }
 
-export async function readSubscription(home: string, engine: AccountEngine): Promise<SlotSubscription | null> {
-  try { return await (engine === 'claude' ? claudeSubscription(home) : codexSubscription(home)); }
+const subscriptions: Record<AgentEngine, (home: string) => Promise<SlotSubscription | null>> = {
+  claude: claudeSubscription,
+  codex: codexSubscription,
+};
+
+export async function readSubscription(home: string, engine: AgentEngine): Promise<SlotSubscription | null> {
+  try { return await subscriptions[engine](home); }
   catch { return null; }
 }
 
@@ -67,16 +73,21 @@ export interface SlotLogin {
 
 const noLogin: SlotLogin = { method: 'none', expiresAt: null, accessExpiresAt: null, refreshedAt: null };
 
-export async function readLogin(home: string, engine: AccountEngine): Promise<SlotLogin> {
-  try {
-    const document = await readDocument(home, credentialPath(home, engine));
-    if (engine === 'claude') {
-      const oauth = document?.claudeAiOauth;
-      return typeof oauth?.accessToken === 'string' ? { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(oauth.expiresAt) } : noLogin;
-    }
+/** Reads each CLI's login file. */
+const logins: Record<AgentEngine, (document: Record<string, any> | undefined) => SlotLogin> = {
+  claude(document) {
+    const oauth = document?.claudeAiOauth;
+    return typeof oauth?.accessToken === 'string' ? { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(oauth.expiresAt) } : noLogin;
+  },
+  codex(document) {
     const token = text(document?.tokens?.access_token);
     if (!token) return text(document?.OPENAI_API_KEY) ? { ...noLogin, method: 'apikey' } : noLogin;
     const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
     return { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(claims?.exp), refreshedAt: timestamp(document?.last_refresh) };
-  } catch { return noLogin; }
+  },
+};
+
+export async function readLogin(home: string, engine: AgentEngine): Promise<SlotLogin> {
+  try { return logins[engine](await readDocument(home, credentialPath(home, engine))); }
+  catch { return noLogin; }
 }

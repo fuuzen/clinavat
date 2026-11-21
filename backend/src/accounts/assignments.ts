@@ -5,6 +5,7 @@ import { availableSlots, serializeUserSlot } from './access.js';
 import { clearClaudeLogin } from './credential-files.js';
 import { accountIdentifier } from './paths.js';
 import { HttpError, type Slot } from '../models.js';
+import { engineProfiles } from '../agent/engines.js';
 
 interface SlotUpdate {
   label?: string;
@@ -97,7 +98,7 @@ export async function setSlotToken(context: Context, slotId: string, token: { va
     await context.agents.reclaimWhere({ slotId });
     const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', slotId);
     if (!slot) throw new HttpError(404, '槽位不存在');
-    if (slot.engine !== 'claude') throw new HttpError(400, '只有 Claude Code 槽位支持长期令牌');
+    if (!engineProfiles[slot.engine].setupToken) throw new HttpError(400, '只有 Claude Code 槽位支持长期令牌');
     const switched = await config.credentials.whileIdle(slotId, async () => {
       await config.execution.assertReleased(slot.home_dir);
       if (token) await config.credentials.tokens.write(slotId, token.value);

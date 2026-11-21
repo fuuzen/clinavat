@@ -3,6 +3,7 @@ import { KeyRound, LoaderCircle, Terminal } from "lucide-react";
 import { api, errorText, post } from "../../api";
 import type { Slot } from "../../types";
 import { CopyButton } from "../Dialogs";
+import { engineProfiles } from "../../engines";
 
 interface Props {
   slot: Slot;
@@ -94,10 +95,10 @@ export default function SlotLogin(props: Props) {
     <details>
       <summary>
         {token ? <KeyRound size={12} /> : <Terminal size={12} />}
-        {slot.engine === "codex" ? "服务器登录命令" : token ? "登录方式：长期令牌" : "登录方式：浏览器登录"}
+        {!engineProfiles[slot.engine].setupToken ? "服务器登录命令" : token ? "登录方式：长期令牌" : "登录方式：浏览器登录"}
       </summary>
       {!token && <LoginCommand slot={slot} />}
-      {slot.engine === "claude" && <SetupToken {...props} />}
+      {engineProfiles[slot.engine].setupToken && <SetupToken {...props} />}
     </details>
   );
 }

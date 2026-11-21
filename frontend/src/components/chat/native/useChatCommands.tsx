@@ -5,6 +5,7 @@ import type { AgentBehavior, AgentSelection, PermissionMode, Session } from "../
 import { rolePresets } from "./BehaviorPicker";
 import { effortName } from "../ReasoningEffortControl";
 import { parseSlashCommand } from "../composer/commands";
+import { engineLabel, engineProfiles, type AgentEngine } from "../../../engines";
 
 const commonCommands = [
   { name: "help", description: "查看命令和键盘快捷键" },
@@ -22,7 +23,7 @@ const commonCommands = [
 ];
 
 export function useChatCommands(props: {
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   session?: Session;
   active: boolean;
   switching: boolean;
@@ -45,7 +46,7 @@ export function useChatCommands(props: {
   const [modelRequest, setModelRequest] = useState(0);
   const [permissionRequest, setPermissionRequest] = useState(0);
   const [behaviorRequest, setBehaviorRequest] = useState(0);
-  const commands = props.engine === "codex" ? [...commonCommands, {
+  const commands = engineProfiles[props.engine].rolePresets ? [...commonCommands, {
     name: "role", description: "切换 Codex 角色预设", argumentHint: "default | reviewer | architect",
   }, {
     name: "goal", description: "查看、创建或管理原生 Goal", argumentHint: "pause | edit [目标内容] | resume | 目标内容",
@@ -59,7 +60,7 @@ export function useChatCommands(props: {
     const args = match.arguments.trim();
     const fail = (message: string) => { props.onNotice(message); return "blocked" as const; };
     if (name === "goal") {
-      if (props.engine !== "codex") return fail("Goal 仅适用于 Codex 对话。");
+      if (!engineProfiles[props.engine].goal) return fail("Goal 仅适用于 Codex 对话。");
       return await props.onGoalCommand(args) ? "handled" : "blocked";
     }
     if (!commands.some((command) => command.name === name)) return fail(`网页暂不支持 /${name}，输入 /help 查看可用命令。`);
@@ -76,7 +77,7 @@ export function useChatCommands(props: {
       return await (name === "pause" ? props.onPause() : props.onResume()) ? "retained" : "blocked";
     }
     if (name === "status") {
-      props.onNotice(`${props.engine === "claude" ? "Claude Code" : "Codex"} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort ? effortName(props.selection.reasoningEffort) : "默认思考强度"} · ${props.permissionMode}${props.engine === "codex" ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
+      props.onNotice(`${engineLabel(props.engine)} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort ? effortName(props.selection.reasoningEffort) : "默认思考强度"} · ${props.permissionMode}${engineProfiles[props.engine].rolePresets ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
       return "handled";
     }
     if (name === "diff") { props.onDiff(); return "handled"; }
@@ -103,7 +104,7 @@ export function useChatCommands(props: {
   const help = helpOpen && <section className="chat-command-help" aria-label="命令帮助">
     <header><strong>命令与快捷键</strong><button className="icon-button" aria-label="关闭命令帮助" onClick={() => setHelpOpen(false)}><X size={15} /></button></header>
     <ul>{commands.map((command) => <li key={command.name}><code>/{command.name}</code>{command.description}</li>)}</ul>
-    {props.engine === "codex" && <p>/goal 查看；/goal 目标内容 创建；/goal pause 暂停目标；/goal edit 编辑；/goal resume 继续目标。Goal 暂停控制目标的自动继续。</p>}
+    {engineProfiles[props.engine].goal && <p>/goal 查看；/goal 目标内容 创建；/goal pause 暂停目标；/goal edit 编辑；/goal resume 继续目标。Goal 暂停控制目标的自动继续。</p>}
     <p>输入 / 选择命令，@ 引用项目文件；Tab 补全，↑ ↓ 选择，Esc 关闭，Shift + Tab 切换模式，Shift + Enter 换行。</p>
   </section>;
   return { commands, handleCommand, help, modelRequest, permissionRequest, behaviorRequest };

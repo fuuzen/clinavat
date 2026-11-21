@@ -3,20 +3,21 @@ import { join, resolve } from 'node:path';
 import type { Store } from '../database.js';
 import { HttpError } from '../models.js';
 import { credentialHash, privateDirectory, readAccountCredential, readPrivateJson, writePrivateJson } from './credential-files.js';
-import { accountIdentifier, type AccountEngine } from './paths.js';
+import { accountIdentifier } from './paths.js';
 import { assertSlotSessionState, bindSlotSessionState, detachSlotSessionState } from './session-state/index.js';
 import { archiveUnboundSlotProfile, initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
 import type { SlotAuthMethod, SlotTokens } from './slot-tokens.js';
 import type { ExecutionHost } from '../execution/types.js';
+import { isAgentEngine, type AgentEngine } from '../agent/engines.js';
 
 interface CredentialContext {
   user: { id: string }; runtime_home: string; runtime_kind?: 'conversation' | 'probe';
   project?: { id: string };
-  slot: { id: string; home_dir: string; engine: AccountEngine; credential_revision: number };
-  session: { id: string; engine: AccountEngine };
+  slot: { id: string; home_dir: string; engine: AgentEngine; credential_revision: number };
+  session: { id: string; engine: AgentEngine };
 }
 interface SlotJournal {
-  version: 3; userId: string; slotId: string; engine: AccountEngine; revision: number;
+  version: 3; userId: string; slotId: string; engine: AgentEngine; revision: number;
   home: string; phase: 'preparing' | 'active' | 'parked' | 'releasing';
 }
 interface SlotLease {
@@ -29,7 +30,7 @@ interface LeaseRelease {
   lease: SlotLease; sessionId: string; projectId?: string;
   counted: boolean; released: boolean; pending?: Promise<void>;
 }
-interface CurrentSlot { home_dir: string; engine: AccountEngine; credential_revision: number; status: string; auth_method: SlotAuthMethod }
+interface CurrentSlot { home_dir: string; engine: AgentEngine; credential_revision: number; status: string; auth_method: SlotAuthMethod }
 
 export class AccountCredentials {
   private leases = new Map<string, SlotLease>();
@@ -279,7 +280,7 @@ export class AccountCredentials {
   private validateJournal(journal: SlotJournal): void {
     accountIdentifier(journal.userId);
     accountIdentifier(journal.slotId);
-    if (journal.version !== 3 || !['claude', 'codex'].includes(journal.engine)
+    if (journal.version !== 3 || !isAgentEngine(journal.engine)
       || !Number.isSafeInteger(journal.revision) || journal.revision < 0
       || !['preparing', 'active', 'parked', 'releasing'].includes(journal.phase)
       || journal.home !== resolve(this.dataDir, 'slots', journal.slotId)) throw new Error('槽位运行恢复日志无效');

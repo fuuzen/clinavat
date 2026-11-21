@@ -1,9 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { AgentPrompt, RunServices } from './types.js';
-import { answerClaudeQuestions } from './claude-questions.js';
+import type { AgentPrompt, RunServices } from '../types.js';
+import { answerClaudeQuestions } from './questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
-import { questionTimeoutRange } from './session-settings.js';
+import { questionTimeoutRange } from '../session-settings.js';
 
 const preToolUseCallback = 'clinavat-pre-tool-use';
 

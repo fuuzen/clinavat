@@ -2,22 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { lstat, readdir, rename } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { privateDirectory } from '../credential-files.js';
-import { accountIdentifier, type AccountEngine } from '../paths.js';
+import { accountIdentifier } from '../paths.js';
+import { engineProfiles, type AgentEngine } from '../../agent/engines.js';
 
-function artifactName(name: string, engine: AccountEngine, root: boolean): boolean {
-  const bases = root ? engine === 'claude' ? ['.claude.json'] : []
-    : engine === 'claude' ? ['.credentials.json', '.claude.json'] : ['auth.json'];
+function artifactName(name: string, engine: AgentEngine, root: boolean): boolean {
+  const bases = engineProfiles[engine].artifactBases[root ? 'home' : 'engine'];
   return bases.some(base => name.startsWith(`${base}.`) && ![`${base}.lock`, `${base}.lock.owner`].includes(name));
 }
 
-export function isAccountArtifactPath(file: string, engine: AccountEngine): boolean {
+export function isAccountArtifactPath(file: string, engine: AgentEngine): boolean {
   const parts = file.split('/');
   if (parts.length === 1) return artifactName(parts[0], engine, true);
-  if (parts[0] !== (engine === 'claude' ? '.claude' : '.codex')) return false;
+  if (parts[0] !== engineProfiles[engine].configDirectory) return false;
   return (parts.length === 2 || parts[1] === 'backups') && artifactName(parts.at(-1)!, engine, false);
 }
 
-async function artifacts(home: string, engine: AccountEngine): Promise<string[]> {
+async function artifacts(home: string, engine: AgentEngine): Promise<string[]> {
   const result: string[] = [];
   const inspect = async (directory: string, recursive = false) => {
     const metadata = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
@@ -35,13 +35,13 @@ async function artifacts(home: string, engine: AccountEngine): Promise<string[]>
     }
   };
   await inspect(home);
-  const engineHome = join(home, engine === 'claude' ? '.claude' : '.codex');
+  const engineHome = join(home, engineProfiles[engine].configDirectory);
   await inspect(engineHome);
   await inspect(join(engineHome, 'backups'), true);
   return result;
 }
 
-export async function archiveAccountArtifacts(dataDir: string, slotId: string, home: string, engine: AccountEngine): Promise<void> {
+export async function archiveAccountArtifacts(dataDir: string, slotId: string, home: string, engine: AgentEngine): Promise<void> {
   const files = await artifacts(home, engine);
   if (!files.length) return;
   const archive = join(dataDir, 'backups', 'slot-account-artifacts', accountIdentifier(slotId), randomUUID());
@@ -53,7 +53,7 @@ export async function archiveAccountArtifacts(dataDir: string, slotId: string, h
   }
 }
 
-export async function assertNoAccountArtifacts(home: string, engine: AccountEngine): Promise<void> {
+export async function assertNoAccountArtifacts(home: string, engine: AgentEngine): Promise<void> {
   if ((await artifacts(home, engine)).length) {
     throw new Error('用户槽位配置中发现账号临时文件或备份，已保留原文件，请管理员归档检查后恢复');
   }

@@ -4,10 +4,11 @@ import { api, errorText, post } from "../../api";
 import type { AgentModel, AgentPreference, AgentSelection, ModelCatalog } from "../../types";
 import SettingsMenu from "./SettingsMenu";
 import ReasoningEffortControl, { effortName } from "./ReasoningEffortControl";
+import { engineLabel, type AgentEngine } from "../../engines";
 
 interface Props {
   openRequest?: number;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   projectId: string;
   accountKey: string;
   slotId: string;
@@ -94,7 +95,7 @@ export default function ModelPicker(props: Props) {
   const personalEffort = props.preference?.reasoningEffort;
   const selected = chosen && personalEffort && chosen.reasoningEfforts.some((effort) => effort.value === personalEffort)
     ? { ...chosen, defaultReasoningEffort: personalEffort } : chosen;
-  const engineName = props.engine === "claude" ? "Claude Code" : "Codex";
+  const engineName = engineLabel(props.engine);
   const modelName = selected?.name || props.value.model || `${engineName} 默认`;
   const efforts = selected?.reasoningEfforts || [];
   const currentEffort = effortName(props.value.reasoningEffort || selected?.defaultReasoningEffort);

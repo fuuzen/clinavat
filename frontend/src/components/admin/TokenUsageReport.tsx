@@ -1,7 +1,7 @@
 import { BarChart3 } from "lucide-react";
 import type { TokenUsageRow } from "../../types";
 import TokenUsageView from "../usage/TokenUsageView";
-import { engineLabel } from "../usage/token-usage";
+import { engineLabel } from "../../engines";
 import ModelPrices from "./ModelPrices";
 
 const byUserAndSlot = (row: TokenUsageRow) => ({

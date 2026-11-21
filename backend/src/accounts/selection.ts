@@ -4,6 +4,7 @@ import type { QuotaFailure } from '../agent/types.js';
 import type { AccountCredentials } from './credentials.js';
 import { availableSlots, slotForUser } from './access.js';
 import { sameUsageAccount, type SlotUsage, type SlotUsageView, type UsageWindow } from './usage.js';
+import { engineProfiles, type AgentEngine } from '../agent/engines.js';
 
 interface SelectionConfig {
   credentials: AccountCredentials;
@@ -14,11 +15,17 @@ interface SelectionConfig {
 
 interface SelectionRequest {
   userId: string;
-  engine: 'claude' | 'codex';
+  engine: AgentEngine;
   model?: string | null;
   preferredSlotId?: string | null;
   exclude?: string[];
   signal?: AbortSignal;
+}
+
+/** Only engines whose conversations can move between accounts let the Hub choose the account. */
+export function assertAutomaticSlot(engine: AgentEngine): void {
+  const profile = engineProfiles[engine];
+  if (!profile.automaticSlot) throw new HttpError(409, `${profile.label} 尚未完成跨账号验证，请选择固定账号`);
 }
 
 function modelFamily(model?: string | null): string | null {
@@ -112,7 +119,7 @@ export class SlotSelector {
   }
 
   async candidates(request: SelectionRequest): Promise<Slot[]> {
-    if (request.engine !== 'claude') throw new HttpError(409, 'Codex 尚未完成跨账号验证，请选择固定账号');
+    assertAutomaticSlot(request.engine);
     const excluded = new Set(request.exclude);
     const slots = availableSlots(this.store, request.userId).filter(slot => slot.engine === request.engine
       && slot.status === 'IDLE' && slot.auth_method !== 'token' && !excluded.has(slot.id));
@@ -131,11 +138,11 @@ export class SlotSelector {
   }
 
   async select(request: SelectionRequest, validate?: (slot: Slot) => Promise<void>): Promise<Slot> {
-    if (request.engine !== 'claude') throw new HttpError(409, 'Codex 尚未完成跨账号验证，请选择固定账号');
+    assertAutomaticSlot(request.engine);
     let lastError: unknown;
     const excluded = [...(request.exclude ?? [])];
     const preferred = availableSlots(this.store, request.userId).find(slot => slot.id === request.preferredSlotId
-      && slot.engine === 'claude' && slot.status === 'IDLE' && slot.auth_method !== 'token' && !excluded.includes(slot.id));
+      && slot.engine === request.engine && slot.status === 'IDLE' && slot.auth_method !== 'token' && !excluded.includes(slot.id));
     if (preferred) {
       // Staying on a usable account must not boot every other slot merely to rediscover the same choice.
       const ready = await this.inspect(preferred, request);

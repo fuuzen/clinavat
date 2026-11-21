@@ -1,13 +1,13 @@
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
-import { RpcClient, type RpcMessage } from './rpc.js';
-import { loadAgentModels } from './model-catalog.js';
-import { codexPermissions, createCodexRequests } from './codex-requests.js';
-import { projectInstructions } from './project-instructions.js';
-import { roleInstructions } from './session-settings.js';
-import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './codex-goal.js';
-import { CodexSubagents } from './codex-subagents.js';
-import type { AgentPrompt, AgentRun, RunServices } from './types.js';
-import { parseCodexRead } from '../accounts/usage-parsers.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { RpcClient, type RpcMessage } from '../rpc.js';
+import { loadAgentModels } from '../model-catalog.js';
+import { codexPermissions, createCodexRequests } from './requests.js';
+import { projectInstructions } from '../project-instructions.js';
+import { roleInstructions } from '../session-settings.js';
+import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
+import { CodexSubagents } from './subagents.js';
+import type { AgentPrompt, AgentRun, RunServices } from '../types.js';
+import { parseCodexRead } from '../../accounts/usage-parsers.js';
 
 type CodexInput = { type: 'text'; text: string } | { type: 'image'; url: string };
 

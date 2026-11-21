@@ -45,7 +45,9 @@ VITE_BASE=/<repo>/ npm run build:demo -w frontend     # 构建到 frontend/dist-
 ```text
 backend/src/
   accounts/    槽位分配、凭据与运行状态
-  agent/       官方 CLI 协议、工具路由、权限 Hook
+  agent/       对话运行、工具路由、引擎描述表（engines.ts）
+    claude/    Claude Code 的协议、权限 Hook 与子智能体
+    codex/     Codex app-server 的协议、审批与 Goal
   gateway/     上游网关控制
   routes/      HTTP API
   runtime/     SSH、密钥加密、同步、remote-shell、终端

@@ -1,4 +1,5 @@
 import type { Slot, SlotLogin, SlotSubscription, SlotUsage } from "../../types";
+import type { AgentEngine } from "../../engines";
 
 const codexPlans: Record<string, string> = {
   free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", promax: "Pro Max", team: "Team",
@@ -8,12 +9,18 @@ const codexPlans: Record<string, string> = {
 const titleCase = (value: string) => value.split(/[_\s-]+/).filter(Boolean)
   .map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 
+/** How each CLI names the plan its login files state. */
+const planLabels: Record<AgentEngine, (plan: string, tier: string | null) => string> = {
+  claude(plan, tier) {
+    // Claude's tier names the Max multiplier, such as `default_claude_max_20x`.
+    const multiplier = tier?.match(/_(\d+x)$/)?.[1];
+    return `${titleCase(plan)}${multiplier ? ` ${multiplier}` : ""}`;
+  },
+  codex: (plan) => codexPlans[plan] ?? titleCase(plan),
+};
+
 export function subscriptionLabel(engine: Slot["engine"], subscription: SlotSubscription | null): string | null {
-  if (!subscription?.plan) return null;
-  if (engine === "codex") return codexPlans[subscription.plan] ?? titleCase(subscription.plan);
-  // Claude's tier names the Max multiplier, such as `default_claude_max_20x`.
-  const multiplier = subscription.tier?.match(/_(\d+x)$/)?.[1];
-  return `${titleCase(subscription.plan)}${multiplier ? ` ${multiplier}` : ""}`;
+  return subscription?.plan ? planLabels[engine](subscription.plan, subscription.tier) : null;
 }
 
 /** The plan from the login files, or else the plan the last quota reading named. */

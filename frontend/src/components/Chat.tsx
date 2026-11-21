@@ -52,6 +52,7 @@ import type {
 } from "../types";
 import { errorText, isActive, statusLabel } from "../api";
 import SyncProgressBar from "./projects/SyncProgressBar";
+import { engineProfiles } from "../engines";
 
 interface Props {
   overview: Overview;
@@ -134,7 +135,7 @@ export default function Chat(props: Props) {
   );
   const currentEngine = accountSelection.engine;
   const { behavior, behaviorSaving, changeBehavior } = useAgentBehavior(session, project?.id, currentEngine, active, props.onBehaviorChange);
-  const goal = useCodexGoal({ sessionId: session?.id, enabled: currentEngine === "codex" && !session?.archived_at, connected: props.streamConnected, executing: active, onNotice: props.onNotice });
+  const goal = useCodexGoal({ sessionId: session?.id, enabled: engineProfiles[currentEngine].goal && !session?.archived_at, connected: props.streamConnected, executing: active, onNotice: props.onNotice });
   const commands = useChatCommands({
     engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountSelection, Overview, Session, Slot } from "../../types";
+import { engineProfiles } from "../../engines";
 
 const available = (slot: Slot) => slot.status === "IDLE" && (!slot.in_use || slot.in_use_by_you);
 
 function initialSelection(slots: Slot[]): AccountSelection {
   const slot = slots.find(available) ?? slots[0];
-  return !slot || slot.engine === "claude" ? { engine: "claude", slotMode: "auto" }
+  if (!slot) return { engine: "claude", slotMode: "auto" };
+  return engineProfiles[slot.engine].automaticSlot ? { engine: slot.engine, slotMode: "auto" }
     : { engine: slot.engine, slotMode: "manual", slotId: slot.id };
 }
 

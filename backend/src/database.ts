@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { HttpError, type User } from './models.js';
 import { ensureLocalHost } from './local-host.js';
+import { agentEngines, engineCheck } from './agent/engines.js';
 
 export function databasePath(dataDirectory: string): string {
   return join(resolve(dataDirectory), 'clinavat.sqlite');
@@ -25,7 +26,7 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS account_slots (
         id TEXT PRIMARY KEY, label TEXT NOT NULL, home_dir TEXT NOT NULL UNIQUE,
-        engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        engine TEXT NOT NULL ${engineCheck},
         status TEXT NOT NULL DEFAULT 'IDLE' CHECK(status IN ('IDLE','RATE_LIMITED','DISABLED')),
         credential_revision INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -62,7 +63,7 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        user_id TEXT NOT NULL REFERENCES users(id), engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        user_id TEXT NOT NULL REFERENCES users(id), engine TEXT NOT NULL ${engineCheck},
         title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', native_session_id TEXT, jsonl_file_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         model TEXT, reasoning_effort TEXT, permission_mode TEXT NOT NULL DEFAULT 'manual', slot_id TEXT,
@@ -113,7 +114,7 @@ export class Store {
         id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('skip','defer')), timeout_ms INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS user_agent_defaults (
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, engine TEXT NOT NULL ${engineCheck},
         model TEXT, reasoning_effort TEXT, PRIMARY KEY(user_id,engine)
       );
       CREATE TABLE IF NOT EXISTS machine_resources (
@@ -129,7 +130,7 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS token_usage (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        slot_id TEXT NOT NULL, session_id TEXT, turn_id TEXT, engine TEXT NOT NULL CHECK(engine IN ('claude','codex')),
+        slot_id TEXT NOT NULL, session_id TEXT, turn_id TEXT, engine TEXT NOT NULL ${engineCheck},
         model TEXT NOT NULL, input_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
         cache_write_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL,
         cost_usd REAL, cost_source TEXT CHECK(cost_source IN ('cli','prices')),
@@ -217,6 +218,7 @@ export class Store {
         ALTER TABLE slot_quota_limits_by_account RENAME TO slot_quota_limits;
       `));
     }
+    this.widenEngineChecks();
     const interruptedAt = new Date().toISOString();
     this.run(`UPDATE session_turns SET status='interrupted',completed_at=?,paused_at=NULL,
       duration_ms=CASE WHEN status='paused' AND duration_ms IS NOT NULL THEN duration_ms
@@ -231,6 +233,31 @@ export class Store {
   private addColumn(table: string, column: string, definition: string) {
     if (this.all<{ name: string }>(`PRAGMA table_info(${table})`).some(item => item.name === column)) return;
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+  /**
+   * Lets the tables created before an engine existed record it. A wider CHECK keeps every stored row valid, so the
+   * schema text changes in place: rebuilding tables that others reference with ON DELETE CASCADE could lose rows.
+   */
+  private widenEngineChecks() {
+    const stale = this.all<{ name: string; sql: string }>("SELECT name,sql FROM sqlite_schema WHERE type='table'").flatMap(table => {
+      const check = /CHECK\(engine IN \(([^)]*)\)\)/.exec(table.sql);
+      if (!check) return [];
+      const known = check[1].split(',').map(value => value.trim().replace(/^'(.*)'$/, '$1'));
+      const missing = agentEngines.filter(engine => !known.includes(engine));
+      const engines = [...known, ...missing].map(engine => `'${engine}'`).join(',');
+      return missing.length ? [{ name: table.name, sql: table.sql.replace(check[0], `CHECK(engine IN (${engines}))`) }] : [];
+    });
+    if (!stale.length) return;
+    this.transaction(() => {
+      const { schema_version: version } = this.get<{ schema_version: number }>('PRAGMA schema_version')!;
+      this.db.exec('PRAGMA writable_schema=ON');
+      try {
+        for (const table of stale) this.run("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name=?", table.sql, table.name);
+        this.db.exec(`PRAGMA schema_version=${version + 1}`);
+      } finally { this.db.exec('PRAGMA writable_schema=OFF'); }
+    });
+    const { integrity_check: result } = this.get<{ integrity_check: string }>('PRAGMA integrity_check')!;
+    if (result !== 'ok') throw new Error(`数据库结构更新后完整性检查失败：${result}`);
   }
   get<T>(sql: string, ...params: SQLInputValue[]): T | undefined {
     return this.db.prepare(sql).get(...params) as T | undefined;

@@ -14,6 +14,7 @@ import { parseSetupToken } from '../accounts/slot-tokens.js';
 import { usageSettingsSchema } from '../accounts/usage-settings.js';
 import { adminUserRoutes } from './admin-users.js';
 import { adminMachineRoutes } from './admin-machines.js';
+import { agentEngines, engineProfiles } from '../agent/engines.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export function adminRoutes(app: FastifyInstance, context: Context) {
@@ -96,7 +97,7 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
   app.post('/api/admin/slots', async (request, reply) => {
     requireAdmin(request);
     const input = z.object({
-      id: slotId, label: z.string().trim().min(1).max(100), engine: z.enum(['claude', 'codex']),
+      id: slotId, label: z.string().trim().min(1).max(100), engine: z.enum(agentEngines),
       allowedUserIds: z.array(z.uuid()).max(10000).default([]),
     }).strict().parse(request.body);
     return withResourceLocks(context, [`slot-config:${input.id}`], async () => {
@@ -132,10 +133,8 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
         await config.execution.assertReleased(home);
         await initializeSlotProfile(config.dataDir, id, home, slot.engine);
         // Prepare the same installation identity before an operator starts login in the slot VM.
-        const command = slot.engine === 'claude'
-          ? await config.execution.loginCommand(id, home, ['claude', 'auth', 'login'], { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') })
-          : await config.execution.loginCommand(id, home, ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
-            { HOME: home, CODEX_HOME: join(home, '.codex') });
+        const login = engineProfiles[slot.engine].login(home);
+        const command = await config.execution.loginCommand(id, home, login.argv, login.env);
         return { command, runsIn: config.execution.kind };
       });
       if (!prepared) throw new HttpError(409, '该槽位正在使用或查询额度，请结束后再生成登录命令');

@@ -1,7 +1,7 @@
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from './environment.js';
-import { RpcClient, type RpcMessage } from './rpc.js';
-import { getPermissionMode } from './permissions.js';
-import type { AgentConfig, AgentContext } from './types.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { RpcClient, type RpcMessage } from '../rpc.js';
+import { getPermissionMode } from '../permissions.js';
+import type { AgentConfig, AgentContext } from '../types.js';
 
 export interface CodexGoal {
   threadId: string;

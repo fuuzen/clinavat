@@ -7,6 +7,7 @@ import type { Message } from "../../types";
 import DiagramBlock from "../diagrams/DiagramBlock";
 import { diagramFence } from "../diagrams/fence";
 import { messageImageIds } from "./composer/imageAttachments";
+import type { AgentEngine } from "../../engines";
 
 const components: Components = {
   pre({ children }) {
@@ -96,7 +97,7 @@ function MessageImages({ message }: { message: Message }) {
   );
 }
 
-export function AgentAvatar({ engine }: { engine: "claude" | "codex" }) {
+export function AgentAvatar({ engine }: { engine: AgentEngine }) {
   return <span className="agent-avatar"><span className={`engine-logo engine-logo-${engine}`} aria-hidden="true" /></span>;
 }
 
@@ -110,7 +111,7 @@ export default function MessageView({
   message: Message;
   username: string;
   agentName: string;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   /** Present on the answer of a turn that can be branched from. */
   onFork?: () => void;
 }) {

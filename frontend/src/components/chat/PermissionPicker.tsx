@@ -3,10 +3,11 @@ import type { PermissionMode } from "../../types";
 import SettingsHelp from "./SettingsHelp";
 import SettingsMenu from "./SettingsMenu";
 import "../../styles/permission-modes.css";
+import { engineLabel, engineProfiles, type AgentEngine } from "../../engines";
 
 interface Props {
   openRequest?: number;
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   value: PermissionMode;
   disabled: boolean;
   saving: boolean;
@@ -34,12 +35,14 @@ const yoloOption: PermissionOption = {
 /** New conversations start here unless the user has chosen another default. */
 export const defaultPermissionMode: PermissionMode = "auto";
 
-export function permissionOptions(engine: "claude" | "codex"): PermissionOption[] {
-  return [...nativeOptions.filter((option) => option.value !== "accept-edits" || engine === "claude"), yoloOption];
+const nativeOptionsFor = (engine: AgentEngine) => nativeOptions.filter((option) => engineProfiles[engine].permissionModes.includes(option.value));
+
+export function permissionOptions(engine: AgentEngine): PermissionOption[] {
+  return [...nativeOptionsFor(engine), yoloOption];
 }
 
 export default function PermissionPicker(props: Props) {
-  const options = nativeOptions.filter((option) => option.value !== "accept-edits" || props.engine === "claude");
+  const options = nativeOptionsFor(props.engine);
   const selected = [...options, yoloOption].find((option) => option.value === props.value) || nativeOptions[0];
   const Icon = selected.icon;
   function item(option: PermissionOption, close: () => void) {
@@ -91,7 +94,7 @@ export default function PermissionPicker(props: Props) {
             <SettingsHelp menuItem text="保存到当前对话，下次发送消息时生效。" />
           </div>
           <div role="group" aria-label="CLI 原生授权">
-            <div className="settings-menu-heading"><span>CLI 原生</span><span>{props.engine === "claude" ? "Claude Code" : "Codex"}</span></div>
+            <div className="settings-menu-heading"><span>CLI 原生</span><span>{engineLabel(props.engine)}</span></div>
             {options.map((option) => item(option, close))}
           </div>
           <div className="settings-menu-group" role="group" aria-label="本系统自动审批">

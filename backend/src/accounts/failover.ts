@@ -5,6 +5,7 @@ import { HttpError } from '../models.js';
 import { resolveAgentSelection, type AgentPreference } from '../agent/model-catalog.js';
 import type { AgentContext, QuotaFailure } from '../agent/types.js';
 import { slotForUser } from './access.js';
+import { engineProfiles } from '../agent/engines.js';
 
 /** Runs after the old CLI and its lease have ended; the manager owns cancellation throughout this operation. */
 export async function prepareSlotFailover(context: Context, previous: AgentContext, quota: QuotaFailure,
@@ -12,7 +13,7 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
   const { store, config, events, slots, turns } = context;
   signal.throwIfAborted();
   const session = sessionFor(context, previous.session.id, previous.user.id);
-  if (session.slot_mode !== 'auto' || session.engine !== 'claude') throw new HttpError(409, '当前对话未启用 Claude 自动账号');
+  if (session.slot_mode !== 'auto' || !engineProfiles[session.engine].automaticSlot) throw new HttpError(409, '当前对话未启用 Claude 自动账号');
   if (config.credentials.isSessionBusy(session.id)) throw new HttpError(409, '原账号状态尚未回收，无法切换');
   const project = projectFor(context, session.project_id, previous.user.id);
   if (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING') {

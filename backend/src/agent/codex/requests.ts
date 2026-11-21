@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { getPermissionMode } from './permissions.js';
-import type { RpcMessage } from './rpc.js';
-import type { RunServices } from './types.js';
-import { unansweredNotice, type UserInputQuestion } from './user-input.js';
+import { getPermissionMode } from '../permissions.js';
+import type { RpcMessage } from '../rpc.js';
+import type { RunServices } from '../types.js';
+import { unansweredNotice, type UserInputQuestion } from '../user-input.js';
 
 const nativeApprovals = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
 

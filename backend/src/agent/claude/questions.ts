@@ -1,5 +1,5 @@
-import type { RunServices } from './types.js';
-import { unansweredNotice } from './user-input.js';
+import type { RunServices } from '../types.js';
+import { unansweredNotice } from '../user-input.js';
 
 export type ClaudeAnswer = { updatedInput: Record<string, unknown> } | { reason: string };
 

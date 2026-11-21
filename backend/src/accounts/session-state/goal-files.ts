@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { readlink, rename, rm, symlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { privateDirectory, writePrivateJson } from '../credential-files.js';
-import type { AccountEngine } from '../paths.js';
 import { metadata } from './files.js';
 import { sessionStateFiles } from './layout.js';
+import type { AgentEngine } from '../../agent/engines.js';
 
 // Only a CLI started outside a lease can leave a real database here. It is never opened: the slot is writable from
 // execution environments, and the Hub must not parse files from there as SQLite.
@@ -25,7 +25,7 @@ async function assertTarget(root: string, name: string): Promise<void> {
   if (target && (!target.isFile() || target.isSymbolicLink())) throw new Error('用户原生目标数据库必须是实际文件');
 }
 
-export async function bindSessionStateFiles(directory: string, root: string, engine: AccountEngine): Promise<void> {
+export async function bindSessionStateFiles(directory: string, root: string, engine: AgentEngine): Promise<void> {
   for (const name of sessionStateFiles(engine)) {
     await assertTarget(root, name);
     const file = join(directory, name);
@@ -40,7 +40,7 @@ export async function bindSessionStateFiles(directory: string, root: string, eng
   }
 }
 
-export async function detachSessionStateFiles(directory: string, root: string, engine: AccountEngine): Promise<void> {
+export async function detachSessionStateFiles(directory: string, root: string, engine: AgentEngine): Promise<void> {
   for (const name of sessionStateFiles(engine)) {
     const file = join(directory, name);
     const entry = await metadata(file);
@@ -52,7 +52,7 @@ export async function detachSessionStateFiles(directory: string, root: string, e
   }
 }
 
-export async function assertSessionStateFiles(directory: string, root: string, engine: AccountEngine): Promise<void> {
+export async function assertSessionStateFiles(directory: string, root: string, engine: AgentEngine): Promise<void> {
   for (const name of sessionStateFiles(engine)) {
     const file = join(directory, name);
     if (!(await metadata(file))?.isSymbolicLink() || resolve(dirname(file), await readlink(file)) !== join(root, name)) {

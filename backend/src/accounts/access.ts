@@ -1,14 +1,14 @@
 import type { Store } from '../database.js';
 import type { Context } from '../context.js';
 import { HttpError, type Slot } from '../models.js';
-import type { AccountEngine } from './paths.js';
+import type { AgentEngine } from '../agent/engines.js';
 
 export function availableSlots(store: Store, userId: string): Slot[] {
   return store.all<Slot>(`SELECT account_slots.* FROM account_slots JOIN slot_user_access
     ON slot_user_access.slot_id=account_slots.id WHERE slot_user_access.user_id=? ORDER BY account_slots.label,account_slots.id`, userId);
 }
 
-export function slotForUser(store: Store, slotId: string, userId: string, engine?: AccountEngine, requireUsable = true): Slot {
+export function slotForUser(store: Store, slotId: string, userId: string, engine?: AgentEngine, requireUsable = true): Slot {
   const slot = store.get<Slot>(`SELECT account_slots.* FROM account_slots JOIN slot_user_access
     ON slot_user_access.slot_id=account_slots.id WHERE account_slots.id=? AND slot_user_access.user_id=?`, slotId, userId);
   if (!slot) throw new HttpError(403, '无权使用该授权槽位，请联系管理员授予访问权限');

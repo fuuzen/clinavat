@@ -1,25 +1,26 @@
 import { readdir, readlink, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
-import { accountIdentifier, type AccountEngine } from '../paths.js';
+import { accountIdentifier } from '../paths.js';
 import { metadata } from './files.js';
 import { assertSessionStateFiles, bindSessionStateFiles, detachSessionStateFiles } from './goal-files.js';
 import { engineDirectory, sessionStateDirectories, sessionStateFiles, userSessionStateRoot } from './layout.js';
+import { isAgentEngine, type AgentEngine } from '../../agent/engines.js';
 
-interface BindingMarker { version: 1; userId: string; engine: AccountEngine; root: string }
+interface BindingMarker { version: 1; userId: string; engine: AgentEngine; root: string }
 const markerName = '.slot-session-state.json';
 
 async function readBinding(home: string): Promise<BindingMarker | undefined> {
   const content = await readPrivateJson(join(home, markerName));
   if (!content) return undefined;
   const marker = JSON.parse(content) as BindingMarker;
-  if (marker.version !== 1 || !['claude', 'codex'].includes(marker.engine)
+  if (marker.version !== 1 || !isAgentEngine(marker.engine)
     || typeof marker.root !== 'string' || !marker.root.startsWith('/')) throw new Error('槽位会话目录映射记录无效');
   accountIdentifier(marker.userId);
   return marker;
 }
 
-export async function bindSlotSessionState(dataDir: string, userId: string, slotHome: string, engine: AccountEngine): Promise<void> {
+export async function bindSlotSessionState(dataDir: string, userId: string, slotHome: string, engine: AgentEngine): Promise<void> {
   const root = resolve(userSessionStateRoot(dataDir, userId, engine));
   await privateDirectory(root);
   const previous = await readBinding(slotHome);
@@ -47,7 +48,7 @@ export async function bindSlotSessionState(dataDir: string, userId: string, slot
   await bindSessionStateFiles(directory, root, engine);
 }
 
-export async function detachSlotSessionState(slotHome: string, engine: AccountEngine): Promise<void> {
+export async function detachSlotSessionState(slotHome: string, engine: AgentEngine): Promise<void> {
   const marker = await readBinding(slotHome);
   const directory = engineDirectory(slotHome, engine);
   if (!marker) {
@@ -71,7 +72,7 @@ export async function detachSlotSessionState(slotHome: string, engine: AccountEn
   await rm(join(slotHome, markerName), { force: true });
 }
 
-export async function assertSlotSessionState(dataDir: string, userId: string, slotHome: string, engine: AccountEngine): Promise<void> {
+export async function assertSlotSessionState(dataDir: string, userId: string, slotHome: string, engine: AgentEngine): Promise<void> {
   const marker = await readBinding(slotHome);
   const root = resolve(userSessionStateRoot(dataDir, userId, engine));
   if (!marker || marker.userId !== userId || marker.engine !== engine || marker.root !== root) {

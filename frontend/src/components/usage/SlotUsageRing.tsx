@@ -1,10 +1,11 @@
 import { CircleAlert, LoaderCircle } from "lucide-react";
 import type { SlotUsage } from "../../types";
+import { engineLabel, type AgentEngine } from "../../engines";
 import { slotUsageRings } from "./slot-usage-rings";
 import "../../styles/slot-usage-ring.css";
 
 interface Props {
-  engine: "claude" | "codex";
+  engine: AgentEngine;
   usage?: SlotUsage;
   now: number;
   slotLimited?: boolean;
@@ -15,7 +16,7 @@ interface Props {
 
 export default function SlotUsageRing({ engine, usage, now, slotLimited, saving, plain }: Props) {
   const { rings, limited, description } = slotUsageRings(engine, usage, now, slotLimited);
-  const label = `${engine === "claude" ? "Claude Code" : "Codex"}；${description}`;
+  const label = `${engineLabel(engine)}；${description}`;
   // A third, per-model window needs the rings drawn closer together around a smaller mark.
   const three = !plain && rings.some((item) => item.position === "core");
   const radii = three ? { outer: 15, inner: 12.4, core: 9.8 } : { outer: 14.5, inner: 11, core: 0 };

@@ -5,6 +5,7 @@ import type { ExecutionScope } from '../execution/types.js';
 import { readJsonLines } from './ndjson.js';
 import { RpcClient } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
+import type { AgentEngine } from './engines.js';
 
 export interface AgentModel {
   id: string;
@@ -170,13 +171,19 @@ async function claudeModels(config: AgentConfig, context: ProbeContext): Promise
   }
 }
 
+/** Reads the models a slot's account may use from its CLI. */
+const modelReaders: Record<AgentEngine, (config: AgentConfig, context: ProbeContext) => Promise<AgentModel[]>> = {
+  claude: claudeModels,
+  codex: codexModels,
+};
+
 async function probeModels(config: AgentConfig, context: CatalogContext): Promise<SlotModelCatalog> {
   const probeContext: ProbeContext = { user: context.user, slot: context.slot, runtime_home: context.slot.home_dir,
     runtime_kind: 'probe', session: { id: '', engine: context.session.engine } };
   return config.catalogs.probe(context.slot.id, async () => {
     const release = await config.credentials.acquire(probeContext);
     try {
-      const result = await (context.session.engine === 'codex' ? codexModels(config, probeContext) : claudeModels(config, probeContext));
+      const result = await modelReaders[context.session.engine](config, probeContext);
       if (!result.length) throw new Error('当前 CLI 未提供可用模型');
       return result;
     } finally { await release(); }

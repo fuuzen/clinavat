@@ -9,12 +9,13 @@ import { accountWindows, slotUsageRings } from "../usage/slot-usage-rings";
 import { planName } from "../usage/subscription";
 import SettingsHelp from "./SettingsHelp";
 import SettingsMenu from "./SettingsMenu";
+import { agentEngines, engineLabel, engineProfiles, type AgentEngine } from "../../engines";
 
 interface Props {
   slots: Slot[];
   slotId: string;
   selection: AccountSelection;
-  engine?: "claude" | "codex";
+  engine?: AgentEngine;
   disabled: boolean;
   saving: boolean;
   onChange: (selection: AccountSelection) => void;
@@ -32,7 +33,7 @@ export default function SlotPicker({ slots, slotId, selection, engine, disabled,
   const usageDescription = selected
     ? slotUsageRings(selected.engine, usage[selected.id], now, selected.status === "RATE_LIMITED").description : "";
   const plan = selected ? planName(selected.engine, usage[selected.id]) : null;
-  const title = `当前对话的授权槽位：${name}${selected ? ` · ${selected.engine === "claude" ? "Claude Code" : "Codex"}${plan ? ` ${plan}` : ""}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
+  const title = `当前对话的授权槽位：${name}${selected ? ` · ${engineLabel(selected.engine)}${plan ? ` ${plan}` : ""}；${usageDescription}` : ""}${saving ? "；正在切换槽位" : ""}`;
   return (
     <>
       <SettingsMenu
@@ -120,7 +121,7 @@ function SlotRefresh({ slot, usage }: { slot: Slot; usage?: SlotUsage }) {
 }
 
 function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, onReset, close }: {
-  available: Slot[]; slotId: string; selection: AccountSelection; engine?: "claude" | "codex"; usage: Record<string, SlotUsage>; now: number;
+  available: Slot[]; slotId: string; selection: AccountSelection; engine?: AgentEngine; usage: Record<string, SlotUsage>; now: number;
   onChange: (selection: AccountSelection) => void; onReset: (slot: Slot) => void; close: () => void;
 }) {
   return (
@@ -129,17 +130,17 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
             <span>当前对话的授权槽位</span>
             <SettingsHelp menuItem text={"Claude 自动选择可用账号，额度耗尽时切换账号继续当前任务；使用长期令牌的账号不参与自动选择。选择具体账号后仅使用该账号。\n切换仅影响当前对话。额度条为已用比例，右侧为距重置的时间；查询失败时显示上次获取的数据。"} />
           </div>
-          {(["claude", "codex"] as const).map((type) => {
+          {agentEngines.map((type) => {
             const matching = available.filter((slot) => slot.engine === type);
             if (!matching.length) return null;
             return (
-              <div key={type} role="group" aria-label={type === "claude" ? "Claude Code 账号" : "Codex 账号"}>
-                <div className="slot-menu-engine">{type === "claude" ? "Claude Code" : "Codex"}</div>
-                {type === "claude" && (
+              <div key={type} role="group" aria-label={`${engineLabel(type)} 账号`}>
+                <div className="slot-menu-engine">{engineLabel(type)}</div>
+                {engineProfiles[type].automaticSlot && (
                   <button type="button" className="settings-menu-item" role="menuitemradio"
-                    aria-checked={selection.slotMode === "auto" && selection.engine === "claude"} tabIndex={-1}
+                    aria-checked={selection.slotMode === "auto" && selection.engine === type} tabIndex={-1}
                     disabled={!matching.some(slot => slot.status === "IDLE" && slot.auth_method !== "token" && (!slot.in_use || slot.in_use_by_you))}
-                    onClick={() => { onChange({ engine: "claude", slotMode: "auto" }); close(); }}>
+                    onClick={() => { onChange({ engine: type, slotMode: "auto" }); close(); }}>
                     <Shuffle size={16} aria-hidden="true" />
                     <span className="settings-item-copy"><span className="settings-item-name">自动选择</span><small>额度耗尽时自动切换账号</small></span>
                     <Check size={14} className="settings-item-check" aria-hidden="true" />
@@ -190,7 +191,7 @@ function SlotMenu({ available, slotId, selection, engine, usage, now, onChange, 
               </div>
             );
           })}
-          {!available.length && <div className="settings-menu-status">暂无获授权的{engine ? ` ${engine === "claude" ? "Claude Code" : "Codex"}` : ""}槽位，请联系管理员。</div>}
+          {!available.length && <div className="settings-menu-status">暂无获授权的{engine ? ` ${engineLabel(engine)}` : ""}槽位，请联系管理员。</div>}
         </>
   );
 }
