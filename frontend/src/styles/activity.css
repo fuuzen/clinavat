@@ -48,6 +48,9 @@
 .activity-reasoning .markdown {
   color: var(--text-secondary);
 }
+.activity-notice .markdown {
+  color: var(--warning);
+}
 .reasoning-label {
   display: block;
   color: var(--muted);

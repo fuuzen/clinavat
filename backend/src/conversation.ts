@@ -4,7 +4,8 @@ import { copyImages } from './message-images.js';
 
 export interface ActivityItem {
   id: string;
-  kind: 'text' | 'reasoning' | 'tool';
+  /** `notice` reports the CLI retrying an API request; it is replaced in place, never part of the answer. */
+  kind: 'text' | 'reasoning' | 'notice' | 'tool';
   text?: string;
   final?: boolean;
   /** `agent` names the subagent that made the call; absent for the conversation's own agent. */
@@ -85,7 +86,7 @@ export class ConversationStore {
       const item: ActivityItem = { id, kind: 'tool', tool };
       if (existing) Object.assign(existing, item);
       else pending.turn.items.push(item);
-    } else if (payload.kind === 'text' || payload.kind === 'reasoning') {
+    } else if (payload.kind === 'text' || payload.kind === 'reasoning' || payload.kind === 'notice') {
       const update = typeof payload.text === 'string' ? payload.text : '';
       const text = payload.append === true ? (existing?.text || '') + update : update || existing?.text || '';
       const item: ActivityItem = {

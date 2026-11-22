@@ -183,7 +183,7 @@ export interface ToolEvent {
 
 export interface ActivityItem {
   id: string;
-  kind: "text" | "reasoning" | "tool";
+  kind: "text" | "reasoning" | "notice" | "tool";
   text?: string;
   tool?: ToolEvent;
   final?: boolean;

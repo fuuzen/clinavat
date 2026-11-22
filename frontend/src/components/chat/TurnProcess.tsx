@@ -71,6 +71,7 @@ export default function TurnProcess({ turn }: { turn: Turn }) {
           ) : (
             <div key={group.id} className={`activity-text activity-${group.kind}`}>
               {group.kind === "reasoning" && <span className="reasoning-label">思考摘要</span>}
+              {group.kind === "notice" && <span className="reasoning-label">API 重试</span>}
               {group.text && <Markdown text={group.text} />}
             </div>
           ))}

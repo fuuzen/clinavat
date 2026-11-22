@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
@@ -48,6 +49,12 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
   let turnAbort = new AbortController();
   let pauseWaiter: { turnId: string; resolve(): void; reject(error: Error): void } | undefined;
   let textSize = 0;
+  // Codex reconnects a dropped stream by itself; the attempts stay in the turn's process as one entry.
+  let retry: { id: string; text: string } | undefined;
+  const settleRetry = (outcome: string) => {
+    if (retry) services.event('activity', { id: retry.id, kind: 'notice', text: `${retry.text}（${outcome}）` });
+    retry = undefined;
+  };
   let mutations: Promise<unknown> = Promise.resolve();
   const mutate = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = mutations.then(operation, operation);
@@ -75,6 +82,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     turnActive = false;
     const wasInterrupted = interruptRequested;
     interruptRequested = false;
+    settleRetry(wasInterrupted ? '已停止重试' : error ? '重试后仍失败' : '已恢复');
     turnAbort.abort();
     requests.close();
     const output = finalAnswer(!!error);
@@ -195,7 +203,11 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       if (turnId && threadId) services.event('turn-anchor', { ref: turnId, nativeSessionId: threadId });
     }
     if (message.method === 'error') {
-      services.event('error', { message: String(params.error?.message ?? 'Codex 运行错误') });
+      const text = String(params.error?.message ?? 'Codex 运行错误');
+      if (params.willRetry === true && turnActive) {
+        retry = { id: retry?.id ?? `retry:${randomUUID()}`, text };
+        services.event('activity', { id: retry.id, kind: 'notice', text: `${text}（正在重试）` });
+      } else services.event('error', { message: text });
     }
     if (message.method === 'turn/completed') {
       const turn = params.turn ?? {};

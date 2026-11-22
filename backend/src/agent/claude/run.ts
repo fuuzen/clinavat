@@ -7,6 +7,7 @@ import { readJsonLines } from '../ndjson.js';
 import { claudePermissionMode } from '../permissions.js';
 import { projectInstructions } from '../project-instructions.js';
 import { ClaudeQuotaTracker } from './quota.js';
+import { ClaudeRetries } from './retries.js';
 import { ClaudeUsageMeter } from '../../token-usage/meters.js';
 import { parseClaudeUsage } from '../../accounts/usage-parsers.js';
 import { ClaudeSubagents } from './subagents.js';
@@ -90,6 +91,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
   let taskNotified = false;
   let tasks: RunTask[] = [];
   const subagents = new ClaudeSubagents();
+  const retries = new ClaudeRetries(services);
   // Steering sent while a turn was ending starts its own turn; its message already exists.
   const pendingSteers = new Map<string, string>();
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
@@ -103,6 +105,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     const exhaustion = result ? quota.finish(result) : undefined;
     if (!result) quota.reset();
     const wasInterrupted = interruptRequested;
+    retries.settle(wasInterrupted ? 'stopped' : failure ? 'failed' : 'recovered');
     const finalGroup = !failure ? messageGroups.get([...messages.keys()].at(-1) || '') : undefined;
     const finalIds = finalGroup ? [...messages.keys()].filter(id => messageGroups.get(id) === finalGroup) : [];
     const finalTexts = finalIds.map(id => ({ id, text: messages.get(id) || '' }));
@@ -150,6 +153,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
       taskNotified = false;
       services.automaticTurn({ summary: lastTaskSummary });
     }
+    if (event.type === 'system' && event.subtype === 'api_retry' && !agent && turnActive) retries.observe(event);
     if (event.type === 'rate_limit_event') services.config.usage?.observe(services.context.slot, 'claude-event',
       event.rate_limit_info, services.context.account_identity);
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
@@ -162,6 +166,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     if (event.type === 'stream_event' && !agent) {
       const nested = event.event;
       if (nested?.type === 'message_start') {
+        retries.settle();
         messageId = String(nested.message?.id || randomUUID());
         activeTextIndex = undefined;
         thinkingBlocks.clear();
