@@ -1,7 +1,7 @@
 import { lstat, readdir, readlink, rename, rm, rmdir, symlink } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
+import { assertRealDirectories, privateDirectory, privateSubdirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import { sessionStateDirectories, sessionStateFiles } from '../session-state/index.js';
 import { claudeInstallationKeys } from '../claude-identity.js';
 import { engineProfiles, type AgentEngine } from '../../agent/engines.js';
@@ -114,10 +114,12 @@ async function moveEntry(source: string, target: string): Promise<void> {
   await rename(source, target);
 }
 
-async function transferEngine(source: string, target: string, engine: AgentEngine, direction: Transfer): Promise<void> {
-  if (!await pathExists(source)) return;
-  await privateDirectory(source);
-  await privateDirectory(target);
+async function transferEngine(sourceHome: string, targetHome: string, engine: AgentEngine, direction: Transfer): Promise<void> {
+  const engineDirectory = engineProfiles[engine].configDirectory;
+  await assertRealDirectories(sourceHome, engineDirectory);
+  if (!await pathExists(join(sourceHome, engineDirectory))) return;
+  const source = await privateSubdirectory(sourceHome, engineDirectory);
+  const target = await privateSubdirectory(targetHome, engineDirectory);
   const sessions = new Set(sessionStateDirectories(engine));
   const sharedFiles = new Set(sessionStateFiles(engine));
   for (const entry of await readdir(source, { withFileTypes: true })) {
@@ -138,18 +140,26 @@ async function transferEngine(source: string, target: string, engine: AgentEngin
 export async function moveSlotProfile(source: string, target: string, engine: AgentEngine, direction: Transfer): Promise<void> {
   await privateDirectory(source);
   await privateDirectory(target);
-  const engineDirectory = engineProfiles[engine].configDirectory;
-  await transferEngine(join(source, engineDirectory), join(target, engineDirectory), engine, direction);
+  await transferEngine(source, target, engine, direction);
   if (engine === 'claude') {
     for (const file of mixedFiles) await transferMixed(join(source, file.path), join(target, file.path), file.keys, direction);
   }
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (entry.name === engineDirectory || (engine === 'claude' && entry.name === '.claude.json')) continue;
-    if (engine === 'claude' && ['.claude.lock', '.claude.json.lock', '.claude.json.lock.owner'].includes(entry.name)) {
-      if (direction === 'restore') throw new Error('用户槽位配置包含受保护的账号锁');
-      continue;
+  // Everything else belongs to the user. When the CLI's directory sits inside a shared one, as agy's does in
+  // ~/.gemini, the shared directory's other entries move as well.
+  const engineParts = engineProfiles[engine].configDirectory.split('/');
+  for (let depth = 0; depth < engineParts.length; depth++) {
+    const level = engineParts.slice(0, depth).join('/');
+    if (depth > 0 && !await pathExists(join(source, level))) break;
+    const from = depth > 0 ? await privateSubdirectory(source, level) : source;
+    const to = depth > 0 ? await privateSubdirectory(target, level) : target;
+    for (const entry of await readdir(from, { withFileTypes: true })) {
+      if (entry.name === engineParts[depth] || (depth === 0 && engine === 'claude' && entry.name === '.claude.json')) continue;
+      if (depth === 0 && engine === 'claude' && ['.claude.lock', '.claude.json.lock', '.claude.json.lock.owner'].includes(entry.name)) {
+        if (direction === 'restore') throw new Error('用户槽位配置包含受保护的账号锁');
+        continue;
+      }
+      await moveEntry(join(from, entry.name), join(to, entry.name));
     }
-    await moveEntry(join(source, entry.name), join(target, entry.name));
   }
   await relocateHomeLinks(target, target, source, target);
 }

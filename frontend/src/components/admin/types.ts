@@ -17,6 +17,7 @@ export interface AdminHealth {
   runtime: {
     claude: boolean;
     codex: boolean;
+    agy: boolean;
     mutagen: boolean;
     ssh: boolean;
   };

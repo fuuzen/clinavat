@@ -6,7 +6,7 @@ import type { PermissionMode } from './permissions.js';
  * The CLIs a slot can hold. What differs between them is stated here, or in a `Record<AgentEngine, …>` next to
  * the code that needs it, so adding an engine is a compile error everywhere it still needs an answer.
  */
-export const agentEngines = ['claude', 'codex'] as const;
+export const agentEngines = ['claude', 'codex', 'antigravity'] as const;
 export type AgentEngine = typeof agentEngines[number];
 
 export interface EngineProfile {
@@ -30,6 +30,10 @@ export interface EngineProfile {
   setupToken: boolean;
   rolePresets: boolean;
   goal: boolean;
+  /** `/compact` summarizes the native conversation. */
+  compact: boolean;
+  /** The service lets an account spend a reset of its rate limits. */
+  limitReset: boolean;
   /** The login an administrator runs in the slot's machine. */
   login(home: string): { argv: string[]; env: Record<string, string> };
 }
@@ -51,6 +55,8 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     setupToken: true,
     rolePresets: false,
     goal: false,
+    compact: true,
+    limitReset: true,
     login: home => ({ argv: ['claude', 'auth', 'login'], env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') } }),
   },
   codex: {
@@ -67,8 +73,32 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     setupToken: false,
     rolePresets: true,
     goal: true,
+    compact: true,
+    limitReset: true,
     login: home => ({ argv: ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
       env: { HOME: home, CODEX_HOME: join(home, '.codex') } }),
+  },
+  antigravity: {
+    label: 'Antigravity',
+    binary: 'agy',
+    // agy keeps its own files one level down; ~/.gemini/config holds customizations shared with other Google tools.
+    configDirectory: '.gemini/antigravity-cli',
+    credentialFile: '.gemini/antigravity-cli/antigravity-oauth-token',
+    sessionDirectories: ['conversations', 'brain', 'implicit'],
+    sessionFiles: ['conversation_summaries.db'],
+    // The installation's identity stays with the slot, like Claude's machine ID.
+    protectedEntries: ['antigravity-oauth-token', 'installation_id', 'jetski_state.pbtxt'],
+    artifactBases: { home: [], engine: ['antigravity-oauth-token'] },
+    // Its auto mode runs commands in a sandbox without network, where remote-shell cannot reach the development host.
+    permissionModes: ['manual', 'accept-edits', 'full-access', 'yolo'],
+    automaticSlot: false,
+    setupToken: false,
+    rolePresets: false,
+    goal: false,
+    compact: false,
+    limitReset: false,
+    // Without a D-Bus session bus agy stores the login in the home instead of the desktop keyring.
+    login: home => ({ argv: ['agy'], env: { HOME: home, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } }),
   },
 };
 

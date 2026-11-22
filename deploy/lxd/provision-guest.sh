@@ -32,6 +32,17 @@ tar -xJf "$asset" -C /usr/local --strip-components=1 --no-same-owner
 
 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" >/dev/null
 npm cache clean --force >/dev/null 2>&1
+
+# agy updates itself in place unless told not to; the Hub sets AGY_CLI_DISABLE_AUTO_UPDATE, and the build pins the release.
+# A release is the version with its build number, as in the CLI's own update manifest.
+case "$architecture" in
+  amd64) agy_asset=linux-x64/cli_linux_x64.tar.gz agy_sum="$ANTIGRAVITY_SHA512_AMD64" ;;
+  arm64) agy_asset=linux-arm/cli_linux_arm64.tar.gz agy_sum="$ANTIGRAVITY_SHA512_ARM64" ;;
+esac
+curl -fsSL -o agy.tar.gz "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_RELEASE}/${agy_asset}"
+echo "$agy_sum  agy.tar.gz" | sha512sum -c - >/dev/null
+tar -xzf agy.tar.gz --no-same-owner antigravity
+install -m 0755 antigravity /usr/local/bin/agy
 fi
 
 asset="mutagen_linux_${architecture}_v${MUTAGEN_VERSION}.tar.gz"

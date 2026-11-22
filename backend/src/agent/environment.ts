@@ -16,6 +16,8 @@ export function agentEnvironment(execution: ExecutionHost, context: Omit<AgentCo
     XDG_CACHE_HOME: path.join(context.runtime_home, '.cache'),
     CODEX_HOME: path.join(context.runtime_home, '.codex'),
     CLAUDE_CONFIG_DIR: path.join(context.runtime_home, '.claude'),
+    // agy otherwise replaces its own binary in the background; the image pins its version.
+    AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
     ...(context.runtime_kind !== 'probe' && context.session.id ? { CLINAVAT_SESSION_ID: context.session.id } : {}),
     SHELL: '/bin/bash',
     TERM: 'xterm-256color',

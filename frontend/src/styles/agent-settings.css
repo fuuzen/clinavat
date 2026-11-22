@@ -193,6 +193,9 @@
 .engine-codex {
   color: var(--accent);
 }
+.engine-antigravity {
+  color: var(--info);
+}
 .engine-logo {
   width: 16px;
   height: 16px;
@@ -204,6 +207,9 @@
 }
 .engine-logo-codex {
   --engine-logo: url("@lobehub/icons-static-svg/icons/codex.svg");
+}
+.engine-logo-antigravity {
+  --engine-logo: url("@lobehub/icons-static-svg/icons/antigravity.svg");
 }
 .settings-menu {
   padding: 6px;

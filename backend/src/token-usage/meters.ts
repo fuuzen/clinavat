@@ -78,3 +78,10 @@ export function codexUsage(model: string, total: CodexTotals, last: CodexTotals,
   };
   return hasTokens(counts) ? priced(model, counts) : null;
 }
+
+/** agy states each prompt's tokens in its ACP prompt response; input excludes cache reads, output includes thinking. */
+export function antigravityUsage(model: string, usage: any): UsageRecord | null {
+  const counts: TokenCounts = { inputTokens: count(usage?.inputTokens), cacheReadTokens: count(usage?.cachedReadTokens),
+    cacheWriteTokens: count(usage?.cachedWriteTokens), outputTokens: count(usage?.outputTokens), reasoningTokens: count(usage?.thoughtTokens) };
+  return hasTokens(counts) ? priced(model, counts) : null;
+}

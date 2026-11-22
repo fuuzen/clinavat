@@ -14,6 +14,33 @@ export async function privateDirectory(directory: string): Promise<void> {
   await chmod(directory, 0o700);
 }
 
+/**
+ * Creates `relative` below `root` one level at a time. Every level must be a real directory: an execution environment
+ * can replace any of them with a link to somewhere else.
+ */
+export async function privateSubdirectory(root: string, relative: string): Promise<string> {
+  let directory = root;
+  for (const part of relative.split('/')) {
+    directory = join(directory, part);
+    await privateDirectory(directory);
+  }
+  return directory;
+}
+
+/** Fails when a level of `relative` below `root` that exists is not a real directory; missing levels stay missing. */
+export async function assertRealDirectories(root: string, relative: string): Promise<void> {
+  let directory = root;
+  for (const part of relative.split('/')) {
+    directory = join(directory, part);
+    const metadata = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!metadata) return;
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('账号运行目录必须是实际目录');
+  }
+}
+
 /** Reads a JSON document that may live in a tree writable by an execution environment; `root` is the trusted boundary. */
 export async function readPrivateJson(file: string, root = dirname(file)): Promise<string | undefined> {
   const opened = await openContained(root, file).catch((error: NodeJS.ErrnoException) => {
@@ -68,6 +95,15 @@ const accountFields: Record<AgentEngine, (document: Document) => Document> = {
       && typeof (tokens as Document).access_token === 'string';
     if (!hasToken && !(typeof fields.OPENAI_API_KEY === 'string' && fields.OPENAI_API_KEY)) return {};
     return fields;
+  },
+  antigravity(document) {
+    if (document.token === undefined) return {};
+    const token = document.token;
+    if (!token || typeof token !== 'object' || Array.isArray(token) || typeof (token as Document).refresh_token !== 'string') {
+      throw new HttpError(409, 'Antigravity 登录凭据格式无效，请重新登录');
+    }
+    if (document.auth_method !== 'consumer') throw new HttpError(409, '当前仅支持 Google 账号订阅登录 Antigravity，请改用个人 Google 账号重新登录');
+    return { token, auth_method: document.auth_method, id_token_email: document.id_token_email };
   },
 };
 

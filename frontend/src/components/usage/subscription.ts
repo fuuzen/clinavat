@@ -17,6 +17,7 @@ const planLabels: Record<AgentEngine, (plan: string, tier: string | null) => str
     return `${titleCase(plan)}${multiplier ? ` ${multiplier}` : ""}`;
   },
   codex: (plan) => codexPlans[plan] ?? titleCase(plan),
+  antigravity: (plan) => titleCase(plan),
 };
 
 export function subscriptionLabel(engine: Slot["engine"], subscription: SlotSubscription | null): string | null {

@@ -3,7 +3,7 @@ import { Bot, LoaderCircle, RefreshCw, Save } from "lucide-react";
 import { api, errorText, post } from "../../api";
 import type { AgentModel, AgentPreference, AgentPreferences, PermissionMode } from "../../types";
 import { effortName } from "../chat/ReasoningEffortControl";
-import { defaultPermissionMode, permissionOptions } from "../chat/PermissionPicker";
+import { defaultPermissionModeFor, permissionOptions } from "../chat/PermissionPicker";
 import "../../styles/agent-defaults.css";
 import { agentEngines, engineLabel, type AgentEngine } from "../../engines";
 
@@ -62,7 +62,7 @@ function EngineDefaults({ engine, view, onSaved }: { engine: AgentEngine; view: 
   const dirty = draft.model !== saved.model || draft.reasoningEffort !== saved.reasoningEffort
     || draft.permissionMode !== saved.permissionMode;
   const permissions = permissionOptions(engine);
-  const siteDefault = permissions.find((option) => option.value === defaultPermissionMode)?.label;
+  const siteDefault = permissions.find((option) => option.value === defaultPermissionModeFor(engine))?.label;
   async function run(action: string, operation: () => Promise<AgentSettingsView>, done: string) {
     setBusy(action); setError(""); setMessage("");
     try { onSaved(await operation()); setMessage(done); }

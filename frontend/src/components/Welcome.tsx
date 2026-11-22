@@ -35,7 +35,7 @@ export default function Welcome({
       </h1>
       <p>
         {overview.user.role === "admin" ? "选择本机或远程项目，" : "连接自己的开发机，选择项目，"}
-        <br />与 Claude Code 或 Codex 开始协作。
+        <br />与 Claude Code、Codex 或 Antigravity 开始协作。
       </p>
       <div className="welcome-actions">
         <button

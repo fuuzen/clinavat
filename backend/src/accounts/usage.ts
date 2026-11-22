@@ -6,6 +6,8 @@ import { privateDirectory, readPrivateJson, writePrivateJson } from './credentia
 import { accountIdentifier, credentialPath } from './paths.js';
 import { ensureClaudeSlotIdentity, readClaudeSlotIdentity } from './claude-identity.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
+import { openContained } from '../runtime/contained-files.js';
+import { atomicWrite } from '../runtime/process.js';
 import { parseClaudeEvent, parseCodexEvent, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 import { usageProbes, type Probe } from './usage-probes.js';
 import type { SlotAuthMethod } from './slot-tokens.js';
@@ -113,6 +115,12 @@ const accountKeys: Record<AgentEngine, (home: string) => Promise<string | null>>
     const id = auth?.tokens?.account_id ?? (typeof auth?.OPENAI_API_KEY === 'string' ? `key:${auth.OPENAI_API_KEY}` : null);
     return typeof id === 'string' ? digest(`codex:${id}`) : null;
   },
+  async antigravity(home) {
+    const login = await readJson(credentialPath(home, 'antigravity'), home);
+    // Google keeps the refresh token across renewals, so it identifies the account when the email is missing.
+    const id = typeof login?.id_token_email === 'string' ? login.id_token_email : login?.token?.refresh_token;
+    return typeof id === 'string' ? digest(`antigravity:${id}`) : null;
+  },
 };
 
 async function accountKey(home: string, engine: AgentEngine): Promise<string | null> {
@@ -158,10 +166,34 @@ const credentialStates: Record<AgentEngine, (document: any, deadline: number) =>
     const refreshed = Date.parse(String(document?.last_refresh ?? ''));
     return { kind: 'oauth', fresh: expires > deadline && Date.now() - refreshed < CODEX_REFRESH_AGE };
   },
+  antigravity(document, deadline) {
+    const token = document?.token;
+    if (typeof token?.refresh_token !== 'string' || !token.refresh_token) return { kind: 'none' };
+    return { kind: 'oauth', fresh: typeof token.access_token === 'string' && Date.parse(String(token.expiry)) > deadline };
+  },
 };
 
 async function inspectCredential(home: string, engine: AgentEngine): Promise<Credential> {
   return credentialStates[engine](await readJson(credentialPath(home, engine), home), Date.now() + TOKEN_MARGIN);
+}
+
+/** agy's installation identity; without it every reading would look like a new installation to the service. */
+async function copyAntigravityIdentity(slotHome: string, probeHome: string): Promise<void> {
+  for (const name of ['installation_id', 'jetski_state.pbtxt']) {
+    const file = join('.gemini', 'antigravity-cli', name);
+    const opened = await openContained(slotHome, file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!opened) continue;
+    let content: string;
+    try {
+      if (opened.size > 64 * 1024) throw new Error('Antigravity 安装身份文件过大');
+      content = await opened.handle.readFile('utf8');
+    } finally { await opened.handle.close(); }
+    await privateDirectory(dirname(join(probeHome, file)));
+    await atomicWrite(join(probeHome, file), content);
+  }
 }
 
 export class SlotUsage {
@@ -480,6 +512,7 @@ export class SlotUsage {
             .filter(key => account?.[key] !== undefined).map(key => [key, account[key]]))));
         await writePrivateJson(join(home, '.claude', '.claude.json'), JSON.stringify({ ...identity, ...installation }));
       }
+      if (slot.engine === 'antigravity') await copyAntigravityIdentity(slot.home_dir, home);
       return await task({ execution, scope, home, binary: await execution.binary(scope, engineProfiles[slot.engine].binary) });
     } finally {
       try {

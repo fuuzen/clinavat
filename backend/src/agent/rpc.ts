@@ -11,6 +11,17 @@ export interface RpcMessage {
   error?: { code?: number; message?: string };
 }
 
+export interface RpcProtocol {
+  /** Names the peer in errors. */
+  name: string;
+  /** Names the connection in errors about it closing. */
+  connection: string;
+  /** Strict JSON-RPC 2.0 peers such as ACP agents expect the version on every message; Codex app-server omits it. */
+  jsonrpc: boolean;
+}
+
+const codexProtocol: RpcProtocol = { name: 'Codex', connection: 'Codex app-server', jsonrpc: false };
+
 export class RpcClient {
   private sequence = 0;
   private pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; cancelTimeout(): void }>();
@@ -18,7 +29,7 @@ export class RpcClient {
   private closed = false;
 
   constructor(private child: ChildProcessWithoutNullStreams, onMessage: (message: RpcMessage) => Promise<void>, onError: (error: Error) => void,
-    private control?: RunControl) {
+    private control?: RunControl, private protocol: RpcProtocol = codexProtocol) {
     const fail = (error: Error) => {
       if (this.closed) return;
       this.close(error);
@@ -33,7 +44,7 @@ export class RpcClient {
         const pending = this.pending.get(message.id)!;
         this.pending.delete(message.id);
         pending.cancelTimeout();
-        if (message.error) pending.reject(new Error(message.error.message ?? 'Codex RPC 请求失败'));
+        if (message.error) pending.reject(new Error(message.error.message ?? `${protocol.name} RPC 请求失败`));
         else pending.resolve(message.result);
         return;
       }
@@ -46,18 +57,20 @@ export class RpcClient {
     }, fail);
     child.stdin.on('error', fail);
     child.once('error', (error) => this.close(error));
-    child.once('close', () => this.close(new Error('Codex app-server 连接已关闭')));
+    child.once('close', () => this.close(new Error(`${protocol.connection} 连接已关闭`)));
   }
 
   send(message: RpcMessage): void {
-    if (!this.closed && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
+    if (!this.closed && this.child.stdin.writable) {
+      this.child.stdin.write(JSON.stringify(this.protocol.jsonrpc ? { jsonrpc: '2.0', ...message } : message) + '\n');
+    }
   }
 
   request(method: string, params: Record<string, unknown>, timeoutMs = 120_000, pauseAware = true): Promise<any> {
-    if (this.closed) return Promise.reject(new Error('Codex app-server 连接已关闭'));
+    if (this.closed) return Promise.reject(new Error(`${this.protocol.connection} 连接已关闭`));
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const expire = () => { this.pending.delete(id); reject(new Error(`Codex ${method} 请求超时`)); };
+      const expire = () => { this.pending.delete(id); reject(new Error(`${this.protocol.name} ${method} 请求超时`)); };
       const cancelTimeout = this.control && pauseAware ? this.control.timer(expire, timeoutMs)
         : (() => { const timer = setTimeout(expire, timeoutMs); return () => clearTimeout(timer); })();
       this.pending.set(id, { resolve, reject, cancelTimeout });
@@ -65,7 +78,7 @@ export class RpcClient {
     });
   }
 
-  close(reason = new Error('Codex 连接已关闭')): void {
+  close(reason = new Error(`${this.protocol.name} 连接已关闭`)): void {
     this.closed = true;
     this.lines.close();
     for (const pending of this.pending.values()) { pending.cancelTimeout(); pending.reject(reason); }

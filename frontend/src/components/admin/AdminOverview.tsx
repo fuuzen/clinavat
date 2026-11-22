@@ -46,9 +46,9 @@ export default function AdminOverview({ overview, health, users, slots, loading,
       <div className="admin-overview-grid">
         <section className="admin-card admin-environment-card">
           <div className="admin-card-heading"><div><Server size={17} /><h3>运行环境</h3></div><button className="text-button" onClick={() => onNavigate("host")}>查看宿主机<ArrowUpRight size={13} /></button></div>
-          <div className="admin-service-summary"><span className="admin-service-symbol"><BrandMark size={32} /></span><div><strong>Clinavat 控制服务</strong><small>统一调度 Claude Code 与 Codex</small></div><span className={`admin-status ${health?.status === "ok" ? "success" : ""}`}>{health ? health.status === "ok" ? "服务正常" : "状态异常" : loading ? "检测中" : "未获取"}</span></div>
+          <div className="admin-service-summary"><span className="admin-service-symbol"><BrandMark size={32} /></span><div><strong>Clinavat 控制服务</strong><small>统一调度 Claude Code、Codex 与 Antigravity</small></div><span className={`admin-status ${health?.status === "ok" ? "success" : ""}`}>{health ? health.status === "ok" ? "服务正常" : "状态异常" : loading ? "检测中" : "未获取"}</span></div>
           <div className="admin-runtime-list">
-            {([{ key: "claude", name: "Claude Code", description: "Anthropic CLI" }, { key: "codex", name: "Codex", description: "OpenAI CLI" }, { key: "mutagen", name: "文件同步", description: "Mutagen" }, { key: "ssh", name: "远程连接", description: "OpenSSH" }] as const).map((runtime) => (
+            {([{ key: "claude", name: "Claude Code", description: "Anthropic CLI" }, { key: "codex", name: "Codex", description: "OpenAI CLI" }, { key: "agy", name: "Antigravity", description: "Google CLI" }, { key: "mutagen", name: "文件同步", description: "Mutagen" }, { key: "ssh", name: "远程连接", description: "OpenSSH" }] as const).map((runtime) => (
               <div key={runtime.key}><span className={`admin-runtime-dot ${health?.runtime[runtime.key] ? "available" : ""}`} /><strong>{runtime.name}</strong><small>{runtime.description}</small><span className={health?.runtime[runtime.key] ? "positive-text" : "admin-muted"}>{health ? health.runtime[runtime.key] ? "可用" : "不可用" : "—"}</span></div>
             ))}
           </div>

@@ -47,6 +47,7 @@ export const db: DemoState = {
   agentDefaults: {
     claude: { model: null, reasoningEffort: null, permissionMode: null },
     codex: { model: null, reasoningEffort: null, permissionMode: null },
+    antigravity: { model: null, reasoningEffort: null, permissionMode: null },
   },
   ...createFixtures(),
 };

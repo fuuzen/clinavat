@@ -46,11 +46,12 @@ export function useChatCommands(props: {
   const [modelRequest, setModelRequest] = useState(0);
   const [permissionRequest, setPermissionRequest] = useState(0);
   const [behaviorRequest, setBehaviorRequest] = useState(0);
-  const commands = engineProfiles[props.engine].rolePresets ? [...commonCommands, {
-    name: "role", description: "切换 Codex 角色预设", argumentHint: "default | reviewer | architect",
-  }, {
-    name: "goal", description: "查看、创建或管理原生 Goal", argumentHint: "pause | edit [目标内容] | resume | 目标内容",
-  }] : commonCommands;
+  const profile = engineProfiles[props.engine];
+  const commands = [
+    ...commonCommands.filter((command) => command.name !== "compact" || profile.compact),
+    ...(profile.rolePresets ? [{ name: "role", description: "切换 Codex 角色预设", argumentHint: "default | reviewer | architect" }] : []),
+    ...(profile.goal ? [{ name: "goal", description: "查看、创建或管理原生 Goal", argumentHint: "pause | edit [目标内容] | resume | 目标内容" }] : []),
+  ];
 
   async function handleCommand(content: string): Promise<"message" | "handled" | "retained" | "blocked"> {
     if (content.trim() === "/") { setHelpOpen(true); return "handled"; }
@@ -84,6 +85,7 @@ export function useChatCommands(props: {
     if (name === "clear") { props.onNew(); return "handled"; }
     if (props.active || props.busy) return fail("请等待当前任务结束或停止后再修改设置。");
     if (name === "compact") {
+      if (!profile.compact) return fail(`${engineLabel(props.engine)} 暂不支持 /compact。`);
       if (!props.session) return fail("当前还没有原生会话可压缩，请先发送一条消息。");
       if (props.engine === "codex" && args) return fail("Codex 的 /compact 暂不接受参数。");
       return "message";

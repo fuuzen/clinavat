@@ -63,12 +63,13 @@ export default function HostManagement({ health, loading, error, onRefresh }: Pr
       <section aria-labelledby="admin-host-runtime-heading">
         <div className="admin-host-section-heading">
           <div><h3 id="admin-host-runtime-heading">CLI 运行环境</h3><p>统一查看智能体引擎与基础依赖的可用性。</p></div>
-          <span className="admin-host-section-label">2 个智能体引擎</span>
+          <span className="admin-host-section-label">3 个智能体引擎</span>
         </div>
         <div className="admin-host-engines">
           {([
             { key: "claude", name: "Claude Code", letter: "✳", description: "Claude 官方命令行运行环境" },
             { key: "codex", name: "Codex", letter: ">_", description: "Codex 官方命令行运行环境" },
+            { key: "agy", name: "Antigravity", letter: "A", description: "Antigravity 官方命令行运行环境" },
           ] as const).map((engine) => (
             <article className="admin-card admin-host-engine" key={engine.key}>
               <div className="admin-host-engine-heading">

@@ -9,6 +9,7 @@ import { slotForUser } from '../accounts/access.js';
 import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { expandProjectReferences } from '../runtime/project-references.js';
 import { imageTypes, maxImagesPerMessage, messageImages, readImage, saveImage, storedImages } from '../message-images.js';
+import { engineProfiles } from '../agent/engines.js';
 
 export const selectedSlotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export const selectionFields = {
@@ -88,6 +89,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     if (/^\/[a-z][\w-]*(?:\s|$)/i.test(input.content) && !compact) {
       throw new HttpError(400, '当前网页端不支持这个命令，请输入 / 查看可用命令');
     }
+    if (compact && !engineProfiles[session.engine].compact) throw new HttpError(400, `${engineProfiles[session.engine].label} 暂不支持 /compact`);
     if (compact && !session.native_session_id) throw new HttpError(409, '请先开始一次对话，再压缩原生上下文');
     if (compact && session.engine === 'codex' && input.content !== '/compact') {
       throw new HttpError(400, 'Codex 的 /compact 暂不接受附加参数');

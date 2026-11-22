@@ -4,7 +4,7 @@ import { readJsonLines } from '../agent/ndjson.js';
 import { RpcClient } from '../agent/rpc.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 import type { AgentEngine } from '../agent/engines.js';
-import { parseClaudeUsage, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
+import { parseAntigravityUsage, parseClaudeUsage, parseCodexRead, type UsageUpdate } from './usage-parsers.js';
 
 const PROBE_TIMEOUT = 30_000;
 
@@ -12,7 +12,7 @@ export interface Probe { execution: ExecutionHost; scope: ExecutionScope; binary
 
 export function probeEnvironment({ execution, scope, home }: Probe): NodeJS.ProcessEnv {
   return { ...execution.baseEnvironment(scope), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
-    CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), SHELL: '/bin/bash' };
+    CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), AGY_CLI_DISABLE_AUTO_UPDATE: 'true', SHELL: '/bin/bash' };
 }
 
 export async function claudeProbe(probe: Probe): Promise<UsageUpdate> {
@@ -81,8 +81,18 @@ export async function withCodexServer<T>(probe: Probe, task: (rpc: RpcClient) =>
   }
 }
 
+// `/usage` answers from the CLI itself in print mode: it starts no agent turn and spends no quota.
+export async function antigravityProbe(probe: Probe): Promise<UsageUpdate> {
+  const result = await probe.execution.run(probe.binary, ['--output-format', 'json', '-p', '/usage'], {
+    scope: probe.scope, cwd: probe.home, env: probeEnvironment(probe), timeout: PROBE_TIMEOUT, maxBytes: 1024 * 1024 });
+  const line = result.stdout.split('\n').map(item => item.trim()).filter(item => item.startsWith('{')).at(-1);
+  if (!line) throw new Error(`Antigravity 额度查询失败：${(result.stderr || result.stdout).trim().slice(0, 300) || `退出码 ${result.code}`}`);
+  return parseAntigravityUsage(JSON.parse(line));
+}
+
 /** Reads a slot's subscription quota through its CLI, without starting a conversation. */
 export const usageProbes: Record<AgentEngine, (probe: Probe) => Promise<UsageUpdate>> = {
   claude: claudeProbe,
   codex: codexProbe,
+  antigravity: antigravityProbe,
 };

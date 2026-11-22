@@ -35,6 +35,10 @@ const yoloOption: PermissionOption = {
 /** New conversations start here unless the user has chosen another default. */
 export const defaultPermissionMode: PermissionMode = "auto";
 
+/** The site default where the CLI offers it, else asking for each tool, as the Hub does. */
+export const defaultPermissionModeFor = (engine: AgentEngine): PermissionMode =>
+  engineProfiles[engine].permissionModes.includes(defaultPermissionMode) ? defaultPermissionMode : "manual";
+
 const nativeOptionsFor = (engine: AgentEngine) => nativeOptions.filter((option) => engineProfiles[engine].permissionModes.includes(option.value));
 
 export function permissionOptions(engine: AgentEngine): PermissionOption[] {

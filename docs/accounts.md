@@ -21,7 +21,7 @@
 
 ## 创建并登录槽位
 
-1. 在「管理面板 → 槽位管理」创建槽位，例如 `slot_claude_01`，选择 `claude` 或 `codex`。
+1. 在「管理面板 → 槽位管理」创建槽位，例如 `slot_claude_01`，选择 Claude Code、Codex 或 Antigravity。
 2. 在服务器上，以运行 Hub 的系统用户、使用该槽位的 HOME 目录完成官方登录。在槽位卡片中点击「生成登录命令」：虚拟机模式下，Hub 会先启动该槽位的虚拟机，生成的命令在虚拟机内登录，使账号从一开始就使用槽位自己的机器和出口，因此登录前需先在「网关 → 出口绑定」中为槽位选择节点。宿主机模式下生成的是宿主机命令。Docker 部署的示例：
 
    ```bash
@@ -31,9 +31,11 @@
    docker compose exec -e HOME=/srv/clinavat/slots/slot_codex_01 \
      -e CODEX_HOME=/srv/clinavat/slots/slot_codex_01/.codex \
      hub codex -c 'cli_auth_credentials_store="file"' login --device-auth
+   docker compose exec -e HOME=/srv/clinavat/slots/slot_agy_01 \
+     -e AGY_CLI_DISABLE_AUTO_UPDATE=true hub agy
    ```
 
-   已登录的槽位在迁移数据目录或改为虚拟机运行时不需要重新登录，登录状态随槽位目录保留。重新登录前，先停止所有正在使用该槽位的任务；生成登录命令时会拒绝仍在运行或查询额度的槽位，并预先准备 CLI 机器身份。目前支持 Claude Code 的 claude.ai OAuth 登录和 Codex 的文件方式认证。
+   已登录的槽位在迁移数据目录或改为虚拟机运行时不需要重新登录，登录状态随槽位目录保留。重新登录前，先停止所有正在使用该槽位的任务；生成登录命令时会拒绝仍在运行或查询额度的槽位，并预先准备 CLI 机器身份。目前支持 Claude Code 的 claude.ai OAuth 登录、Codex 的文件方式认证和 Antigravity 的个人 Google 账号登录，见下文[Antigravity 槽位](#antigravity-槽位)。
    Claude 槽位也可以改用**长期令牌**，见下文。
 3. 在槽位卡片上点击用户选择框，搜索并选择一位成员即保存；选择「未分配」则取消分配。一个用户可以拥有多个槽位。早期版本中多人共享的槽位会显示“待整理”，需要管理员手动选择一位使用者。
 4. 卡片右上角的开关用于启用 / 停用槽位；正在使用的槽位要等任务结束后才能调整。
@@ -58,6 +60,15 @@
 - **原登录会被删除**：改用令牌时会删除槽位中原有的浏览器登录（`claudeAiOauth` 和 `oauthAccount`），以免智能体还能读到不再使用的凭据。改回浏览器登录后需要重新生成登录命令登录。
 - **只有推理权限**：令牌不能读取订阅额度和账号资料，所以额度只在对话运行时由 CLI 的额度事件更新，也查不到订阅档位。这类槽位**不参与 Claude 自动选择**，只能作为固定账号使用。
 - **不会刷新**：令牌没有刷新令牌，不会和运行中的 CLI 争用刷新；到期或在 claude.ai 撤销后需要重新生成并更换。设置时填写的有效期用于显示到期日，见下文「登录状态」。令牌长期有效，泄露的影响比浏览器登录更大，请只把这类槽位授权给可信用户。
+
+### Antigravity 槽位
+
+Antigravity 槽位运行 Google 的 Antigravity CLI（`agy`），使用个人 Google 账号的订阅额度。
+
+- **登录**：运行生成的登录命令后，在 agy 中选择用 Google 账号登录。服务器上不会自动打开浏览器：在自己的电脑上打开终端里显示的链接，登录后把页面给出的授权码粘贴回终端，完成首次设置后输入 `/exit` 退出。登录前先在「网关 → 出口绑定」中为槽位选择节点，并按出口所在地设置槽位时区。
+- **只支持个人 Google 账号订阅**：企业账号（Gemini Enterprise、Google Cloud 项目计费）和 Gemini API key 不受支持，Hub 会拒绝这类登录。Google Workspace 账号不包含 Antigravity 套餐。
+- **凭据存放**：agy 在有桌面 keyring 的电脑上把令牌存进 keyring；槽位所在的虚拟机或服务进程没有桌面会话，agy 会改为保存到槽位 HOME 的 `.gemini/antigravity-cli/antigravity-oauth-token`。访问令牌每小时由 agy 原地刷新，刷新令牌不变。
+- **不支持**：自动选择和切换账号（对话可以手动换到另一个 Antigravity 槽位并继续原来的会话）、长期令牌、额度重置。
 
 ### 槽位状态
 
@@ -102,9 +113,9 @@ API 中 `slot_mode` 表示选择方式，`slot_id` 表示实际账号。创建�
 
 ## 额度显示
 
-槽位卡片和输入框的槽位菜单会显示各个额度窗口的已用 / 剩余百分比、重置倒计时、更新时间和查询状态。槽位图标外圈表示主额度（优先显示每周总额度），里面一圈表示 5 小时窗口（仅在服务端提供时显示）。Claude 账号有按模型单独计算的每周窗口（如 Fable）时，最里面再加一圈显示其中已用比例最高的一个，菜单中也会多一行。菜单中的账号名旁显示订阅档位。没有任何额度数据的窗口显示为虚线，不会当作 0%；数据过期或最近一次查询失败时，继续显示上次的额度并调暗；已过重置时间的窗口显示为空并调暗，等待新的数据。
+槽位卡片和输入框的槽位菜单会显示各个额度窗口的已用 / 剩余百分比、重置倒计时、更新时间和查询状态。槽位图标外圈表示主额度（优先显示每周总额度），里面一圈表示 5 小时窗口（仅在服务端提供时显示）。Claude 账号有按模型单独计算的每周窗口（如 Fable）时，最里面再加一圈显示其中已用比例最高的一个，菜单中也会多一行。Antigravity 按模型分组计算额度：外圈和里圈是 Gemini 分组的每周和 5 小时窗口，最里面一圈是其他分组（Claude 与 GPT 模型）中用得最多的每周窗口；套餐不同时，有的分组只有每周窗口。菜单中的账号名旁显示订阅档位。没有任何额度数据的窗口显示为虚线，不会当作 0%；数据过期或最近一次查询失败时，继续显示上次的额度并调暗；已过重置时间的窗口显示为空并调暗，等待新的数据。
 
-**数据来源**：只采用账号服务端返回的数据，不根据 Token 消耗推算。Claude Code 通过控制协议 `get_usage`（实验接口）读取，Codex 通过 app-server 的 `account/rateLimits/read` 读取（含积分余额和重置卡）。“额度受限”只来自服务端的明确信号。
+**数据来源**：只采用账号服务端返回的数据，不根据 Token 消耗推算。Claude Code 通过控制协议 `get_usage`（实验接口）读取，Codex 通过 app-server 的 `account/rateLimits/read` 读取（含积分余额和重置卡），Antigravity 通过 `agy -p /usage` 读取（只由 CLI 应答，不开启对话，也不消耗额度）。“额度受限”只来自服务端的明确信号。
 
 活跃 Claude 会话直接接收原生 `rate_limit_event`，Codex 接收 `account/rateLimits/updated`。Claude 的 statusline 也能向本地命令提供额度百分比和窗口重置时间，但已核验的 2.1.308 / 2.1.310 仅在交互终端界面执行该命令，不适用于本项目的 `-p stream-json` 模式，因此这里使用结构化事件。`resets_at` / `resetsAt` 表示额度窗口重置时间，不表示充值到账时间。
 
@@ -194,7 +205,8 @@ Hub 记录每一轮对话消耗的 Token，按用户、槽位和模型汇总：
 
 | 内容 | 位置 |
 | --- | --- |
-| 槽位授权 | 槽位 HOME 下的 `.claude` 或 `.codex`，始终留在槽位内，不按对话复制 |
+| 槽位授权 | 槽位 HOME 下的 `.claude`、`.codex` 或 `.gemini/antigravity-cli`，始终留在槽位内，不按对话复制 |
+| Antigravity 安装身份 | 槽位 `.gemini/antigravity-cli/` 下的 `installation_id` 和 `jetski_state.pbtxt`，属于槽位，不随用户配置迁出；额度探针也带入这两个文件 |
 | Claude 长期令牌 | `accounts/slot-tokens/<slot-id>.json`，用主密钥加密 |
 | Claude CLI 机器身份 | `accounts/slot-cli-identities/<slot-id>.json`，并常驻槽位 `.claude/.claude.json`；与 VM 的 `/etc/machine-id` 是不同标识 |
 | 用户的原生会话 | `users/<user-id>/engine-state/<engine>/`，使用槽位时以目录链接接入 |

@@ -1,7 +1,7 @@
 import type { PermissionMode } from "./types";
 
 /** The CLIs a slot can hold, and what the web view shows and offers for each. Keep in line with backend/src/agent/engines.ts. */
-export const agentEngines = ["claude", "codex"] as const;
+export const agentEngines = ["claude", "codex", "antigravity"] as const;
 export type AgentEngine = typeof agentEngines[number];
 
 export interface EngineProfile {
@@ -13,8 +13,10 @@ export interface EngineProfile {
   setupToken: boolean;
   rolePresets: boolean;
   goal: boolean;
-  /** How the account's limits can be reset: Claude's weekly reset of the 5-hour window, or Codex's reset credits. */
-  limitReset: "weekly" | "credits";
+  /** `/compact` summarizes the native conversation. */
+  compact: boolean;
+  /** How the account's limits can be reset: Claude's weekly reset of the 5-hour window, Codex's reset credits, or not at all. */
+  limitReset: "weekly" | "credits" | null;
 }
 
 export const engineProfiles: Record<AgentEngine, EngineProfile> = {
@@ -25,6 +27,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     setupToken: true,
     rolePresets: false,
     goal: false,
+    compact: true,
     limitReset: "weekly",
   },
   codex: {
@@ -34,7 +37,18 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     setupToken: false,
     rolePresets: true,
     goal: true,
+    compact: true,
     limitReset: "credits",
+  },
+  antigravity: {
+    label: "Antigravity",
+    permissionModes: ["manual", "accept-edits", "full-access", "yolo"],
+    automaticSlot: false,
+    setupToken: false,
+    rolePresets: false,
+    goal: false,
+    compact: false,
+    limitReset: null,
   },
 };
 

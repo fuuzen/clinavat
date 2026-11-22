@@ -495,6 +495,6 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   async health() {
     const image = async (alias: string) => (await this.lxc(['image', 'info', this.target(alias)], 15_000).catch(() => undefined))?.code === 0;
     const [agent, workspace] = await Promise.all([image(this.config.lxdImage), image(this.config.lxdWorkspaceImage)]);
-    return { kind: this.kind, claude: agent, codex: agent, mutagen: workspace, ssh: agent && workspace };
+    return { kind: this.kind, claude: agent, codex: agent, agy: agent, mutagen: workspace, ssh: agent && workspace };
   }
 }

@@ -25,6 +25,7 @@
 .admin-host-engine-mark { display: flex; align-items: center; justify-content: center; width: 43px; height: 43px; border-radius: 11px; font-size: 29px; font-weight: 600; background: var(--surface); color: var(--text); border: 1px solid var(--line); }
 .admin-host-engine-mark.claude { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-line); }
 .admin-host-engine-mark.codex { font-family: var(--mono); font-size: 19px; letter-spacing: -3px; padding-right: 3px; }
+.admin-host-engine-mark.antigravity { color: var(--info); background: var(--info-bg); border-color: var(--info-line); }
 .admin-host-engine h4 { font-size: 21px; font-weight: 600; margin: 7px 0 6px; letter-spacing: -.4px; }
 .admin-host-engine-description { color: var(--muted); font-size: 12px; margin: 0; }
 .admin-host-engine-summary { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }

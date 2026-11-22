@@ -5,6 +5,11 @@ export const permissionModes = ['manual', 'accept-edits', 'auto', 'full-access',
 export type PermissionMode = typeof permissionModes[number];
 /** New conversations of users without their own default let the CLI's native reviewer decide. */
 export const defaultPermissionMode: PermissionMode = 'auto';
+
+/** The site default where the engine offers it; agy has no native reviewer the Hub can use, so it asks instead. */
+export function defaultPermissionModeFor(engine: AgentEngine): PermissionMode {
+  return engineProfiles[engine].permissionModes.includes(defaultPermissionMode) ? defaultPermissionMode : 'manual';
+}
 const modeNames: Record<PermissionMode, string> = {
   manual: '按需审批', 'accept-edits': '自动接受编辑', auto: '自动审批', 'full-access': 'Full access', yolo: 'YOLO',
 };

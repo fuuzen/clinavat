@@ -5,7 +5,7 @@ import type { SlotUsage, SlotUsageView } from '../usage.js';
 import { claudeProbe, type Probe } from '../usage-probes.js';
 import { claudeLimitReset } from './claude-terminal.js';
 import { codexLimitReset } from './codex.js';
-import type { AgentEngine } from '../../agent/engines.js';
+import { engineProfiles, type AgentEngine } from '../../agent/engines.js';
 
 export interface LimitResetResult {
   outcome: string;
@@ -33,12 +33,14 @@ export async function resetSlotLimit(context: Context, slotId: string, user: Pic
   if (slot.status === 'DISABLED') throw new HttpError(409, '槽位已停用');
   if (slot.auth_method === 'token') throw new HttpError(409, '长期令牌账号无法使用额度重置');
   if (creditId !== undefined && slot.engine !== 'codex') throw new HttpError(400, '只有 Codex 账号可以指定重置卡');
+  const reset = resets[slot.engine];
+  if (!engineProfiles[slot.engine].limitReset || !reset) throw new HttpError(400, `${engineProfiles[slot.engine].label} 账号不支持额度重置`);
   if (resetting.has(slot.id)) throw new HttpError(409, '该槽位正在重置额度，请稍候');
   const usage = context.config.usage!;
   resetting.add(slot.id);
   try {
     const identity = await usage.captureIdentity(slot);
-    return await usage.isolated(slot, probe => resets[slot.engine](usage, slot, probe, identity, creditId));
+    return await usage.isolated(slot, probe => reset(usage, slot, probe, identity, creditId));
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(409, `额度重置失败：${error instanceof Error ? error.message : String(error)}`);
@@ -68,4 +70,5 @@ async function resetCodex(usage: SlotUsage, slot: Slot, probe: Probe, identity: 
   return { outcome: result.outcome, message: result.message, detail: null, usage: await usage.record(slot, result.usage, identity) };
 }
 
-const resets: Record<AgentEngine, typeof resetCodex> = { claude: resetClaude, codex: resetCodex };
+/** Each CLI's way to reset its limits; null where the service offers none. */
+const resets: Record<AgentEngine, typeof resetCodex | null> = { claude: resetClaude, codex: resetCodex, antigravity: null };

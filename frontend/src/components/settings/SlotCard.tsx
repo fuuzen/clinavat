@@ -50,7 +50,7 @@ export default function SlotCard({ slot, usage, users, busy, onUpdate, onLoginCh
           disabled={busy || running} onSave={(userId) => onUpdate(slot, { allowedUserIds: userId ? [userId] : [] })} />
         {assignmentError && <p className="slot-user-error">{assignmentError}</p>}
         {slot.status !== "DISABLED" && <SlotUsageMeter slotId={slot.id} engine={slot.engine} usage={usage} refreshable={slot.auth_method !== "token"} />}
-        {slot.status !== "DISABLED" && slot.auth_method !== "token" && (
+        {slot.status !== "DISABLED" && slot.auth_method !== "token" && engineProfiles[slot.engine].limitReset && (
           <SlotResetAccess slot={slot} usage={usage} disabled={busy} onChange={(membersCanReset) => onUpdate(slot, { membersCanReset })} />
         )}
         {slot.status !== "DISABLED" && <SlotModels slot={slot} />}

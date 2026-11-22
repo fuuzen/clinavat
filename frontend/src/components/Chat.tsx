@@ -16,7 +16,7 @@ import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
 import { useConversationSlot } from "./chat/useConversationSlot";
-import PermissionPicker, { defaultPermissionMode } from "./chat/PermissionPicker";
+import PermissionPicker, { defaultPermissionMode, defaultPermissionModeFor } from "./chat/PermissionPicker";
 import WorkspaceHeader from "./chat/WorkspaceHeader";
 import ChatComposer, { type ComposerHandle } from "./chat/ChatComposer";
 import RuntimeStrip from "./chat/RuntimeStrip";
@@ -166,7 +166,7 @@ export default function Chat(props: Props) {
   const personalPermission = overview.agentDefaults?.[currentEngine]?.permissionMode;
   useEffect(() => {
     permissionRequestRef.current += 1;
-    setPermissionMode(session?.permission_mode || personalPermission || defaultPermissionMode);
+    setPermissionMode(session?.permission_mode || personalPermission || defaultPermissionModeFor(currentEngine));
     setPermissionSaving(false);
   }, [session?.id, project?.id, session?.permission_mode, currentEngine, personalPermission]);
   useLayoutEffect(() => {

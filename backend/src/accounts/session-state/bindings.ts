@@ -1,11 +1,11 @@
 import { readdir, readlink, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
+import { assertRealDirectories, privateDirectory, privateSubdirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import { accountIdentifier } from '../paths.js';
 import { metadata } from './files.js';
 import { assertSessionStateFiles, bindSessionStateFiles, detachSessionStateFiles } from './goal-files.js';
 import { engineDirectory, sessionStateDirectories, sessionStateFiles, userSessionStateRoot } from './layout.js';
-import { isAgentEngine, type AgentEngine } from '../../agent/engines.js';
+import { engineProfiles, isAgentEngine, type AgentEngine } from '../../agent/engines.js';
 
 interface BindingMarker { version: 1; userId: string; engine: AgentEngine; root: string }
 const markerName = '.slot-session-state.json';
@@ -27,8 +27,7 @@ export async function bindSlotSessionState(dataDir: string, userId: string, slot
   if (previous && (previous.userId !== userId || previous.engine !== engine || previous.root !== root)) {
     throw new Error('槽位仍连接其他用户的原生会话存储');
   }
-  const directory = engineDirectory(slotHome, engine);
-  await privateDirectory(directory);
+  const directory = await privateSubdirectory(slotHome, engineProfiles[engine].configDirectory);
   await writePrivateJson(join(slotHome, markerName), JSON.stringify({ version: 1, userId, engine, root } satisfies BindingMarker));
   for (const name of sessionStateDirectories(engine)) {
     const file = join(directory, name);
@@ -50,6 +49,7 @@ export async function bindSlotSessionState(dataDir: string, userId: string, slot
 
 export async function detachSlotSessionState(slotHome: string, engine: AgentEngine): Promise<void> {
   const marker = await readBinding(slotHome);
+  await assertRealDirectories(slotHome, engineProfiles[engine].configDirectory);
   const directory = engineDirectory(slotHome, engine);
   if (!marker) {
     for (const name of [...sessionStateDirectories(engine), ...sessionStateFiles(engine)]) {
@@ -78,6 +78,7 @@ export async function assertSlotSessionState(dataDir: string, userId: string, sl
   if (!marker || marker.userId !== userId || marker.engine !== engine || marker.root !== root) {
     throw new Error('槽位原生会话存储归属不匹配');
   }
+  await assertRealDirectories(slotHome, engineProfiles[engine].configDirectory);
   const directory = engineDirectory(slotHome, engine);
   for (const name of sessionStateDirectories(engine)) {
     const file = join(directory, name);

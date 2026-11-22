@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { startClaude } from './claude/run.js';
 import { startCodex } from './codex/run.js';
+import { startAntigravity } from './antigravity/run.js';
 import { engineProfiles, type AgentEngine } from './engines.js';
 import { getPermissionMode } from './permissions.js';
 import { UserInputRequests } from './user-input.js';
@@ -19,6 +20,7 @@ import type { CodexGoal, CodexGoalChange } from './codex/goal.js';
 const starters: Record<AgentEngine, (services: RunServices, prompt: AgentPrompt, signal: AbortSignal) => Promise<AgentRun>> = {
   claude: startClaude,
   codex: startCodex,
+  antigravity: startAntigravity,
 };
 
 /**

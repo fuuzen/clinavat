@@ -171,10 +171,52 @@ async function claudeModels(config: AgentConfig, context: ProbeContext): Promise
   }
 }
 
+const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const effortSuffix = new RegExp(`^(.+)-(${effortOrder.join('|')})$`);
+
+/**
+ * agy lists one model ID per thinking level, such as gemini-3.8-flash-high, while its conversations pick the base
+ * model and the level separately. A suffix names a level only when the base has more than one of them:
+ * gpt-oss-120b-medium is a model of its own.
+ */
+export function groupAntigravityModels(entries: { id: string; label: string }[]): AgentModel[] {
+  const variants = new Map<string, string[]>();
+  for (const { id } of entries) {
+    const match = effortSuffix.exec(id);
+    if (match) variants.set(match[1], [...variants.get(match[1]) ?? [], match[2]]);
+  }
+  const models = new Map<string, AgentModel>();
+  for (const { id, label } of entries) {
+    const match = effortSuffix.exec(id);
+    const efforts = match ? variants.get(match[1])! : [];
+    if (match && efforts.length > 1) {
+      if (!models.has(match[1])) models.set(match[1], { id: match[1], name: label.replace(/\s*\([^)]*\)$/, ''),
+        reasoningEfforts: [...efforts].sort((left, right) => effortOrder.indexOf(left) - effortOrder.indexOf(right)).map(effortOption) });
+    } else models.set(id, { id, name: label, reasoningEfforts: [] });
+  }
+  return [...models.values()];
+}
+
+async function antigravityModels(config: AgentConfig, context: ProbeContext): Promise<AgentModel[]> {
+  const { execution } = config;
+  const scope = probeScope(context);
+  // The output format must come before the subcommand.
+  const result = await execution.run(await execution.binary(scope, 'agy'), ['--output-format', 'json', 'models'], {
+    scope, cwd: context.runtime_home, env: agentEnvironment(execution, context, scope), timeout: 60_000, maxBytes: 1024 * 1024 });
+  const line = result.stdout.split('\n').map(item => item.trim()).filter(item => item.startsWith('{')).at(-1);
+  const models = line ? JSON.parse(line)?.command?.data?.models : undefined;
+  if (!Array.isArray(models)) {
+    throw new Error(`Antigravity 未返回有效模型目录：${(result.stderr || result.stdout).trim().slice(0, 300) || `退出码 ${result.code}`}`);
+  }
+  return groupAntigravityModels(models.filter((model: any) => typeof model?.id === 'string')
+    .map((model: any) => ({ id: model.id, label: typeof model.label === 'string' ? model.label : model.id })));
+}
+
 /** Reads the models a slot's account may use from its CLI. */
 const modelReaders: Record<AgentEngine, (config: AgentConfig, context: ProbeContext) => Promise<AgentModel[]>> = {
   claude: claudeModels,
   codex: codexModels,
+  antigravity: antigravityModels,
 };
 
 async function probeModels(config: AgentConfig, context: CatalogContext): Promise<SlotModelCatalog> {

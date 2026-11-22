@@ -3,7 +3,7 @@ import type { CommandResult } from '../runtime/types.js';
 import type { MachineKind } from './machine-plan.js';
 
 export type ExecutionKind = 'process' | 'vm';
-export type ExecutionBinary = 'claude' | 'codex' | 'mutagen' | 'ssh';
+export type ExecutionBinary = 'claude' | 'codex' | 'agy' | 'mutagen' | 'ssh';
 
 /**
  * What a process may touch. A VM host mounts each path at the same absolute location in the owner's
@@ -42,6 +42,7 @@ export interface ExecutionHealth {
   kind: ExecutionKind;
   claude: boolean;
   codex: boolean;
+  agy: boolean;
   mutagen: boolean;
   ssh: boolean;
 }

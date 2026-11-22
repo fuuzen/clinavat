@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
+import { assertRealDirectories, privateDirectory, readPrivateJson, writePrivateJson } from '../credential-files.js';
 import { accountIdentifier } from '../paths.js';
 import { moveSlotProfile, pathExists } from './profile-files.js';
 import { archiveAccountArtifacts, assertNoAccountArtifacts } from './profile-artifacts.js';
@@ -22,6 +22,7 @@ function profileHome(dataDir: string, userId: string, slotId: string): string {
 }
 
 async function assertUnboundSessionState(home: string, engine: AgentEngine): Promise<void> {
+  await assertRealDirectories(home, engineProfiles[engine].configDirectory);
   if (await pathExists(join(home, '.slot-session-state.json'))) throw new Error('槽位仍有原生会话映射记录，已停止归档未归属配置');
   for (const name of [...sessionStateDirectories(engine), ...sessionStateFiles(engine)]) {
     if ((await metadata(join(engineDirectory(home, engine), name)))?.isSymbolicLink()) {
@@ -62,11 +63,19 @@ export async function archiveUnboundSlotProfile(dataDir: string, slotId: string,
   await writePrivateJson(join(directory, 'source.json'), JSON.stringify({ version: 1, slotId, home, engine, createdAt: new Date().toISOString() }));
   await archiveAccountArtifacts(dataDir, slotId, home, engine);
   await moveSlotProfile(home, runtime, engine, 'archive');
-  const entries = await readdir(runtime);
-  const engineName = engineProfiles[engine].configDirectory;
-  const onlyEmptyEngine = entries.length === 1 && entries[0] === engineName
-    && (await readdir(join(runtime, engineName))).length === 0;
-  if (!entries.length || onlyEmptyEngine) await rm(directory, { recursive: true });
+  if (await onlyEmptyPath(runtime, engineProfiles[engine].configDirectory.split('/'))) await rm(directory, { recursive: true });
+}
+
+/** Nothing but the (empty) directories leading to `parts`, or nothing at all, was archived. */
+async function onlyEmptyPath(root: string, parts: string[]): Promise<boolean> {
+  let directory = root;
+  for (const part of parts) {
+    const entries = await readdir(directory);
+    if (!entries.length) return true;
+    if (entries.length !== 1 || entries[0] !== part) return false;
+    directory = join(directory, part);
+  }
+  return !(await readdir(directory)).length;
 }
 
 async function ensureProfile(dataDir: string, userId: string, slotId: string, engine: AgentEngine): Promise<string> {

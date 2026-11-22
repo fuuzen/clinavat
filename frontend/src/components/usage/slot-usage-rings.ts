@@ -36,6 +36,17 @@ const windowLayouts: Record<AgentEngine, (windows: UsageWindow[]) => AccountWind
       fiveHour,
     };
   },
+  antigravity(windows) {
+    // Each model group has its own weekly and 5-hour windows: Gemini's are the main ones, the busiest other group the core.
+    const group = (window: UsageWindow) => window.key.replace(/-[^-]+$/, "");
+    const weekly = windows.filter((window) => window.windowMinutes === 10080);
+    const main = weekly.find((window) => window.key.startsWith("gemini")) ?? weekly[0];
+    return {
+      main,
+      fiveHour: windows.find((window) => window.windowMinutes === 300 && main && group(window) === group(main)),
+      model: weekly.filter((window) => window !== main).sort((left, right) => (right.usedPercent ?? -1) - (left.usedPercent ?? -1))[0],
+    };
+  },
 };
 
 export function accountWindows(engine: AgentEngine, windows: UsageWindow[]): AccountWindows {

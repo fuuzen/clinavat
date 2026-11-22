@@ -6,7 +6,7 @@ const health = {
   status: "ok",
   version: "demo",
   execution: "process",
-  runtime: { claude: true, codex: true, mutagen: true, ssh: true },
+  runtime: { claude: true, codex: true, agy: true, mutagen: true, ssh: true },
 };
 
 export const authHandlers = [

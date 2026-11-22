@@ -12,8 +12,9 @@ export class ProcessExecutionHost implements ExecutionHost {
   readonly kind = 'process' as const;
   private readonly binaries: Record<ExecutionBinary, string>;
 
-  constructor(config: { claudeBinary: string; codexBinary: string; mutagenBinary: string; sshBinary: string }) {
-    this.binaries = { claude: config.claudeBinary, codex: config.codexBinary, mutagen: config.mutagenBinary, ssh: config.sshBinary };
+  constructor(config: { claudeBinary: string; codexBinary: string; agyBinary: string; mutagenBinary: string; sshBinary: string }) {
+    this.binaries = { claude: config.claudeBinary, codex: config.codexBinary, agy: config.agyBinary, mutagen: config.mutagenBinary,
+      ssh: config.sshBinary };
   }
 
   baseEnvironment(): NodeJS.ProcessEnv {
@@ -23,7 +24,7 @@ export class ProcessExecutionHost implements ExecutionHost {
   }
 
   async binary(_scope: unknown, name: ExecutionBinary): Promise<string> {
-    return name === 'claude' || name === 'codex' ? findExecutable(this.binaries[name]) : this.binaries[name];
+    return ['claude', 'codex', 'agy'].includes(name) ? findExecutable(this.binaries[name]) : this.binaries[name];
   }
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
@@ -53,8 +54,8 @@ export class ProcessExecutionHost implements ExecutionHost {
 
   async health() {
     const available = (binary: string) => findExecutable(binary).then(() => true, () => false);
-    const [claude, codex, mutagen, ssh] = await Promise.all((['claude', 'codex', 'mutagen', 'ssh'] as const)
+    const [claude, codex, agy, mutagen, ssh] = await Promise.all((['claude', 'codex', 'agy', 'mutagen', 'ssh'] as const)
       .map(name => available(this.binaries[name])));
-    return { kind: this.kind, claude, codex, mutagen, ssh };
+    return { kind: this.kind, claude, codex, agy, mutagen, ssh };
   }
 }

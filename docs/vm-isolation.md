@@ -176,7 +176,7 @@ deploy/lxd/build-image.sh --kind workspace   # 工作区容器镜像 clinavat-wo
 
 工作区镜像只有 Mutagen、SSH 客户端、Python 和时区数据，几分钟即可构建。构建机只在构建期间存在，默认分配 4 个 vCPU 和 4 GiB 内存（`--cpu`、`--memory`），比槽位 VM 高；项目配额放不下时，自动改用 profile 中的配置继续构建。构建机使用固定地址 `10.31.0.9`（`--address`）；虚拟机网段不再做地址转换后，需要在「网关 → 出口绑定」中为「镜像构建」绑定节点，迁移脚本会自动绑定。
 
-整个过程约 15 分钟。发布很慢，可以用 `--builder <名称> --stage provision` 和 `--stage publish` 分两步。镜像包含官方 CLI、Mutagen、Git、ripgrep、bubblewrap，版本取自环境变量 `CLAUDE_CODE_VERSION`、`CODEX_VERSION`、`MUTAGEN_VERSION`、`NODE_VERSION`。
+整个过程约 15 分钟。发布很慢，可以用 `--builder <名称> --stage provision` 和 `--stage publish` 分两步。镜像包含官方 CLI、Mutagen、Git、ripgrep、bubblewrap，版本取自环境变量 `CLAUDE_CODE_VERSION`、`CODEX_VERSION`、`MUTAGEN_VERSION`、`NODE_VERSION`。Antigravity CLI（`agy`）按 `ANTIGRAVITY_RELEASE`（版本加构建号，如 `1.5.14-5302690847260672`，与其更新清单中的下载地址一致）和各架构的 `ANTIGRAVITY_SHA512_AMD64`、`ANTIGRAVITY_SHA512_ARM64` 安装；agy 默认会在后台自我更新，Hub 运行它时始终设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`。
 
 镜像里只有一个普通用户（uid、gid 与 Hub 相同），没有 sudo、cloud-init 和任何 setuid 程序。放开了 `kernel.apparmor_restrict_unprivileged_userns`，因为 Codex 的沙箱依赖 bubblewrap，隔离边界由虚拟机本身提供。
 

@@ -53,6 +53,8 @@ async function codexSubscription(home: string): Promise<SlotSubscription | null>
 const subscriptions: Record<AgentEngine, (home: string) => Promise<SlotSubscription | null>> = {
   claude: claudeSubscription,
   codex: codexSubscription,
+  // agy's login file names no plan; the quota reading only names model groups.
+  antigravity: async () => null,
 };
 
 export async function readSubscription(home: string, engine: AgentEngine): Promise<SlotSubscription | null> {
@@ -84,6 +86,10 @@ const logins: Record<AgentEngine, (document: Record<string, any> | undefined) =>
     if (!token) return text(document?.OPENAI_API_KEY) ? { ...noLogin, method: 'apikey' } : noLogin;
     const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
     return { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(claims?.exp), refreshedAt: timestamp(document?.last_refresh) };
+  },
+  antigravity(document) {
+    const token = document?.token;
+    return text(token?.refresh_token) ? { ...noLogin, method: 'oauth', accessExpiresAt: timestamp(token.expiry) } : noLogin;
   },
 };
 

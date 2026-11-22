@@ -141,3 +141,24 @@ export function parseCodexEvent(params: any): UsageUpdate {
   };
 }
 
+
+// agy reports each model group's remaining share of its windows; a window that has not started has no reset time.
+export function parseAntigravityUsage(output: any): UsageUpdate {
+  const groups = output?.command?.data?.groups;
+  if (output?.status !== 'SUCCESS' || !Array.isArray(groups)) {
+    throw new Error(`Antigravity 额度查询失败：${String(output?.error?.message ?? output?.response ?? '未返回额度分组').slice(0, 300)}`);
+  }
+  const windows: UsageWindow[] = [];
+  for (const group of groups) {
+    for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
+      if (typeof bucket?.id !== 'string') continue;
+      const minutes = bucket.window === 'weekly' ? 10080 : bucket.window === '5h' ? 300 : null;
+      const remaining = typeof bucket.remaining_fraction === 'number' && Number.isFinite(bucket.remaining_fraction) ? bucket.remaining_fraction : null;
+      const resetsAt = timestamp(bucket.reset_time);
+      windows.push({ key: bucket.id, label: `${typeof group.name === 'string' ? group.name : bucket.id} · ${durationLabel(minutes)}`,
+        windowMinutes: minutes, usedPercent: remaining === null ? null : percent(1 - remaining, 100),
+        resetsAt: resetsAt && Date.parse(resetsAt) > 0 ? resetsAt : null, ...(remaining === null ? {} : { limited: remaining <= 0 }) });
+    }
+  }
+  return { windows, plan: null };
+}

@@ -1,7 +1,7 @@
 import type { Store } from '../database.js';
 import type { Context } from '../context.js';
 import { HttpError, type Slot } from '../models.js';
-import type { AgentEngine } from '../agent/engines.js';
+import { engineProfiles, type AgentEngine } from '../agent/engines.js';
 
 export function availableSlots(store: Store, userId: string): Slot[] {
   return store.all<Slot>(`SELECT account_slots.* FROM account_slots JOIN slot_user_access
@@ -29,7 +29,7 @@ export function canResetLimits(store: Store, slot: Slot, userId: string): boolea
 export function serializeUserSlot(context: Context, slot: Slot, userId: string) {
   const activeUserId = context.config.credentials.activeUserId(slot.id);
   return { ...serializeSlot(slot), in_use: activeUserId !== null, in_use_by_you: activeUserId === userId,
-    can_reset_limits: canResetLimits(context.store, slot, userId) };
+    can_reset_limits: engineProfiles[slot.engine].limitReset && canResetLimits(context.store, slot, userId) };
 }
 
 export function serializeAdminSlot(context: Context, slot: Slot) {

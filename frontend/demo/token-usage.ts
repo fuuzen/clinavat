@@ -1,7 +1,7 @@
 import type { TokenUsageReport, TokenUsageRow } from "../src/types";
 import { db } from "./store";
 
-const models = { claude: ["claude-opus-5-5", "claude-haiku-5-5"], codex: ["gpt-6-sol"] };
+const models = { claude: ["claude-opus-5-5", "claude-haiku-5-5"], codex: ["gpt-6-sol"], antigravity: ["gemini-3.8-flash"] };
 
 // Deterministic sample figures, scaled by the requested period so the period selector visibly changes them.
 export function tokenUsageReport(days: number, userId?: string): TokenUsageReport {

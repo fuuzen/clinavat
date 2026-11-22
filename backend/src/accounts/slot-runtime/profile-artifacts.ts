@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, readdir, rename } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import { privateDirectory } from '../credential-files.js';
+import { assertRealDirectories, privateDirectory } from '../credential-files.js';
 import { accountIdentifier } from '../paths.js';
 import { engineProfiles, type AgentEngine } from '../../agent/engines.js';
 
@@ -13,8 +13,10 @@ function artifactName(name: string, engine: AgentEngine, root: boolean): boolean
 export function isAccountArtifactPath(file: string, engine: AgentEngine): boolean {
   const parts = file.split('/');
   if (parts.length === 1) return artifactName(parts[0], engine, true);
-  if (parts[0] !== engineProfiles[engine].configDirectory) return false;
-  return (parts.length === 2 || parts[1] === 'backups') && artifactName(parts.at(-1)!, engine, false);
+  const directory = engineProfiles[engine].configDirectory.split('/');
+  if (parts.length <= directory.length || directory.some((part, index) => parts[index] !== part)) return false;
+  const inside = parts.slice(directory.length);
+  return (inside.length === 1 || inside[0] === 'backups') && artifactName(parts.at(-1)!, engine, false);
 }
 
 async function artifacts(home: string, engine: AgentEngine): Promise<string[]> {
@@ -35,6 +37,7 @@ async function artifacts(home: string, engine: AgentEngine): Promise<string[]> {
     }
   };
   await inspect(home);
+  await assertRealDirectories(home, engineProfiles[engine].configDirectory);
   const engineHome = join(home, engineProfiles[engine].configDirectory);
   await inspect(engineHome);
   await inspect(join(engineHome, 'backups'), true);
