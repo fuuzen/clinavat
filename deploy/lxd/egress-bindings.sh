@@ -9,8 +9,10 @@
 #   sudo deploy/lxd/egress-bindings.sh apply    --hub-user <user> [--node <tag>] [--vm-subnet 10.31.0.0/24]
 #                                               [--dhcp-range 10.31.0.200-10.31.0.254] [--dns 1.1.1.1]
 #                                               [--builder-address 10.31.0.9]
+#   sudo deploy/lxd/egress-bindings.sh close-bridge-dns
 #   sudo deploy/lxd/egress-bindings.sh rollback
 #
+# close-bridge-dns applies apply's DNS lockdown to an installation that was moved before apply included it.
 # prepare-containers runs first, before the workspace image is built. apply never opens a path around the proxy:
 # the gateway learns the VM network before the host stops translating VM addresses, and unbound sources are
 # rejected rather than sent through the shared node. The host's own routes and DNS servers are not changed;
@@ -22,6 +24,7 @@ GATEWAY_PROJECT=clinavat-gateway
 GATEWAY_VM=clinavat-gateway
 USER_PROJECT=clinavat
 VM_BRIDGE=clinavat-users
+ACL=clinavat-egress
 GWCTL=/usr/local/lib/clinavat-gw/gwctl.py
 PIN_DROPIN=/etc/systemd/system/sing-box.service.d/clinavat-pin.conf
 BACKUP=/var/lib/clinavat-egress-bindings
@@ -63,6 +66,37 @@ confirm_pending() {
   [[ -z "$revision" ]] || gwctl confirm "$revision" >/dev/null
 }
 state_field() { gwctl state.get | python3 -I -c "import json,sys; print(json.load(sys.stdin)$1)"; }
+
+# The bridge's dnsmasq forwards to the host's own resolver, around the gateway. Under per-source egress machines
+# resolve through $dns, so the egress ACL stops admitting DNS to the bridge (close); shared mode needs it (open).
+bridge_dns() {
+  local bridge body
+  bridge="$(lxc network get "$VM_BRIDGE" ipv4.address)"
+  body="$(lxc query "/1.0/network-acls/$ACL" | python3 -I -c '
+import json, sys
+mode, target = sys.argv[1], sys.argv[2].split("/")[0] + "/32"
+acl = json.load(sys.stdin)
+egress = []
+for rule in acl["egress"]:
+    ports = rule.get("destination_port", "").split(",")
+    if rule.get("destination") == target and rule.get("protocol") in ("udp", "tcp") and ("53" in ports or "67" in ports):
+        continue
+    egress.append(rule)
+dhcp = {"action": "allow", "destination": target, "protocol": "udp", "destination_port": "67", "state": "enabled"}
+dns = [{**dhcp, "destination_port": "53,67"}, {**dhcp, "protocol": "tcp", "destination_port": "53"}]
+egress[1:1] = dns if mode == "open" else [dhcp]
+print(json.dumps({"description": acl.get("description", ""), "config": acl.get("config", {}), "ingress": acl["ingress"], "egress": egress}))
+' "$1" "$bridge")"
+  lxc query -X PUT -d "$body" "/1.0/network-acls/$ACL" >/dev/null
+  if [[ "$1" == close ]]; then ok "egress ACL $ACL admits only DHCP to the bridge; DNS goes through the gateway"
+  else ok "egress ACL $ACL admits DNS and DHCP to the bridge"; fi
+}
+
+close_bridge_dns() {
+  [[ "$(lxc network get "$VM_BRIDGE" ipv4.nat)" == false ]] || fail "$VM_BRIDGE still translates VM addresses; run apply first"
+  [[ "$(lxc network get "$VM_BRIDGE" raw.dnsmasq)" == *dns-server,* ]] || fail "$VM_BRIDGE does not hand out a public resolver; run apply first"
+  bridge_dns close
+}
 
 preflight() {
   echo "== preflight"
@@ -222,6 +256,7 @@ update_host() {
   probes="/run/user/$hub_uid/clinavat/usage-probes"
   [[ ",$paths," == *",$probes,"* ]] || lxc project set "$USER_PROJECT" restricted.devices.disk.paths="$paths,$probes"
   ok "VM addresses reach the gateway unchanged; VMs resolve through $dns"
+  bridge_dns close
 }
 
 bind() {
@@ -284,7 +319,9 @@ rollback() {
   local activated
   if activated="$(gwctl activate '{}')"; then confirm_pending "$activated"
   else echo "  warning: re-activating the restored gateway state failed; check gwctl status" >&2; fi
-  lxc network edit "$VM_BRIDGE" <"$BACKUP/network.yaml"
+  /snap/bin/lxc network edit "$VM_BRIDGE" <"$BACKUP/network.yaml"
+  # The restored bridge hands out its own resolver again.
+  bridge_dns open
   lxc project set "$USER_PROJECT" restricted.devices.disk.paths="$(cat "$BACKUP/disk-paths")"
   echo "rolled back. Machines created after apply have fixed addresses and work with the shared node as well."
 }
@@ -308,6 +345,7 @@ case "$command" in
     verify
     remove_old_machines
     echo "done. Start the Hub as $hub_user (npm run host:start), then bind each slot in the admin panel: 网关 → 出口绑定." ;;
+  close-bridge-dns) close_bridge_dns ;;
   rollback) rollback ;;
-  *) sed -n '2,18p' "$0"; exit 64 ;;
+  *) sed -n '2,19p' "$0"; exit 64 ;;
 esac
