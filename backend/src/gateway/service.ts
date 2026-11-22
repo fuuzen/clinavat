@@ -156,11 +156,12 @@ export class GatewayService {
       userId, action, revision ?? null, status, detail?.slice(0, 2000) ?? null);
   }
 
-  /** Checks the new gateway revision from the pool machine before the gateway's automatic rollback fires. */
+  /**
+   * Checks the new gateway revision before the gateway's automatic rollback fires. The pool machine's own route is not
+   * part of it: the CLIs run in slot machines, and the host may leave directly or bind its users with user-egress.py.
+   */
   private async verify(): Promise<string[]> {
     const problems: string[] = [];
-    try { await fetch('https://api.anthropic.com/', { redirect: 'manual', signal: AbortSignal.timeout(10_000) }); }
-    catch (error) { problems.push(`号池机无法访问 api.anthropic.com：${error instanceof Error ? error.message : String(error)}`); }
     try {
       const status = await this.client.call<{ health: Health }>('status', {}, 60_000);
       problems.push(...status.health.problems);

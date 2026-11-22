@@ -347,6 +347,8 @@ sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户>
 
 管理面板「网关 → 出口绑定」列出号池机、每个槽位和每个用户的工作区，可以分别选择节点。槽位在创建后即分配地址，可以在首次登录前绑定；未绑定的槽位不能开始对话。
 
+Hub 每次修改网关后先读取网关健康检查（sing-box 与 tun 就绪、防泄漏护栏、各来源实际出口与绑定一致、经代理访问外网、出口 IP 不属于禁止的真实出口），通过才确认，否则回滚。号池机自身的线路不在验证之内：CLI 运行在槽位虚拟机里，宿主机可以直接出站，也可以用下文的 Linux 系统用户出口把指定用户绑定到节点。
+
 ### Linux 系统用户出口
 
 在 Fedora 系列宿主机上，管理员可以用 `deploy/lxd/user-egress.py` 把 Linux 用户的公网出口绑定到网关的落地节点。脚本按套接字的 UID 选择来源 IP，已登录的桌面、SSH 会话和以该 UID 运行的后台进程都会使用该策略。已有网络连接可能需要重连。脚本需要宿主机上的 LXD、Python 3、iproute2、nftables、arping、curl、setfacl 和运行中的 `systemd-resolved-varlink.socket`。网关须已启用按来源绑定。
