@@ -332,6 +332,16 @@ sudo deploy/lxd/gateway-vm.sh cutover --old root@<旧网关> --ssh-user <用户>
 3. 清理 `authorized_keys` 中临时添加的管理密钥。
 4. 确认管理面板能连上网关。
 
+### 宿主机使用独立默认路由
+
+如果宿主机用自己的默认线路上网，而槽位 VM 和工作区容器经网关 VM 出站，在宿主机安装策略路由服务。先配置网关到 VM 网段的回程路由。
+
+```bash
+sudo deploy/lxd/host-routing.sh install --gateway <网关 LAN IPv4> --hub-user <Hub 用户>
+```
+
+安装命令将仓库脚本部署到 `/usr/local/libexec/clinavat-routing`，并启用 `clinavat-routing.service`。VM 网段读取自 LXD，网关 LAN 网段读取自宿主机网桥。宿主机从 VM 网桥地址发回虚拟机的流量使用主路由表的直连路由，LXD 重配网桥后重建这条路由即可恢复回包。更新脚本后可重新运行同一条安装命令。
+
 ## 按来源绑定出口
 
 网关只有一个 WAN 地址，但可以同时加载多个远端代理节点，并按流量的来源地址选择节点：
