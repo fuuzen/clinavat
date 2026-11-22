@@ -5,7 +5,8 @@ import { ClaudeControl } from './control.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { readJsonLines } from '../ndjson.js';
 import { claudePermissionMode } from '../permissions.js';
-import { projectInstructions } from '../project-instructions.js';
+import { conversationInstructions } from '../project-instructions.js';
+import { hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 import { ClaudeQuotaTracker } from './quota.js';
 import { ClaudeRetries } from './retries.js';
 import { ClaudeUsageMeter } from '../../token-usage/meters.js';
@@ -50,10 +51,12 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     ...(permissionMode === 'bypassPermissions' ? [] : ['--restricted']),
     '--permission-mode', permissionMode, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
     '--setting-sources', '', '--settings', JSON.stringify(settings),
-    '--append-system-prompt', projectInstructions(services.context.project, 'claude') + (permissionMode === 'plan'
+    '--append-system-prompt', conversationInstructions(services.context, 'claude') + (permissionMode === 'plan'
       ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
     '--tools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    // The Hub's tools are an in-process server: the CLI reaches it through control requests on stdio.
+    '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: orchestrates(services.context)
+      ? { [hubToolNamespace]: { type: 'sdk', name: hubToolNamespace } } : {} }),
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
     ...(services.context.session.native_session_id ? ['--resume', nativeId]

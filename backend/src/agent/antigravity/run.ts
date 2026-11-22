@@ -4,7 +4,7 @@ import { antigravityProbe } from '../../accounts/usage-probes.js';
 import { antigravityUsage } from '../../token-usage/meters.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
-import { projectInstructions } from '../project-instructions.js';
+import { conversationInstructions } from '../project-instructions.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import type { AgentPrompt, AgentRun, RunServices, TurnOutcome } from '../types.js';
 import { prepareAntigravityHome, rewrittenCommandNotice } from './setup.js';
@@ -144,8 +144,10 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       const { tool, input } = describeToolCall(params.toolCall ?? {});
       if (tool === 'Bash' && home.shell) await services.verifyShell();
       // Full access lets the CLI's own rules decide; agy has no mode that skips its asks, so the Hub allows them.
-      const decision = getPermissionMode(context.session) === 'full-access' && context.session.agent_mode !== 'plan'
-        ? { decision: 'allow' as const } : await services.approve(tool, input, requestSignal);
+      const writes = ['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool);
+      const decision = context.session.agent_access === 'read' && writes ? { decision: 'deny' as const }
+        : getPermissionMode(context.session) === 'full-access' && context.session.agent_mode !== 'plan'
+          ? { decision: 'allow' as const } : await services.approve(tool, input, requestSignal);
       const optionId = requestSignal.aborted ? undefined : pick(decision.decision === 'allow' ? 'allow_once' : 'reject_once');
       rpc.send({ id: message.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } });
       return;
@@ -240,7 +242,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       clientInfo: { name: 'clinavat', title: 'Clinavat', version: '0.1.0' } }, 60_000);
     if (initialized?.protocolVersion !== 1) throw new Error('ACP 协议版本不兼容');
     const planning = context.session.agent_mode === 'plan';
-    const instructions = projectInstructions(context.project, 'antigravity') + (planning
+    const instructions = conversationInstructions(context, 'antigravity') + (planning
       ? '\nThe user selected Plan mode in the web UI. When the plan is complete, present the whole plan in your final response: the user cannot open files outside the project.' : '');
     const opening = { cwd: context.project.local_path, mcpServers: [], _meta: { antigravity: { systemPrompt: { append: instructions } } } };
     const nativeId = context.session.native_session_id;

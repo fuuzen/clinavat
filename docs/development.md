@@ -49,6 +49,7 @@ backend/src/
     claude/    Claude Code 的协议、权限 Hook 与子智能体
     codex/     Codex app-server 的协议、审批与 Goal
   gateway/     上游网关控制
+  orchestration/ 主智能体的编排工具、子智能体任务与汇报投递
   routes/      HTTP API
   runtime/     SSH、密钥加密、同步、remote-shell、终端
   token-usage/ Token 用量记录与价格快照

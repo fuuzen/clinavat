@@ -32,6 +32,8 @@ export interface EngineProfile {
   goal: boolean;
   /** `/compact` summarizes the native conversation. */
   compact: boolean;
+  /** Can direct child agents through the Hub's tools as a master agent. */
+  orchestration: boolean;
   /** The service lets an account spend a reset of its rate limits. */
   limitReset: boolean;
   /** The login an administrator runs in the slot's machine. */
@@ -56,6 +58,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: true,
+    orchestration: true,
     limitReset: true,
     login: home => ({ argv: ['claude', 'auth', 'login'], env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') } }),
   },
@@ -74,6 +77,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: true,
     goal: true,
     compact: true,
+    orchestration: true,
     limitReset: true,
     login: home => ({ argv: ['codex', '-c', 'cli_auth_credentials_store="file"', 'login', '--device-auth'],
       env: { HOME: home, CODEX_HOME: join(home, '.codex') } }),
@@ -96,6 +100,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: false,
+    orchestration: false,
     limitReset: false,
     // Without a D-Bus session bus agy stores the login in the home instead of the desktop keyring.
     login: home => ({ argv: ['agy'], env: { HOME: home, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } }),

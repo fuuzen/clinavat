@@ -3,7 +3,7 @@ import type { createCodexRequests } from './requests.js';
 import type { RpcMessage } from '../rpc.js';
 import type { RunServices } from '../types.js';
 
-const toolItems = ['webSearch', 'commandExecution', 'fileChange', 'mcpToolCall', 'collabAgentToolCall'];
+const toolItems = ['webSearch', 'commandExecution', 'fileChange', 'mcpToolCall', 'collabAgentToolCall', 'dynamicToolCall'];
 
 /**
  * Threads that Codex spawns for sub-agents. Their approvals and questions reach the user even after the
@@ -69,7 +69,8 @@ export class CodexSubagents {
     if (!toolItems.includes(item.type)) return undefined;
     const collab = item.type === 'collabAgentToolCall';
     const event = {
-      id: item.id, tool: item.type === 'fileChange' ? 'apply_patch' : collab ? `agent.${String(item.tool)}` : item.type,
+      id: item.id, tool: item.type === 'fileChange' ? 'apply_patch' : collab ? `agent.${String(item.tool)}`
+        : item.type === 'dynamicToolCall' ? `${String(item.namespace ?? 'dynamic')}.${String(item.tool)}` : item.type,
       input: collab ? { prompt: item.prompt, model: item.model, agents: this.agentNames(item.receiverThreadIds) }
         : item.command ?? item.action ?? item.arguments ?? item.changes,
       ...(agent ? { agent } : {}),
@@ -81,10 +82,12 @@ export class CodexSubagents {
       ...event,
       output: collab ? states.map(([id, state]) => `${this.names.get(id) ?? id}：${state.status ?? ''}${state.message ? `\n${state.message}` : ''}`)
         .join('\n\n').slice(0, 128 * 1024) || undefined
-        : typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput.slice(0, 128 * 1024) : undefined,
+        : typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput.slice(0, 128 * 1024)
+          : Array.isArray(item.contentItems) ? item.contentItems.map((content: { text?: unknown }) => String(content.text ?? '')).join('\n').slice(0, 128 * 1024)
+            : undefined,
       status: item.status === 'declined' ? 'declined'
         : ['cancelled', 'canceled', 'interrupted'].includes(item.status) ? 'interrupted'
-        : item.status === 'failed' || item.exitCode > 0 ? 'failed' : 'completed',
+        : item.status === 'failed' || item.exitCode > 0 || item.success === false ? 'failed' : 'completed',
     };
   }
 

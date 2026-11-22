@@ -3,6 +3,7 @@ import { quoteShell, workspacePath } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import type { RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
+import { hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {
@@ -44,6 +45,12 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
       // Questions must reach the user even when native tool approvals are bypassed.
       const answer = await answerClaudeQuestions(services, args);
       return 'updatedInput' in answer ? decision(true, '用户已回答问题', answer.updatedInput) : decision(false, answer.reason);
+    }
+    if (tool.startsWith(`mcp__${hubToolNamespace}__`)) {
+      return orchestrates(services.context) ? decision(true, '编排工具由本系统在执行时按授权模式审批') : decision(false, '当前对话未开启编排');
+    }
+    if (services.context.session.agent_access === 'read' && (tool === 'Edit' || tool === 'Write')) {
+      return decision(false, '你是只读子智能体，不能修改文件；请在最终回复中说明需要的修改。');
     }
     if (tool === 'ExitPlanMode') return decision(false, '请在最终回复中展示方案并结束本轮；用户可以通过网页模式菜单切换到 Normal 后请求执行。');
     const cwd = await workspacePath(root, String(input.cwd ?? '.'));

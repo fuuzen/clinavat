@@ -13,8 +13,8 @@ import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
 import { settingsKey, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
-import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, QueuedInput, RunServices,
-  TurnOrigin, TurnOutcome } from './types.js';
+import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, MessageSource, QueuedInput,
+  RunServices, TurnOrigin, TurnOutcome } from './types.js';
 import type { CodexGoal, CodexGoalChange } from './codex/goal.js';
 
 const starters: Record<AgentEngine, (services: RunServices, prompt: AgentPrompt, signal: AbortSignal) => Promise<AgentRun>> = {
@@ -229,15 +229,17 @@ export class AgentManager {
    * Sends a message to the resident process. Without an open turn it starts one; otherwise `steer` joins
    * the running turn, `queue` waits for it to end, and `interrupt` ends it and runs next.
    */
-  async send(sessionId: string, mode: InputMode, content: string, prompt: string, images: string[] = []): Promise<'started' | 'steered' | 'queued'> {
+  async send(sessionId: string, mode: InputMode, content: string, prompt: string, images: string[] = [],
+    source?: MessageSource): Promise<'started' | 'steered' | 'queued'> {
     const state = this.residentRun(sessionId);
     const run = state.run!;
     if (!state.turnActive) {
       this.beginTurn(state, this.callbacks.beginTurn(sessionId,
-        { messageId: this.callbacks.saveUserMessage(sessionId, content, images) }, this.authorization(state)), prompt, images);
+        { messageId: this.callbacks.saveUserMessage(sessionId, content, images, source) }, this.authorization(state)), prompt, images);
       return 'started';
     }
-    const input: QueuedInput = { id: randomUUID(), content, prompt, queuedAt: new Date().toISOString(), ...(images.length ? { images } : {}) };
+    const input: QueuedInput = { id: randomUUID(), content, prompt, queuedAt: new Date().toISOString(),
+      ...(images.length ? { images } : {}), ...(source ? { source } : {}) };
     if (mode === 'queue') {
       if (state.queue.length >= 20) throw new HttpError(409, '排队消息已达上限，请等待当前回复结束');
       state.queue.push(input);
@@ -252,7 +254,7 @@ export class AgentManager {
       return 'queued';
     }
     const promptImages = this.callbacks.loadImages(sessionId, images);
-    const messageId = this.callbacks.saveUserMessage(sessionId, content, images);
+    const messageId = this.callbacks.saveUserMessage(sessionId, content, images, source);
     if (await run.steer({ text: prompt, images: promptImages }, messageId)) return 'steered';
     // The turn ended while steering; the saved message becomes the next turn.
     if (state.turnActive) {
@@ -354,7 +356,7 @@ export class AgentManager {
     const next = !state.closing && !state.abort.signal.aborted && !this.closing ? state.queue.shift() : undefined;
     if (next && !state.closing) {
       try {
-        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content, next.images ?? []);
+        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content, next.images ?? [], next.source);
         this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId: next.messageId }, this.authorization(state)),
           next.prompt, next.images ?? []);
       } catch (error) {

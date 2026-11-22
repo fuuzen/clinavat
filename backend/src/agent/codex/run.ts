@@ -3,7 +3,8 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
 import { codexPermissions, createCodexRequests } from './requests.js';
-import { projectInstructions } from '../project-instructions.js';
+import { conversationInstructions } from '../project-instructions.js';
+import { callHubTool, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 import { roleInstructions } from '../session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
 import { CodexSubagents } from './subagents.js';
@@ -134,6 +135,13 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     // Usage of an earlier turn can arrive late and still counts.
     if (message.method === 'thread/tokenUsage/updated') services.recordTokenUsage({ codex: { model: usageModel, tokenUsage: params.tokenUsage } });
     if (params.turnId && turnId && params.turnId !== turnId && message.method !== 'turn/started') return;
+    if (message.method === 'item/tool/call' && message.id !== undefined) {
+      const result = params.namespace === hubToolNamespace
+        ? await callHubTool(services, String(params.tool ?? ''), params.arguments ?? {}, AbortSignal.any([signal, turnAbort.signal]))
+        : { text: `未知的工具：${String(params.namespace ?? '')}.${String(params.tool ?? '')}`, isError: true };
+      if (!finished) rpc.send({ id: message.id, result: { contentItems: [{ type: 'inputText', text: result.text }], success: !result.isError } });
+      return;
+    }
     if (message.id !== undefined && message.method) { await answer(requests); return; }
     if (message.method === 'serverRequest/resolved') requests.resolved(params.requestId);
     if (message.method === 'account/rateLimits/updated') services.config.usage?.observe(services.context.slot, 'codex-event',
@@ -283,7 +291,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     const effort = selection.reasoning_effort || models.find(item => item.id === model)?.defaultReasoningEffort;
     await services.verifyShell();
     const shared = { cwd: root, sandbox: permissions.sandbox, approvalPolicy: permissions.approvalPolicy,
-      approvalsReviewer: permissions.approvalsReviewer, developerInstructions: projectInstructions(services.context.project, 'codex') + roleInstructions(selection.role_preset),
+      approvalsReviewer: permissions.approvalsReviewer, developerInstructions: conversationInstructions(services.context, 'codex') + roleInstructions(selection.role_preset),
       ...(model ? { model } : {}),
       config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': true, 'features.goals': true,
         ...(effort ? { model_reasoning_effort: effort } : {}) } };
@@ -294,7 +302,11 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       ? await rpc.request('thread/resume', { ...shared, threadId: nativeId, excludeTurns: true })
       // A branch's first run forks its source's thread through the anchored turn.
       : forkFrom ? await rpc.request('thread/fork', { ...shared, threadId: forkFrom, ...(forkAt ? { lastTurnId: forkAt } : {}), excludeTurns: true })
-        : await rpc.request('thread/start', shared);
+        // A thread keeps the tools it started with, also when resumed; resume does not take them.
+        : await rpc.request('thread/start', { ...shared, ...(orchestrates(services.context) ? { dynamicTools: [{
+          type: 'namespace', name: hubToolNamespace, description: 'Clinavat tools for starting and directing child agents.',
+          tools: (services.config.orchestration?.tools ?? []).map(tool => ({ type: 'function', ...tool })),
+        }] } : {}) });
     if (!result?.thread?.id) throw new Error('Codex 未返回线程 ID，请确认固定版本的 app-server 协议');
     if (nativeId && result.thread.id !== nativeId) throw new Error('Codex 恢复的会话与当前对话不一致');
     threadId = String(result.thread.id);

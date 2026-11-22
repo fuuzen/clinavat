@@ -25,6 +25,19 @@ export interface AgentConfig {
   egress?: { assertBound(slotId: string): Promise<void> };
   /** The wrapper that runs a local project's shell commands on the host; null where they run beside the CLI. */
   hostShell?(context: AgentContext): Promise<string | null>;
+  /** The tools a master agent uses to start and direct child agents. */
+  orchestration?: OrchestrationHost;
+}
+
+/** A tool the Hub serves to a conversation's CLI; `inputSchema` is a JSON Schema object. */
+export interface HubTool { name: string; description: string; inputSchema: Record<string, unknown> }
+export interface HubToolResult { text: string; isError?: boolean }
+
+export interface OrchestrationHost {
+  tools: HubTool[];
+  /** Calls that make other conversations act; they follow the master's approval mode. */
+  directs(tool: string): boolean;
+  call(context: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult>;
 }
 
 export interface AgentContext {
@@ -56,6 +69,10 @@ export interface AgentContext {
     command?: 'compact';
     turn_id?: string;
     goal?: { action: 'create' | 'resume'; objective?: string };
+    orchestration?: number | boolean | null;
+    parent_session_id?: string | null;
+    agent_name?: string | null;
+    agent_access?: 'read' | 'write' | null;
   };
 }
 
@@ -89,7 +106,7 @@ export interface AgentCallbacks {
   approval(request: ApprovalRequest): Promise<ApprovalDecision>;
   flushWorkspace(sessionId: string): Promise<void>;
   /** Persists a user message with the IDs of its attached images, and returns its ID. */
-  saveUserMessage(sessionId: string, content: string, images: string[]): string;
+  saveUserMessage(sessionId: string, content: string, images: string[], source?: MessageSource): string;
   /** Reads uploaded images for the CLI; throws when one no longer exists. */
   loadImages(sessionId: string, ids: string[]): PromptImage[];
   /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */
@@ -113,8 +130,12 @@ export type TurnOrigin = { messageId: string } | { summary: string };
 
 export interface TurnAuthorization { slotId: string; credentialRevision: number }
 export type InputMode = 'steer' | 'queue' | 'interrupt';
+/** Who wrote a user-role message the user did not type: a master agent's task, or its children's reports. */
+export type MessageSource = 'delegation' | 'report';
 /** `images` holds the IDs of uploaded images; their data is read only when the input is sent. */
-export interface QueuedInput { id: string; content: string; prompt: string; queuedAt: string; messageId?: string; images?: string[] }
+export interface QueuedInput {
+  id: string; content: string; prompt: string; queuedAt: string; messageId?: string; images?: string[]; source?: MessageSource;
+}
 /** An image attached to a user message, base64-encoded as both CLIs take it. */
 export interface PromptImage { mediaType: string; data: string }
 /** A user message as the CLI receives it: the text with project references expanded, and its images. */

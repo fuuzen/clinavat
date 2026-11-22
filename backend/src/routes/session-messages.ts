@@ -10,6 +10,7 @@ import { agentModes, rolePresets, validateSessionSettings } from '../agent/sessi
 import { expandProjectReferences } from '../runtime/project-references.js';
 import { imageTypes, maxImagesPerMessage, messageImages, readImage, saveImage, storedImages } from '../message-images.js';
 import { engineProfiles } from '../agent/engines.js';
+import type { MessageSource } from '../agent/types.js';
 
 export const selectedSlotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export const selectionFields = {
@@ -50,8 +51,16 @@ export function sessionMessageRoutes(app: FastifyInstance, context: Context) {
   });
 }
 
+/** How the Hub sends on a master agent's behalf: who wrote the message, and what the CLI receives for it. */
+export interface MessageDelivery {
+  source: MessageSource;
+  /** Wraps the expanded content into the prompt the CLI receives; the saved message keeps the content. */
+  prompt(expanded: string): string;
+}
+
 /** Sends a message as the user would from the composer: it starts a turn, or joins the running one. */
-export async function sendSessionMessage(context: Context, user: User, id: string, input: z.infer<typeof messageInput>) {
+export async function sendSessionMessage(context: Context, user: User, id: string, input: z.infer<typeof messageInput>,
+  delivery?: MessageDelivery) {
   const { store, events, agents, workspaces, turns, config } = context;
   const original = sessionFor(context, id, user.id);
   return withResourceLocks(context, [`session:${id}`], async () => {
@@ -113,8 +122,9 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
         events.emit(user.id, { type: 'project', payload: { id: project.id, sync_status: 'ERROR' } });
         throw error;
       }
-      const prompt = await expandProjectReferences(workspaces, project, input.content);
-      return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt, images) };
+      const expanded = await expandProjectReferences(workspaces, project, input.content);
+      const prompt = delivery ? delivery.prompt(expanded) : expanded;
+      return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt, images, delivery?.source) };
     }
     // Different settings or a command need a new process; an idle one exits first.
     await agents.reclaim(id);
@@ -130,13 +140,15 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
         events.emit(user.id, { type: 'project', payload: { id: project.id, sync_status: 'ERROR' } });
         throw error;
       }
-      const expandedContent = compact ? input.content : await expandProjectReferences(workspaces, project, input.content);
+      const expanded = compact ? input.content : await expandProjectReferences(workspaces, project, input.content);
+      const expandedContent = delivery ? delivery.prompt(expanded) : expanded;
       if (auto) await context.slots.ensureEligible(slot, user.id, model);
       const messageId = randomUUID();
       store.transaction(() => {
         store.run(`UPDATE sessions SET slot_id=?,model=?,reasoning_effort=?,permission_mode=?,agent_mode=?,role_preset=?,status='running',updated_at=datetime('now') WHERE id=?`,
           slot.id, model, reasoningEffort, permissionMode, agentMode, rolePreset, id);
-        store.run("INSERT INTO messages(id,session_id,role,content,images) VALUES(?,?,'user',?,?)", messageId, id, input.content, storedImages(images));
+        store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", messageId, id, input.content,
+          storedImages(images), delivery?.source ?? null);
       });
       turns.start(id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision });
       events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });

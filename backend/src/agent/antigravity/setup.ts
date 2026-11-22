@@ -84,6 +84,8 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
       { matcher: 'run_command', hooks: [{ type: 'command', command: run('command', shell ?? ''), timeout: 30 }] },
       // A subagent's permission requests never reach an ACP client, so its commands would wait and fail.
       ...['invoke_subagent', 'define_subagent', 'manage_subagents'].map(deny),
+      ...(context.session.agent_access === 'read' ? [{ matcher: 'write_file', hooks: [{ type: 'command', command: run('deny',
+        'You are a read-only child agent and cannot modify files; describe the changes you need in your final reply.'), timeout: 30 }] }] : []),
     ],
     Stop: [{ type: 'command', command: run('stop', stopLog), timeout: 10 }],
   } };

@@ -93,6 +93,37 @@ export interface Session {
   archived_at?: string | null;
   forked_from_session_id?: string | null;
   forked_from_turn_id?: string | null;
+  /** Set once the CLI has its own native session; Codex fixes a master's tools then. */
+  native_session_id?: string | null;
+  /** The master conversation that started this one as a child agent. */
+  parent_session_id?: string | null;
+  agent_name?: string | null;
+  agent_access?: "read" | "write" | null;
+  /** 1 when the agent may start and direct child agents. */
+  orchestration?: 0 | 1;
+}
+
+/** A master conversation's children as its agent panel shows them. */
+export interface ChildAgent {
+  sessionId: string;
+  name: string;
+  engine: AgentEngine;
+  model: string | null;
+  slotId: string | null;
+  access: "read" | "write";
+  status: string;
+  archived: boolean;
+  /** A task from the master is in progress. */
+  running: boolean;
+  lastTask: { status: "running" | "completed" | "interrupted" | "error"; finishedAt: string | null } | null;
+  pendingReports: number;
+}
+export interface AgentPanelView {
+  agents: ChildAgent[];
+  /** Finished reports the master has not received yet. */
+  pendingReports: number;
+  /** Automatic report turns reached their limit; the rest wait for the user. */
+  reportsPaused: boolean;
 }
 
 /** What happens to a question nobody answers in time. */
@@ -120,6 +151,8 @@ export type RolePreset = "default" | "reviewer" | "architect";
 export interface AgentBehavior {
   agentMode: AgentMode;
   rolePreset: RolePreset;
+  /** The agent may start and direct child agents. */
+  orchestration: boolean;
 }
 
 export interface AgentSelection {
@@ -159,6 +192,8 @@ export interface Message {
   content: string;
   /** IDs of the images attached to a user message, as JSON; null when there are none. */
   images?: string | null;
+  /** A user-role message the user did not type: a master agent's task, or its children's reports. */
+  source?: "delegation" | "report" | null;
   created_at: string;
 }
 

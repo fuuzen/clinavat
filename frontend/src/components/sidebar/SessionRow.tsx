@@ -1,4 +1,5 @@
 import { Archive, MessageCircleQuestion, MessageSquare, MoreHorizontal, Pause, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { isActive } from "../../api";
 import type { Session } from "../../types";
 
@@ -12,9 +13,11 @@ interface Props {
   onRename: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  /** Shown beside the title, such as the toggle of a master's child agents. */
+  accessory?: ReactNode;
 }
 
-export default function SessionRow({ session, selected, waiting, menuOpen, onToggleMenu, onSelect, onRename, onArchive, onDelete }: Props) {
+export default function SessionRow({ session, selected, waiting, menuOpen, onToggleMenu, onSelect, onRename, onArchive, onDelete, accessory }: Props) {
   return (
     <div className={`session-row ${selected ? "selected" : ""}`}>
       <button className="tree-row" onClick={onSelect}>
@@ -27,8 +30,9 @@ export default function SessionRow({ session, selected, waiting, menuOpen, onTog
         ) : (
           <MessageSquare size={13} />
         )}
-        <span>{session.title}</span>
+        <span>{session.agent_name && session.parent_session_id ? <><strong className="session-agent-name">{session.agent_name}</strong> {session.title.replace(`${session.agent_name} · `, "")}</> : session.title}</span>
       </button>
+      {accessory}
       <div className="row-menu-anchor">
         <button className="icon-button hover-action" onClick={onToggleMenu} aria-label="对话操作">
           <MoreHorizontal size={13} />

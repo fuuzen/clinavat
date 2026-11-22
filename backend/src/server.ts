@@ -36,7 +36,9 @@ import { GatewayService } from './gateway/service.js';
 import { SiteAccess } from './site-access.js';
 import { SiteSettingsService } from './site-settings.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
-import type { AgentContext } from './agent/types.js';
+import type { AgentContext, AgentEvent, OrchestrationHost } from './agent/types.js';
+import { Orchestrator } from './orchestration/service.js';
+import { sessionAgentRoutes } from './routes/session-agents.js';
 import { AccountCredentials } from './accounts/credentials.js';
 import { SlotTokens } from './accounts/slot-tokens.js';
 import { ensureClaudeSlotIdentity } from './accounts/claude-identity.js';
@@ -98,6 +100,7 @@ const slotMachines = config.executionHost === 'lxd' ? machines : undefined;
 let gateway: GatewayService | undefined;
 const hostCommands = execution.kind === 'vm' ? new HostCommands(config, ssh.keys) : undefined;
 const agentConfig = { ...config, credentials, usage, execution, catalogs: new SlotModelCatalogs(store),
+  orchestration: undefined as OrchestrationHost | undefined,
   egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } },
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };
@@ -132,6 +135,8 @@ for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_stat
     app.log.error({ err: error, projectId: project.id }, '无法刷新项目远程执行器');
   }
 }
+// Assigned once the context exists; it sees every agent event, and turn ends drive child reports.
+let observeAgentEvent: (event: AgentEvent) => void = () => undefined;
 const agents: AgentManager = new AgentManager(agentConfig, {
   verifyAutomaticSlot: previous => slots.ensureEligible(
     slotForUser(store, previous.slot.id, previous.user.id, previous.session.engine), previous.user.id, previous.session.model),
@@ -172,8 +177,10 @@ const agents: AgentManager = new AgentManager(agentConfig, {
         if (payload.status === 'running' || payload.status === 'pausing' || payload.status === 'paused') {
           turns.setState(event.sessionId, payload.status, payload.turnId);
         } else turns.finish(event.sessionId, payload.status, payload.turnId);
+        observeAgentEvent(event);
         return;
       }
+      if (event.type === 'error') observeAgentEvent(event);
       if (event.type === 'runtime') { events.broadcast(session.user_id, event); return; }
       if (event.type === 'turn-anchor') {
         const anchor = event.payload as { turnId?: string; ref: string; nativeSessionId: string };
@@ -213,11 +220,12 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     }
     events.emit(session.user_id, { type: 'session', sessionId, payload: store.get('SELECT * FROM sessions WHERE id=?', sessionId) });
   },
-  saveUserMessage(sessionId, content, images) {
+  saveUserMessage(sessionId, content, images, source) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
     if (!session) throw new Error('会话不存在');
     const id = randomUUID();
-    store.run("INSERT INTO messages(id,session_id,role,content,images) VALUES(?,?,'user',?,?)", id, sessionId, content, storedImages(images));
+    store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", id, sessionId, content,
+      storedImages(images), source ?? null);
     events.emit(session.user_id, { type: 'message', sessionId, payload: store.get('SELECT * FROM messages WHERE id=?', id) });
     return id;
   },
@@ -279,8 +287,12 @@ registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
 const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
   usageSettings, machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
+const orchestrator = new Orchestrator(context);
+agentConfig.orchestration = orchestrator;
+observeAgentEvent = event => orchestrator.observe(event);
 resourceRoutes(app, context);
 sessionRoutes(app, context);
+sessionAgentRoutes(app, context, orchestrator);
 agentModelRoutes(app, context);
 completionRoutes(app, context);
 adminRoutes(app, context);

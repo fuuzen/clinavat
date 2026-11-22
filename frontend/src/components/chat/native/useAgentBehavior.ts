@@ -5,14 +5,16 @@ import { engineProfiles, type AgentEngine } from "../../../engines";
 export function useAgentBehavior(session: Session | undefined, projectId: string | undefined,
   engine: AgentEngine, active: boolean,
   onChange: (sessionId: string, value: AgentBehavior) => Promise<void>) {
-  const [behavior, setBehavior] = useState<AgentBehavior>({ agentMode: session?.agent_mode || "normal", rolePreset: session?.role_preset || "default" });
+  const [behavior, setBehavior] = useState<AgentBehavior>({ agentMode: session?.agent_mode || "normal", rolePreset: session?.role_preset || "default",
+    orchestration: session?.orchestration === 1 });
   const [saving, setSaving] = useState(false);
   const requestRef = useRef(0);
   useEffect(() => {
     requestRef.current++;
-    setBehavior({ agentMode: session?.agent_mode || "normal", rolePreset: engineProfiles[engine].rolePresets ? session?.role_preset || "default" : "default" });
+    setBehavior({ agentMode: session?.agent_mode || "normal", rolePreset: engineProfiles[engine].rolePresets ? session?.role_preset || "default" : "default",
+      orchestration: engineProfiles[engine].orchestration && session?.orchestration === 1 });
     setSaving(false);
-  }, [session?.id, projectId, engine, session?.agent_mode, session?.role_preset]);
+  }, [session?.id, projectId, engine, session?.agent_mode, session?.role_preset, session?.orchestration]);
 
   async function changeBehavior(next: AgentBehavior) {
     if (active || saving) return false;

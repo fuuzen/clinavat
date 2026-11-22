@@ -2,6 +2,7 @@ import path from 'node:path';
 import { quoteShell } from './environment.js';
 import type { AgentEngine } from './engines.js';
 import type { AgentContext } from './types.js';
+import { childInstructions, masterInstructions } from '../orchestration/instructions.js';
 
 interface EngineInstructions {
   background: string;
@@ -29,6 +30,12 @@ const instructions: Record<AgentEngine, EngineInstructions> = {
     split: () => 'Use your file tools to read, search and edit the local source mirror. Commands are automatically routed to the development host, with synchronization barriers before and after execution. Do not invoke the remote-shell wrapper yourself.',
   },
 };
+
+/** The project instructions, then what the conversation's place among master and child agents adds. */
+export function conversationInstructions(context: AgentContext, engine: AgentEngine): string {
+  return projectInstructions(context.project, engine) + childInstructions(context.session)
+    + (context.session.orchestration && !context.session.parent_session_id ? masterInstructions() : '');
+}
 
 export function projectInstructions(project: AgentContext['project'], engine: AgentEngine): string {
   const { background, hostShell, split } = instructions[engine];

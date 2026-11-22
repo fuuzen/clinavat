@@ -147,6 +147,15 @@ export class Store {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         media_type TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        child_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','interrupted','error')),
+        report TEXT, notify INTEGER NOT NULL DEFAULT 1 CHECK(notify IN (0,1)),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT, delivered_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS agent_tasks_master ON agent_tasks(master_session_id,status);
+      CREATE INDEX IF NOT EXISTS agent_tasks_child ON agent_tasks(child_session_id,status);
       CREATE INDEX IF NOT EXISTS message_images_session ON message_images(session_id);
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
       CREATE INDEX IF NOT EXISTS token_usage_user ON token_usage(user_id,recorded_at);
@@ -189,6 +198,13 @@ export class Store {
       "TEXT CHECK(permission_mode IN ('manual','accept-edits','auto','full-access','yolo'))");
     // IDs of the images attached to a user message, as JSON; NULL when there are none.
     this.addColumn('messages', 'images', 'TEXT');
+    // Who wrote a user-role message other than the user: a master agent's task, or its children's reports.
+    this.addColumn('messages', 'source', "TEXT CHECK(source IN ('delegation','report'))");
+    // A child conversation a master agent started; it outlives its master as an ordinary conversation.
+    this.addColumn('sessions', 'parent_session_id', 'TEXT REFERENCES sessions(id) ON DELETE SET NULL');
+    this.addColumn('sessions', 'agent_name', 'TEXT');
+    this.addColumn('sessions', 'agent_access', "TEXT CHECK(agent_access IN ('read','write'))");
+    this.addColumn('sessions', 'orchestration', 'INTEGER NOT NULL DEFAULT 0 CHECK(orchestration IN (0,1))');
     // Images of a send that failed or of a discarded queued message. The day of grace keeps those of a send
     // retried across a restart.
     this.run(`DELETE FROM message_images WHERE created_at < datetime('now','-1 day')
@@ -225,6 +241,9 @@ export class Store {
         ELSE MAX(0,CAST((julianday(?)-julianday(started_at))*86400000 AS INTEGER)-paused_ms) END
       WHERE status IN ('running','pausing','paused')`, interruptedAt, interruptedAt);
     this.run("UPDATE sessions SET status='interrupted' WHERE status IN ('running','waiting','pausing','paused')");
+    // Their reports wait for the user in the master's agent panel; a restart never replays them by itself.
+    this.run(`UPDATE agent_tasks SET status='interrupted',finished_at=?,report=COALESCE(report,'服务重新启动，子智能体的执行被中断')
+      WHERE status='running'`, interruptedAt);
     this.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE status='CONNECTED' AND kind='ssh'");
     for (const user of this.all<User>("SELECT * FROM users WHERE role='admin'")) ensureLocalHost(this, user.id);
     this.run("UPDATE approvals SET status='expired', reason='服务重新启动' WHERE status='pending'");

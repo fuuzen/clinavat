@@ -52,6 +52,12 @@ export interface Session {
   /** The source's native session and the point to fork it at, used by the branch's first run. */
   fork_native_id: string | null;
   fork_native_anchor: string | null;
+  /** The master conversation that started this one as a child agent; NULL for conversations the user started. */
+  parent_session_id: string | null;
+  agent_name: string | null;
+  agent_access: 'read' | 'write' | null;
+  /** Whether the agent may start and direct child agents through the Hub's tools. */
+  orchestration: 0 | 1;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

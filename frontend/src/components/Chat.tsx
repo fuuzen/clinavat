@@ -31,6 +31,8 @@ import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
 import ArchivedNotice from "./chat/ArchivedNotice";
 import ForkOrigin from "./chat/ForkOrigin";
+import AgentOrigin from "./chat/agents/AgentOrigin";
+import AgentPanel from "./chat/agents/AgentPanel";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
 import { useAgentBehavior } from "./chat/native/useAgentBehavior";
 import { useChatCommands } from "./chat/native/useChatCommands";
@@ -378,6 +380,7 @@ export default function Chat(props: Props) {
             ) : (
               <>
                 {session && <ForkOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
+                {session && <AgentOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
                 <ConversationTurns
                   messages={props.messages}
                   turns={props.turns}
@@ -438,8 +441,12 @@ export default function Chat(props: Props) {
           onSend={() => void send()}
           sendMode={sendMode}
           onSendModeChange={setSendMode}
-          status={<RuntimeStrip runtime={sessionRuntime.runtime}
-            onCancelQueued={(id) => void sessionRuntime.cancelQueued(id)} onStopTask={(id) => void sessionRuntime.stopTask(id)} />}
+          status={<>
+            <RuntimeStrip runtime={sessionRuntime.runtime}
+              onCancelQueued={(id) => void sessionRuntime.cancelQueued(id)} onStopTask={(id) => void sessionRuntime.stopTask(id)} />
+            <AgentPanel session={session} sessions={overview.sessions} approvals={props.approvals} connected={props.streamConnected}
+              onOpen={props.onOpenSession} onNotice={props.onNotice} />
+          </>}
           onStop={props.onStop}
           onPause={() => void props.onPause()}
           onResume={() => void props.onResume()}
@@ -473,7 +480,8 @@ export default function Chat(props: Props) {
             saving={permissionSaving}
             onChange={(mode) => void changePermission(mode)}
           />
-          <BehaviorPicker engine={currentEngine} value={behavior} disabled={active || slotSaving || permissionSaving || !slotAvailable} saving={behaviorSaving} onChange={(value) => void changeBehavior(value)} openRequest={commands.behaviorRequest} />
+          <BehaviorPicker engine={currentEngine} value={behavior} disabled={active || slotSaving || permissionSaving || !slotAvailable} saving={behaviorSaving} onChange={(value) => void changeBehavior(value)} openRequest={commands.behaviorRequest}
+            orchestrationLock={session?.parent_session_id ? "子智能体不能再派生子智能体。" : currentEngine === "codex" && session?.native_session_id ? "Codex 对话的编排设置在发送第一条消息后不能更改。" : undefined} />
           <QuestionPolicyPicker key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`} session={session}
             defaults={overview.questionDefaults} onChange={props.onQuestionsChange} />
           <ModelPicker

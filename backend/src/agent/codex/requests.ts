@@ -31,8 +31,11 @@ function usesRemoteShell(command: unknown, cwd: string, project: RunServices['co
 
 export function codexPermissions(services: RunServices) {
   const mode = getPermissionMode(services.context.session);
+  // Codex cannot turn off apply_patch, and its read-only sandbox breaks remote-shell, which writes its lock in the
+  // project. A read-only child instead asks for everything Codex does not know to be safe, and the Hub declines file changes.
+  const readOnly = services.context.session.agent_access === 'read';
   return {
-    approvalPolicy: mode === 'full-access' ? 'never' : 'on-request',
+    approvalPolicy: readOnly ? 'untrusted' : mode === 'full-access' ? 'never' : 'on-request',
     approvalsReviewer: mode === 'auto' ? 'auto_review' : 'user',
     sandbox: mode === 'full-access' ? 'danger-full-access' : 'workspace-write',
     sandboxPolicy: mode === 'full-access' ? { type: 'dangerFullAccess' } : {
@@ -117,8 +120,14 @@ export function createCodexRequests(
       const remote = usesRemoteShell(command, cwd, services.context.project);
       try {
         if (signal.aborted || !isRunning()) return true;
+        if (fileChange && services.context.session.agent_access === 'read') {
+          if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
+          return true;
+        }
         if (remote) await services.verifyShell();
-        const result = await services.approve(fileChange ? 'apply_patch' : 'shell', {
+        // Approved commands of an untrusted thread leave the sandbox, which full access already allows.
+        const unattended = !fileChange && services.context.session.agent_access === 'read' && getPermissionMode(services.context.session) === 'full-access';
+        const result = unattended ? { decision: 'allow' as const } : await services.approve(fileChange ? 'apply_patch' : 'shell', {
           native: true, itemId, reason: params.reason,
           ...(fileChange ? { changes: item?.changes ?? params.fileChanges, grantRoot: params.grantRoot } : {
             command, cwd,

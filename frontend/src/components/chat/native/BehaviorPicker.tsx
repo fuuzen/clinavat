@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, UserRound } from "lucide-react";
+import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, UserRound, Workflow } from "lucide-react";
 import type { AgentBehavior, RolePreset } from "../../../types";
 import SettingsHelp from "../SettingsHelp";
 import SettingsMenu from "../SettingsMenu";
@@ -16,10 +16,13 @@ export default function BehaviorPicker(props: {
   disabled: boolean;
   saving: boolean;
   openRequest?: number;
+  /** Why orchestration cannot change for this conversation; undefined when it can. */
+  orchestrationLock?: string;
   onChange: (value: AgentBehavior) => void;
 }) {
   const planning = props.value.agentMode === "plan";
   const roleSelectable = engineProfiles[props.engine].rolePresets;
+  const orchestrating = engineProfiles[props.engine].orchestration && props.value.orchestration;
   const modes = [
     { value: "normal", label: "Normal", description: "执行任务，操作遵循当前授权模式。" },
     { value: "plan", label: "Plan", description: "先分析并制定计划，确认后再切换 Normal 实施。" },
@@ -29,14 +32,14 @@ export default function BehaviorPicker(props: {
     label="工作模式与角色"
     width={208}
     className="behavior-trigger"
-    title={`${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}`}
+    title={`${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}${orchestrating ? " · 主智能体" : ""}`}
     openRequest={props.openRequest}
     disabled={props.disabled || props.saving}
     trigger={<>
       <span className="behavior-mode-symbol" aria-hidden="true">
         {props.saving ? <LoaderCircle className="spin" size={18} /> : planning ? <ClipboardList size={18} /> : <Code2 size={18} />}
       </span>
-      <span className="settings-trigger-label">{planning ? "Plan" : "Normal"}{roleSelectable && role.value !== "default" ? ` · ${role.label}` : ""}</span>
+      <span className="settings-trigger-label">{planning ? "Plan" : "Normal"}{roleSelectable && role.value !== "default" ? ` · ${role.label}` : ""}{orchestrating ? " · 主智能体" : ""}</span>
       <ChevronDown className="settings-trigger-chevron" size={12} aria-hidden="true" />
     </>}
   >{(close) => <>
@@ -63,6 +66,21 @@ export default function BehaviorPicker(props: {
         </button>
         <SettingsHelp text={preset.description} />
       </div>)}
+    </div>}
+    {engineProfiles[props.engine].orchestration && <div className="settings-menu-group" role="group" aria-label="编排">
+      <div className="settings-menu-heading"><span><Workflow size={13} />编排</span>
+        <SettingsHelp menuItem text={props.orchestrationLock ?? (props.engine === "codex"
+          ? "主智能体可以派生使用其他 CLI、模型或账号的子智能体。Codex 对话只能在发送第一条消息之前开启或关闭。"
+          : "主智能体可以派生使用其他 CLI、模型或账号的子智能体，下次发送生效。")} /></div>
+      <div className="settings-menu-entry">
+        <button className="settings-menu-item compact" role="menuitemcheckbox" aria-checked={props.value.orchestration}
+          disabled={!!props.orchestrationLock} aria-description="作为主智能体派生和指挥子智能体" tabIndex={-1} type="button" onClick={() => {
+          props.onChange({ ...props.value, orchestration: !props.value.orchestration }); close();
+        }}>
+          <span className="settings-item-copy">作为主智能体</span>
+          <Check size={14} className="settings-item-check" />
+        </button>
+      </div>
     </div>}
   </>}</SettingsMenu>;
 }

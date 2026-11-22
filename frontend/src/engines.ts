@@ -15,6 +15,8 @@ export interface EngineProfile {
   goal: boolean;
   /** `/compact` summarizes the native conversation. */
   compact: boolean;
+  /** Can direct child agents as a master agent. */
+  orchestration: boolean;
   /** How the account's limits can be reset: Claude's weekly reset of the 5-hour window, Codex's reset credits, or not at all. */
   limitReset: "weekly" | "credits" | null;
 }
@@ -28,6 +30,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: true,
+    orchestration: true,
     limitReset: "weekly",
   },
   codex: {
@@ -38,6 +41,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: true,
     goal: true,
     compact: true,
+    orchestration: true,
     limitReset: "credits",
   },
   antigravity: {
@@ -48,6 +52,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: false,
+    orchestration: false,
     limitReset: null,
   },
 };

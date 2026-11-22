@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
-import { HttpError, type Slot } from '../models.js';
+import { HttpError, type Session, type Slot, type User } from '../models.js';
 import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
 import { defaultPermissionModeFor, permissionModes, validatePermissionMode } from '../agent/permissions.js';
@@ -13,7 +13,7 @@ import { sessionGoalRoutes } from './session-goals.js';
 import { sessionQuestionRoutes } from './session-questions.js';
 import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { questionTimeout } from '../question-defaults.js';
-import { agentEngines } from '../agent/engines.js';
+import { agentEngines, engineProfiles } from '../agent/engines.js';
 import { assertAutomaticSlot } from '../accounts/selection.js';
 
 const identifier = z.object({ id: z.uuid() });
@@ -27,6 +27,71 @@ async function releaseSession(context: Context, id: string, userId: string): Pro
   }
   await context.config.credentials.retrySessionRelease(id);
   if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请先停止会话后重试');
+}
+
+export const sessionInput = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
+  slotMode: z.enum(['manual', 'auto']).default('manual'),
+  title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false), ...selectionFields });
+
+/** A child conversation's place under its master. */
+export interface ChildAgent { parentSessionId: string; name: string; access: 'read' | 'write' }
+
+/** Only a conversation the user started may direct others, and Codex fixes its tools when the thread starts. */
+export function assertOrchestration(session: Pick<Session, 'engine' | 'parent_session_id' | 'native_session_id'>, enable: boolean) {
+  if (!enable) return;
+  if (!engineProfiles[session.engine].orchestration) throw new HttpError(400, `${engineProfiles[session.engine].label} 暂不能作为主智能体`);
+  if (session.parent_session_id) throw new HttpError(400, '子智能体不能再派生子智能体');
+  if (session.engine === 'codex' && session.native_session_id) throw new HttpError(409, 'Codex 对话只能在发送第一条消息之前开启编排');
+}
+
+export async function createSession(context: Context, user: User, input: z.infer<typeof sessionInput>, child?: ChildAgent): Promise<Session> {
+  const { store } = context;
+  return withResourceLocks(context, [], async () => {
+    projectFor(context, input.projectId, user.id);
+    if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
+    if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
+    assertOrchestration({ engine: input.engine, parent_session_id: child?.parentSessionId ?? null, native_session_id: null }, input.orchestration);
+    const permissionMode = validatePermissionMode(input.engine, input.permissionMode
+      ?? context.agentDefaults.forUser(user.id, input.engine).permissionMode ?? defaultPermissionModeFor(input.engine));
+    const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
+    const id = randomUUID();
+    const validate = (slot: Slot) => validateAgentSelection(context.config, { user, slot, session: { engine: input.engine } }, input);
+    const slot = input.slotMode === 'auto'
+      ? await context.slots.select({ userId: user.id, engine: input.engine, model: input.model }, validate)
+      : slotForUser(store, input.slotId!, user.id, input.engine);
+    if (input.slotMode === 'manual') await validate(slot);
+    slotForUser(store, slot.id, user.id, input.engine);
+    store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
+      orchestration,parent_session_id,agent_name,agent_access) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
+    permissionMode, agentMode, rolePreset, input.orchestration ? 1 : 0, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null);
+    const created = sessionFor(context, id, user.id);
+    context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
+    return created;
+  }, [`project:${input.projectId}`]);
+}
+
+/** Stops a conversation's CLI and hands its slot state back; the conversation itself stays. */
+export async function stopSession(context: Context, userId: string, id: string): Promise<void> {
+  const { events, agents, turns, store } = context;
+  sessionFor(context, id, userId);
+  await withResourceLocks(context, [`session:${id}`], async () => {
+    events.cancelSession(userId, id);
+    try { await agents.stop(id); }
+    catch (error) {
+      if (agents.isBusy(id)) throw error;
+      await context.config.credentials.retrySessionRelease(id);
+      if (context.config.credentials.isSessionBusy(id)) throw error;
+    }
+    if (agents.isBusy(id)) throw new HttpError(409, '会话尚未停止，请稍后重试');
+    await context.config.credentials.retrySessionRelease(id);
+    if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请稍后重试');
+    if (!agents.isBusy(id)) turns.finish(id, 'interrupted');
+    const current = sessionFor(context, id, userId);
+    const status = current.status === 'error' ? 'error' : 'interrupted';
+    store.run("UPDATE sessions SET status=?,updated_at=datetime('now') WHERE id=?", status, id);
+    events.emit(userId, { type: 'session', sessionId: id, payload: { id, status } });
+  });
 }
 
 export function sessionRoutes(app: FastifyInstance, context: Context) {
@@ -51,29 +116,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         WHERE sessions.user_id=? AND sessions.archived_at IS NULL GROUP BY deferred_questions.session_id`, request.user.id),
     };
   });
-  app.post('/api/sessions', async (request, reply) => {
-    const input = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
-      slotMode: z.enum(['manual', 'auto']).default('manual'),
-      title: z.string().trim().min(1).max(200).default('新对话'), ...selectionFields }).parse(request.body);
-    return withResourceLocks(context, [], async () => {
-      projectFor(context, input.projectId, request.user.id);
-      if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
-      if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
-      const permissionMode = validatePermissionMode(input.engine, input.permissionMode
-        ?? context.agentDefaults.forUser(request.user.id, input.engine).permissionMode ?? defaultPermissionModeFor(input.engine));
-      const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
-      const id = randomUUID();
-      const validate = (slot: Slot) => validateAgentSelection(context.config, { user: request.user, slot, session: { engine: input.engine } }, input);
-      const slot = input.slotMode === 'auto'
-        ? await context.slots.select({ userId: request.user.id, engine: input.engine, model: input.model }, validate)
-        : slotForUser(store, input.slotId!, request.user.id, input.engine);
-      if (input.slotMode === 'manual') await validate(slot);
-      slotForUser(store, slot.id, request.user.id, input.engine);
-      store.run('INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-        id, input.projectId, request.user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null, permissionMode, agentMode, rolePreset);
-      return reply.code(201).send(sessionFor(context, id, request.user.id));
-    }, [`project:${input.projectId}`]);
-  });
+  app.post('/api/sessions', async (request, reply) =>
+    reply.code(201).send(await createSession(context, request.user, sessionInput.parse(request.body))));
   app.post('/api/sessions/:id/fork', async (request, reply) => {
     const { id } = identifier.parse(request.params);
     const { turnId } = z.object({ turnId: z.uuid() }).strict().parse(request.body);
@@ -113,6 +157,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       // Read for each question, so these change without restarting the conversation's CLI.
       questionMode: z.enum(questionModes).nullable().optional(),
       questionTimeoutMs: questionTimeout.nullable().optional(),
+      orchestration: z.boolean().optional(),
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
       message: '请提供要修改的对话设置',
     }).parse(request.body);
@@ -126,7 +171,14 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       if (slotMode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
       const changedMode = slotMode !== current.slot_mode;
-      if (changedSlot || changedMode || permissionMode !== current.permission_mode || agentMode !== current.agent_mode || rolePreset !== current.role_preset) {
+      const orchestration = input.orchestration ?? current.orchestration === 1;
+      const changedOrchestration = orchestration !== (current.orchestration === 1);
+      if (changedOrchestration) {
+        assertOrchestration(current, orchestration);
+        if (current.engine === 'codex' && current.native_session_id) throw new HttpError(409, 'Codex 对话的编排设置在发送第一条消息后不能更改');
+      }
+      if (changedSlot || changedMode || changedOrchestration || permissionMode !== current.permission_mode || agentMode !== current.agent_mode
+        || rolePreset !== current.role_preset) {
         await agents.reclaim(id);
         if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)
           || context.config.credentials.isSessionBusy(id)) {
@@ -135,11 +187,11 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       }
       if (changedSlot && input.slotId) slotForUser(store, input.slotId, request.user.id, current.engine);
       store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,slot_mode=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,
-        question_mode=?,question_timeout_ms=?,updated_at=datetime('now') WHERE id=?`,
+        question_mode=?,question_timeout_ms=?,orchestration=?,updated_at=datetime('now') WHERE id=?`,
         input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId, slotMode,
         changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset,
         input.questionMode === undefined ? current.question_mode : input.questionMode,
-        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, id);
+        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, orchestration ? 1 : 0, id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
       return updated;
@@ -202,25 +254,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
   sessionQuestionRoutes(app, context);
   app.post('/api/sessions/:id/stop', async request => {
     const { id } = identifier.parse(request.params);
-    sessionFor(context, id, request.user.id);
-    return withResourceLocks(context, [`session:${id}`], async () => {
-      events.cancelSession(request.user.id, id);
-      try { await agents.stop(id); }
-      catch (error) {
-        if (agents.isBusy(id)) throw error;
-        await context.config.credentials.retrySessionRelease(id);
-        if (context.config.credentials.isSessionBusy(id)) throw error;
-      }
-      if (agents.isBusy(id)) throw new HttpError(409, '会话尚未停止，请稍后重试');
-      await context.config.credentials.retrySessionRelease(id);
-      if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请稍后重试');
-      if (!agents.isBusy(id)) turns.finish(id, 'interrupted');
-      const current = sessionFor(context, id, request.user.id);
-      const status = current.status === 'error' ? 'error' : 'interrupted';
-      store.run("UPDATE sessions SET status=?,updated_at=datetime('now') WHERE id=?", status, id);
-      events.emit(request.user.id, { type: 'session', sessionId: id, payload: { id, status } });
-      return { ok: true };
-    });
+    await stopSession(context, request.user.id, id);
+    return { ok: true };
   });
   for (const action of ['pause', 'resume'] as const) {
     app.post(`/api/sessions/:id/${action}`, async request => {

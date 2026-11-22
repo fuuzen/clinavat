@@ -16,6 +16,7 @@ interface SessionInput {
   permissionMode?: Session["permission_mode"];
   agentMode?: Session["agent_mode"];
   rolePreset?: Session["role_preset"];
+  orchestration?: boolean;
   questionMode?: Session["question_mode"];
   questionTimeoutMs?: Session["question_timeout_ms"];
   title?: string;
@@ -69,6 +70,7 @@ export const sessionHandlers = [
       title: input.title || "新对话", status: "idle", updated_at: timestamp(), model: input.model ?? null,
       reasoning_effort: input.reasoningEffort ?? null, permission_mode: input.permissionMode ?? db.agentDefaults[engine].permissionMode ?? "auto",
       agent_mode: input.agentMode ?? "normal", role_preset: input.rolePreset ?? "default",
+      orchestration: input.orchestration && engine !== "antigravity" ? 1 : 0,
     };
     db.sessions.unshift(session);
     return HttpResponse.json(session, { status: 201 });
@@ -90,6 +92,7 @@ export const sessionHandlers = [
       title: input.title, permission_mode: input.permissionMode, agent_mode: input.agentMode,
       role_preset: input.rolePreset, slot_id: input.slotId, slot_mode: slotMode,
       question_mode: input.questionMode, question_timeout_ms: input.questionTimeoutMs,
+      orchestration: input.orchestration === undefined || current.engine === "antigravity" ? undefined : input.orchestration ? 1 : 0,
       ...(changedSlot ? { model: null, reasoning_effort: null } : {}),
     }).filter(([, value]) => value !== undefined)));
     emit({ type: "session", sessionId: id, payload: asPayload(session!) });
@@ -149,6 +152,10 @@ export const sessionHandlers = [
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
   http.get("/api/sessions/:id/runtime", () =>
     HttpResponse.json({ resident: false, turnActive: false, queue: [], tasks: [] })),
+  // The preview has no other CLIs to start, so a master conversation never gets children.
+  http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
+  http.post("/api/sessions/:id/agents/stop", () => HttpResponse.json({ ok: true })),
+  http.post("/api/sessions/:id/agents/deliver", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
   http.get("/api/sessions/:id/turns", ({ params }) =>
     HttpResponse.json(db.turns.filter((turn) => turn.session_id === params.id))),
   http.post("/api/sessions/:id/messages", async ({ params, request }) => {

@@ -1,13 +1,14 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, ChevronDown, ChevronUp, Copy, GitBranch } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, GitBranch, Workflow } from "lucide-react";
 import { formatTime } from "../../api";
 import type { Message } from "../../types";
 import DiagramBlock from "../diagrams/DiagramBlock";
 import { diagramFence } from "../diagrams/fence";
 import { messageImageIds } from "./composer/imageAttachments";
 import type { AgentEngine } from "../../engines";
+import AgentReports from "./agents/AgentReports";
 
 const components: Components = {
   pre({ children }) {
@@ -116,15 +117,19 @@ export default function MessageView({
   onFork?: () => void;
 }) {
   const user = message.role === "user";
+  // A master's task to its child, or the children's reports to their master: written by agents, not by the user.
+  const source = user ? message.source : undefined;
   return (
-    <article id={`conversation-message-${message.id}`} className={`message message-${message.role}`} tabIndex={-1}>
+    <article id={`conversation-message-${message.id}`} className={`message message-${message.role}${source ? ` message-${source}` : ""}`} tabIndex={-1}>
       <div className="message-author">
-        {user ? (
+        {source ? (
+          <span className="mini-avatar agent-source-avatar"><Workflow size={12} aria-hidden="true" /></span>
+        ) : user ? (
           <span className="mini-avatar">{username.slice(0, 1).toUpperCase()}</span>
         ) : (
           <AgentAvatar engine={engine} />
         )}
-        <strong>{user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
+        <strong>{source === "delegation" ? "主智能体的任务" : source === "report" ? "子智能体汇报" : user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
         <time>{formatTime(message.created_at)}</time>
         {message.role === "assistant" && (
           <span className="message-actions">
@@ -137,7 +142,9 @@ export default function MessageView({
           </span>
         )}
       </div>
-      {user ? (
+      {source === "report" ? (
+        <AgentReports content={message.content} />
+      ) : user ? (
         // Shown as typed, like the CLIs do: Markdown would turn an unclosed fence or __init__ into something else.
         <>
           <MessageImages message={message} />

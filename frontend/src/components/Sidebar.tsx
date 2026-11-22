@@ -22,6 +22,7 @@ import {
 import Brand from "./Brand";
 import ArchivedSessions from "./sidebar/ArchivedSessions";
 import SessionRow from "./sidebar/SessionRow";
+import SessionGroup, { groupSessions } from "./sidebar/SessionGroup";
 import ClientHubSwitch from "./ClientHubSwitch";
 import SyncProgressBar from "./projects/SyncProgressBar";
 import { statusLabel } from "../api";
@@ -290,17 +291,18 @@ export default function Sidebar(props: Props) {
                           )}
                           {!collapsed.has(project.id) && (
                             <div className="project-sessions">
-                              {sessions
+                              {groupSessions(sessions)
                                 .filter(
-                                  (session) =>
+                                  (entry) =>
                                     !search ||
-                                    matches(session.title) ||
+                                    [entry.session, ...entry.children].some((session) => matches(session.title)) ||
                                     matches(project.name) ||
                                     matches(host.name),
                                 )
-                                .map((session) => (
+                                .map((entry) => <SessionGroup key={entry.session.id} entry={entry} selectedId={selectedSession?.id} renderRow={(session, accessory) => (
                                   <SessionRow
                                     key={session.id}
+                                    accessory={accessory}
                                     session={session}
                                     selected={selectedSession?.id === session.id}
                                     waiting={waiting.has(session.id)}
@@ -323,7 +325,7 @@ export default function Sidebar(props: Props) {
                                       setMenu("");
                                     }}
                                   />
-                                ))}
+                                )} />)}
                             </div>
                           )}
                         </div>

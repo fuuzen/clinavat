@@ -4,6 +4,7 @@ import type { AgentPrompt, RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
 import { questionTimeoutRange } from '../session-settings.js';
+import { callHubTool, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 
 const preToolUseCallback = 'clinavat-pre-tool-use';
 
@@ -43,7 +44,8 @@ export class ClaudeControl {
       }, 60_000);
       this.initialization = { id, cancelTimeout, resolve, reject };
       try {
-        this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize', hooks: { PreToolUse: [{
+        this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize',
+          ...(orchestrates(this.services.context) ? { sdkMcpServers: [hubToolNamespace] } : {}), hooks: { PreToolUse: [{
           matcher: '.*', hookCallbackIds: [preToolUseCallback],
           // An unanswered callback blocks the tool. Hub deadlines exclude paused time; this native one uses wall time
           // even after SIGSTOP, so it leaves a day beyond the longest Hub deadline.
@@ -125,6 +127,12 @@ export class ClaudeControl {
       });
       return true;
     }
+    if (event.request?.subtype === 'mcp_message') {
+      void this.respondMcp(id, token, event.request).finally(() => {
+        if (this.requests.get(id) === token) this.requests.delete(id);
+      });
+      return true;
+    }
     void this.respond(id, token, event.request).catch((error: unknown) => {
       if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI 审批响应失败'));
     }).finally(() => {
@@ -172,6 +180,32 @@ export class ClaudeControl {
     if (this.closed || token.signal.aborted || this.requests.get(id) !== token) return;
     try { this.write({ type: 'control_response', response: { subtype: 'success', request_id: id, response: output } }); }
     catch (error) { if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI 审批响应失败')); }
+  }
+
+  /** Serves the Hub's in-process MCP server: one JSON-RPC message per control request, answered in its response. */
+  private async respondMcp(id: string, token: AbortController, request: Record<string, any>): Promise<void> {
+    const message = request.message ?? {};
+    const params = message.params ?? {};
+    const host = this.services.config.orchestration;
+    let reply: Record<string, unknown>;
+    if (request.server_name !== hubToolNamespace || !host || !orchestrates(this.services.context)) {
+      reply = { error: { code: -32601, message: `未知的 MCP 服务器：${String(request.server_name ?? '')}` } };
+    } else if (message.method === 'initialize') {
+      reply = { result: { protocolVersion: params.protocolVersion ?? '2025-06-18', capabilities: { tools: {} },
+        serverInfo: { name: hubToolNamespace, version: '1.0.0' } } };
+    } else if (message.method === 'tools/list') {
+      reply = { result: { tools: host.tools } };
+    } else if (message.method === 'tools/call') {
+      const result = await callHubTool(this.services, String(params.name ?? ''), params.arguments ?? {}, token.signal);
+      reply = { result: { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) } };
+    } else if (typeof message.method === 'string' && message.method.startsWith('notifications/')) {
+      reply = { result: {} };
+    } else reply = { error: { code: -32601, message: `不支持的 MCP 方法：${String(message.method ?? '')}` } };
+    if (this.closed || token.signal.aborted || this.requests.get(id) !== token) return;
+    try {
+      this.write({ type: 'control_response', response: { subtype: 'success', request_id: id,
+        response: { mcp_response: { jsonrpc: '2.0', id: message.id ?? 0, ...reply } } } });
+    } catch (error) { if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI MCP 响应失败')); }
   }
 
   private async respond(id: string, token: AbortController, request: Record<string, unknown> | undefined): Promise<void> {
