@@ -1,14 +1,12 @@
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { promisify } from 'node:util';
 import { configuredDataDirectory, databasePath, environmentFilePath, installDirectory, loadEnvironment, releaseRoot } from './environment.mjs';
 import { activityCounts, controlService, deploymentStatus, gateCount, hasActivity, hasRuntimeActivity, installGate,
-  openDatabase, removeGate, runtimeCounts, services, serviceState } from './release-state.mjs';
+  openDatabase, removeGate, runtimeCounts, runUserSystemd, services, serviceState } from './release-state.mjs';
 
-const execute = promisify(execFile);
 const script = fileURLToPath(import.meta.url);
 const projectDirectory = dirname(dirname(script));
 // A scheduled release inherits the caller's own settings, never the Hub's secrets from the environment file.
@@ -281,7 +279,7 @@ async function scheduleRelease(staging) {
   // Values are copied from systemd-run's own environment, so none of them appear on a command line.
   const names = Object.keys(invokingEnvironment).filter(name => name === 'PATH' || name.startsWith('CLINAVAT_') || /^XDG_[A-Z]+_HOME$/.test(name));
   try {
-    await execute('systemd-run', ['--user', '--quiet', '--collect', `--unit=${waiterUnit}`,
+    await runUserSystemd('systemd-run', ['--quiet', '--collect', `--unit=${waiterUnit}`,
       `--description=等待空闲后发布 ${staging}${frontendOnly ? '（仅前端）' : ''}`,
       // Stopping the unit cancels like Ctrl-C: only the waiter is signalled, and it has time to roll back.
       '--property=KillMode=mixed', '--property=TimeoutStopSec=300', ...names.map(name => `--setenv=${name}`),
@@ -313,7 +311,7 @@ async function waitAndPublish(staging) {
 async function cancelPendingRelease() {
   if (!await pendingRelease()) { console.log(JSON.stringify({ state: 'none' })); return; }
   // A release already under way rolls back first, within the unit's stop timeout.
-  try { await execute('systemctl', ['--user', 'stop', waiterUnit], { timeout: 330000 }); }
+  try { await runUserSystemd('systemctl', ['stop', waiterUnit], { timeout: 330000 }); }
   catch { throw new Error(`${waiterUnit} 停止未完成，请检查 systemd 服务状态`); }
   console.log(JSON.stringify({ state: 'cancelled' }));
 }

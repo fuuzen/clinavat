@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { databasePath } from './environment.mjs';
@@ -10,8 +10,30 @@ export const services = ['clinavat-hub.service', 'clinavat-web.service'];
 const gateSuffixes = ['sessions_insert', 'sessions_update', 'turns_insert', 'turns_update'];
 const gateNames = gateSuffixes.map(name => `clinavat_release_${name}`);
 
+export async function runUserSystemd(program, args, { env = process.env, ...options } = {}) {
+  const uid = process.geteuid();
+  // sudo and non-login shells can omit the runtime directory or inherit another user's session.
+  const candidates = new Set([env.XDG_RUNTIME_DIR, `/run/user/${uid}`]);
+  for (const directory of candidates) {
+    if (!directory || !isAbsolute(directory)) continue;
+    try {
+      const runtime = await lstat(directory);
+      if (!runtime.isDirectory() || runtime.uid !== uid) continue;
+      const socket = await lstat(join(directory, 'systemd', 'private'));
+      if (!socket.isSocket() || socket.uid !== uid) continue;
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+      continue;
+    }
+    const systemdEnvironment = { ...env, XDG_RUNTIME_DIR: directory };
+    delete systemdEnvironment.DBUS_SESSION_BUS_ADDRESS;
+    return execute(program, ['--user', ...args], { ...options, env: systemdEnvironment });
+  }
+  throw new Error(`找不到当前 UID ${uid} 的 systemd 用户管理器，请在运行 Clinavat 的宿主机上以服务所属用户执行`);
+}
+
 export async function serviceState(service, properties = 'LoadState,ActiveState,SubState,MainPID,ControlGroup,UnitFileState') {
-  const { stdout } = await execute('systemctl', ['--user', 'show', service, `--property=${properties}`], { timeout: 10000 });
+  const { stdout } = await runUserSystemd('systemctl', ['show', service, `--property=${properties}`], { timeout: 10000 });
   return Object.fromEntries(stdout.trim().split('\n').map(line => {
     const separator = line.indexOf('=');
     return [line.slice(0, separator), line.slice(separator + 1)];
@@ -19,7 +41,7 @@ export async function serviceState(service, properties = 'LoadState,ActiveState,
 }
 
 export async function controlService(action, service) {
-  try { await execute('systemctl', ['--user', action, service], { timeout: 45000, maxBuffer: 1024 * 1024 }); }
+  try { await runUserSystemd('systemctl', [action, service], { timeout: 45000, maxBuffer: 1024 * 1024 }); }
   catch { throw new Error(`${service} ${action} 未完成，请检查 systemd 服务状态`); }
 }
 

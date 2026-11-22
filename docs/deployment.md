@@ -197,6 +197,8 @@ node $scripts/host.mjs install --source <源码目录>
 - **留档**：构建成功后，与 HEAD 的差异保存为 `~/.local/state/clinavat/releases/<HEAD>-worktree-<摘要>.patch`，源码和暂存目录名带同样的后缀。工作区与 HEAD 相同时，按该提交构建，名称不带后缀。
 - **一致性**：智能体还在修改文件时，可能构建到改了一半的版本。先等相关对话结束；检查或构建失败时不会留下任何输出。
 
+在运行 Clinavat 的宿主机上，以服务所属用户运行 `release.mjs`。即使通过 `sudo -u` 等非登录方式调用，脚本也会查找该用户的本机 systemd 管理器。若部署目录通过多个挂载路径可见，请在 `hub.env` 中把 `CLINAVAT_INSTALL_DIR` 设为服务实际使用的路径，并把 `CLINAVAT_RELEASE_DIR` 设在同一挂载下，以便发布时原子替换目录。
+
 发布脚本的行为：
 
 - **只在空闲时发布**：有任何运行中的对话、待处理的审批或账号切换进程时，脚本不做任何改动，返回退出码 `75`，稍后重试即可。
