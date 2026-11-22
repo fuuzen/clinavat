@@ -93,7 +93,7 @@ sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh apply --hub-user <Hub 用
 sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh check --hub-user <Hub 用户>   # 之后随时可单独检查
 ```
 
-运行目录中的脚本随 `host:install` 和发布更新。连接状态在管理面板「宿主机 → 本机项目的命令执行」中查看，详见[宿主机命令入口](vm-isolation.md#宿主机命令入口)。
+运行目录中的脚本只随 `host:install` 更新，发布只替换 `backend/dist` 和 `frontend/dist`。连接状态在管理面板「宿主机 → 本机项目的命令执行」中查看，详见[宿主机命令入口](vm-isolation.md#宿主机命令入口)。
 
 ## Docker / Podman Compose
 

@@ -12,7 +12,7 @@
 #   sudo deploy/lxd/egress-bindings.sh close-bridge-dns
 #   sudo deploy/lxd/egress-bindings.sh rollback
 #
-# close-bridge-dns applies apply's DNS lockdown to an installation that was moved before apply included it.
+# close-bridge-dns stops the bridge serving DNS on an installation that was moved before apply did so.
 # prepare-containers runs first, before the workspace image is built. apply never opens a path around the proxy:
 # the gateway learns the VM network before the host stops translating VM addresses, and unbound sources are
 # rejected rather than sent through the shared node. The host's own routes and DNS servers are not changed;
@@ -24,7 +24,6 @@ GATEWAY_PROJECT=clinavat-gateway
 GATEWAY_VM=clinavat-gateway
 USER_PROJECT=clinavat
 VM_BRIDGE=clinavat-users
-ACL=clinavat-egress
 GWCTL=/usr/local/lib/clinavat-gw/gwctl.py
 PIN_DROPIN=/etc/systemd/system/sing-box.service.d/clinavat-pin.conf
 BACKUP=/var/lib/clinavat-egress-bindings
@@ -67,35 +66,18 @@ confirm_pending() {
 }
 state_field() { gwctl state.get | python3 -I -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
-# The bridge's dnsmasq forwards to the host's own resolver, around the gateway. Under per-source egress machines
-# resolve through $dns, so the egress ACL stops admitting DNS to the bridge (close); shared mode needs it (open).
-bridge_dns() {
-  local bridge body
-  bridge="$(lxc network get "$VM_BRIDGE" ipv4.address)"
-  body="$(lxc query "/1.0/network-acls/$ACL" | python3 -I -c '
-import json, sys
-mode, target = sys.argv[1], sys.argv[2].split("/")[0] + "/32"
-acl = json.load(sys.stdin)
-egress = []
-for rule in acl["egress"]:
-    ports = rule.get("destination_port", "").split(",")
-    if rule.get("destination") == target and rule.get("protocol") in ("udp", "tcp") and ("53" in ports or "67" in ports):
-        continue
-    egress.append(rule)
-dhcp = {"action": "allow", "destination": target, "protocol": "udp", "destination_port": "67", "state": "enabled"}
-dns = [{**dhcp, "destination_port": "53,67"}, {**dhcp, "protocol": "tcp", "destination_port": "53"}]
-egress[1:1] = dns if mode == "open" else [dhcp]
-print(json.dumps({"description": acl.get("description", ""), "config": acl.get("config", {}), "ingress": acl["ingress"], "egress": egress}))
-' "$1" "$bridge")"
-  lxc query -X PUT -d "$body" "/1.0/network-acls/$ACL" >/dev/null
-  if [[ "$1" == close ]]; then ok "egress ACL $ACL admits only DHCP to the bridge; DNS goes through the gateway"
-  else ok "egress ACL $ACL admits DNS and DHCP to the bridge"; fi
-}
+# The bridge's dnsmasq answers DNS through the host's own resolver, around the gateway, and LXD admits DNS to the
+# bridge ahead of any ACL. Under per-source egress machines resolve through $dns, so dnsmasq keeps only DHCP.
+bridge_dnsmasq() { printf 'dhcp-option=option:dns-server,%s\nport=0' "$1"; }
 
 close_bridge_dns() {
+  local current
   [[ "$(lxc network get "$VM_BRIDGE" ipv4.nat)" == false ]] || fail "$VM_BRIDGE still translates VM addresses; run apply first"
-  [[ "$(lxc network get "$VM_BRIDGE" raw.dnsmasq)" == *dns-server,* ]] || fail "$VM_BRIDGE does not hand out a public resolver; run apply first"
-  bridge_dns close
+  current="$(lxc network get "$VM_BRIDGE" raw.dnsmasq)"
+  [[ "$current" == *dns-server,* ]] || fail "$VM_BRIDGE does not hand out a public resolver; run apply first"
+  if grep -qx 'port=0' <<<"$current"; then ok "the bridge's dnsmasq already serves DHCP only"; return; fi
+  lxc network set "$VM_BRIDGE" raw.dnsmasq="$current"$'\n'"port=0"
+  ok "the bridge's dnsmasq serves DHCP only; machines resolve through the gateway"
 }
 
 preflight() {
@@ -250,13 +232,12 @@ update_gateway() {
 update_host() {
   echo "== host: stop translating VM addresses"
   # Static machine addresses come from the Hub; dynamic leases stay in a separate range for image builds.
-  lxc network set "$VM_BRIDGE" ipv4.nat=false ipv4.dhcp.ranges="$dhcp_range" raw.dnsmasq="dhcp-option=option:dns-server,$dns"
+  lxc network set "$VM_BRIDGE" ipv4.nat=false ipv4.dhcp.ranges="$dhcp_range" raw.dnsmasq="$(bridge_dnsmasq "$dns")"
   local paths probes
   paths="$(lxc project get "$USER_PROJECT" restricted.devices.disk.paths)"
   probes="/run/user/$hub_uid/clinavat/usage-probes"
   [[ ",$paths," == *",$probes,"* ]] || lxc project set "$USER_PROJECT" restricted.devices.disk.paths="$paths,$probes"
   ok "VM addresses reach the gateway unchanged; VMs resolve through $dns"
-  bridge_dns close
 }
 
 bind() {
@@ -320,8 +301,6 @@ rollback() {
   if activated="$(gwctl activate '{}')"; then confirm_pending "$activated"
   else echo "  warning: re-activating the restored gateway state failed; check gwctl status" >&2; fi
   /snap/bin/lxc network edit "$VM_BRIDGE" <"$BACKUP/network.yaml"
-  # The restored bridge hands out its own resolver again.
-  bridge_dns open
   lxc project set "$USER_PROJECT" restricted.devices.disk.paths="$(cat "$BACKUP/disk-paths")"
   echo "rolled back. Machines created after apply have fixed addresses and work with the shared node as well."
 }

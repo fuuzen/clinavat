@@ -108,15 +108,11 @@ print(",".join(str(network) for network in ipaddress.collapse_addresses(ranges))
 ')"
 rules="$(mktemp)"
 trap 'rm -f "$rules"' EXIT
-# After egress-bindings.sh apply the bridge no longer translates addresses and machines resolve through the gateway;
-# the bridge's own resolver would forward around it, so only DHCP stays open.
-bridge_ports="53,67"
-[[ "$(lxc network get "$NETWORK" ipv4.nat)" == false ]] && bridge_ports=67
 {
   echo "egress:"
   echo "- {action: allow, destination: \"$public\", state: enabled}"
-  echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: udp, destination_port: \"$bridge_ports\", state: enabled}"
-  [[ "$bridge_ports" == 67 ]] || echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: tcp, destination_port: \"53\", state: enabled}"
+  echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: udp, destination_port: \"53,67\", state: enabled}"
+  echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: tcp, destination_port: \"53\", state: enabled}"
   echo "- {action: allow, destination: \"255.255.255.255/32\", protocol: udp, destination_port: \"67\", state: enabled}"
   for allow in "${allows[@]}"; do
     IFS=: read -r cidr protocol port <<<"$allow"
