@@ -6,7 +6,7 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { readJsonLines } from '../ndjson.js';
 import { claudePermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { hubToolNamespace, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { ClaudeQuotaTracker } from './quota.js';
 import { ClaudeRetries } from './retries.js';
 import { ClaudeUsageMeter } from '../../token-usage/meters.js';
@@ -66,7 +66,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         '--session-id', nativeId]
         : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope, cwd: services.context.project.local_path, env: agentEnvironment(execution, services.context, scope),
+    scope, cwd: workingDirectory(services.context), env: agentEnvironment(execution, services.context, scope),
     secrets: await services.config.credentials.secretEnvironment(services.context.slot.id),
   });
   services.control.track(child);

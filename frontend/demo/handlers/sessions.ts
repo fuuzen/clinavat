@@ -156,6 +156,7 @@ export const sessionHandlers = [
   http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
   http.post("/api/sessions/:id/agents/stop", () => HttpResponse.json({ ok: true })),
   http.post("/api/sessions/:id/agents/deliver", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
+  http.post("/api/sessions/:id/agents/:childId/:action", () => fail(404, "子智能体不存在")),
   http.get("/api/sessions/:id/turns", ({ params }) =>
     HttpResponse.json(db.turns.filter((turn) => turn.session_id === params.id))),
   http.post("/api/sessions/:id/messages", async ({ params, request }) => {

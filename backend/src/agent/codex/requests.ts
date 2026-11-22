@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { getPermissionMode } from '../permissions.js';
 import type { RpcMessage } from '../rpc.js';
+import { assertWritable, workingDirectory } from '../orchestration-tools.js';
 import type { RunServices } from '../types.js';
 import { unansweredNotice, type UserInputQuestion } from '../user-input.js';
 
@@ -39,7 +40,9 @@ export function codexPermissions(services: RunServices) {
     approvalsReviewer: mode === 'auto' ? 'auto_review' : 'user',
     sandbox: mode === 'full-access' ? 'danger-full-access' : 'workspace-write',
     sandboxPolicy: mode === 'full-access' ? { type: 'dangerFullAccess' } : {
-      type: 'workspaceWrite', writableRoots: [services.context.project.local_path],
+      // A child confined to a directory may still need .bin, where remote-shell keeps its lock.
+      type: 'workspaceWrite', writableRoots: services.context.session.agent_directory
+        ? [workingDirectory(services.context), path.join(services.context.project.local_path, '.bin')] : [services.context.project.local_path],
       networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
     },
   };
@@ -120,7 +123,10 @@ export function createCodexRequests(
       const remote = usesRemoteShell(command, cwd, services.context.project);
       try {
         if (signal.aborted || !isRunning()) return true;
-        if (fileChange && services.context.session.agent_access === 'read') {
+        const changes = Array.isArray(item?.changes) ? item.changes as { path?: unknown }[] : [];
+        const outside = fileChange && (await Promise.all(changes.map(change => typeof change.path === 'string'
+          ? assertWritable(services.context, path.resolve(cwd, change.path)).then(() => false, () => true) : false))).some(Boolean);
+        if (fileChange && (services.context.session.agent_access === 'read' || outside)) {
           if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
           return true;
         }

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { agentEngines } from '../agent/engines.js';
 import type { HubTool } from '../agent/types.js';
-import { orchestrationLimits } from './limits.js';
+import { orchestrationConstants } from './limits.js';
 
 const agentReference = z.string().trim().min(1).max(64).describe('The child agent\'s name, or the agentId start_agent returned.');
 
@@ -14,6 +14,10 @@ export const toolInputs = {
     model: z.string().trim().min(1).max(200).optional().describe('Model ID from list_agents; omit for the account\'s default.'),
     effort: z.string().trim().min(1).max(32).optional().describe('Reasoning effort the model offers; omit for its default.'),
     slot: z.string().trim().min(1).max(64).optional().describe('Account slot ID from list_agents; omit to let the Hub choose.'),
+    directory: z.string().trim().max(1024).optional()
+      .describe('Project-relative directory the child works in; it may change only files inside it but can read the whole project. Omit for the project root.'),
+    isolation: z.enum(['worktree', 'shared']).optional()
+      .describe('For writing children. "worktree" (default) gives the child its own Git worktree and branch, so parallel children never overwrite each other; you merge its branch afterwards. "shared" works directly in the project directory. Ignored for read access.'),
     access: z.enum(['read', 'write']).default('read')
       .describe('"read" cannot modify files; "write" can. Prefer read for research and review.'),
     prompt: z.string().trim().min(1).max(100_000)
@@ -28,7 +32,7 @@ export const toolInputs = {
   }),
   wait_agents: z.object({
     agents: z.array(agentReference).min(1).max(8),
-    timeoutSeconds: z.number().int().min(1).max(orchestrationLimits.waitSeconds).default(300),
+    timeoutSeconds: z.number().int().min(1).max(orchestrationConstants.waitSeconds).default(300),
   }),
   read_agent: z.object({
     agent: agentReference,
@@ -36,6 +40,13 @@ export const toolInputs = {
     includeTools: z.boolean().default(false).describe('Also list the tool calls and the files they changed.'),
   }),
   stop_agent: z.object({ agent: agentReference }),
+  merge_agent: z.object({
+    agent: agentReference,
+    mode: z.enum(['merge', 'squash']).default('merge').describe('"merge" keeps the child\'s commits; "squash" makes them one commit.'),
+    onConflict: z.enum(['abort', 'leave']).default('abort')
+      .describe('"abort" leaves the project as it was and lists the conflicting files; "leave" keeps the conflict markers in the project for you to resolve and commit.'),
+  }),
+  discard_agent: z.object({ agent: agentReference }),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -47,6 +58,8 @@ const descriptions: Record<ToolName, string> = {
   wait_agents: 'Waits until the given child agents finish their current tasks or the timeout passes, and returns their reports. Use only when you need the results before going on in this turn; those reports then do not arrive as a new message.',
   read_agent: 'Reads a child agent\'s most recent turns: the tasks it received, its final replies and, if asked, its tool calls.',
   stop_agent: 'Stops what a child agent is doing; the conversation stays and can be messaged again.',
+  merge_agent: 'Merges the branch of a child agent that worked in its own worktree into the project, then removes its worktree and branch. The child must have finished.',
+  discard_agent: 'Throws away the branch and worktree of a child agent that worked in its own worktree, or cleans them up after a conflict you resolved yourself.',
 };
 
 export const hubTools: HubTool[] = Object.entries(toolInputs).map(([name, schema]) => {

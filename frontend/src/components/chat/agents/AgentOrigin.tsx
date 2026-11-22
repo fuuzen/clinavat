@@ -9,7 +9,9 @@ export default function AgentOrigin({ session, sessions, onOpen }: { session: Se
     <div className="fork-origin agent-origin">
       <Workflow size={13} aria-hidden="true" />
       <span>
-        子智能体「{session.agent_name}」，{session.agent_access === "read" ? "只读" : "可修改项目文件"}，
+        子智能体「{session.agent_name}」，{session.agent_access === "read" ? "只读" : session.agent_isolation === "worktree"
+          ? "在自己的 Git worktree 和分支中修改，完成后由主智能体或你合并" : "直接修改项目文件"}
+        {session.agent_directory ? `，只能修改 ${session.agent_directory} 中的文件` : ""}，
         由{master ? `「${master.title}」` : "一个已删除的对话"}的主智能体派生。它的最终回复会作为汇报交给主智能体；
         你也可以直接在这里与它对话，主智能体发来的消息不代表你的授权。
       </span>

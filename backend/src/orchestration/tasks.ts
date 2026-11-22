@@ -24,12 +24,12 @@ export class AgentTasks {
     return this.store.all<AgentTask>("SELECT * FROM agent_tasks WHERE child_session_id=? AND status='running' ORDER BY rowid", childId);
   }
 
-  /** Ends every task the child was working on with the same outcome, and returns them. */
-  finish(childId: string, status: Exclude<TaskStatus, 'running'>, report: string): AgentTask[] {
-    const tasks = this.running(childId);
-    if (!tasks.length) return [];
-    this.store.run(`UPDATE agent_tasks SET status=?,report=?,finished_at=datetime('now') WHERE child_session_id=? AND status='running'`,
-      status, report, childId);
+  /** Ends the given tasks the child was working on with the same outcome, and returns those still running until now. */
+  finish(childId: string, status: Exclude<TaskStatus, 'running'>, report: string, ids: string[]): AgentTask[] {
+    const tasks = this.running(childId).filter(task => ids.includes(task.id));
+    for (const task of tasks) {
+      this.store.run(`UPDATE agent_tasks SET status=?,report=?,finished_at=datetime('now') WHERE id=? AND status='running'`, status, report, task.id);
+    }
     return tasks.map(task => ({ ...task, status, report }));
   }
 

@@ -1,16 +1,54 @@
-/** What a master agent may do with its children. Fixed for now; the admin panel does not offer them yet. */
-export const orchestrationLimits = {
+import { z } from 'zod';
+import type { Store } from '../database.js';
+
+const count = (min: number, max: number) => z.number().int().min(min, `不能少于 ${min}`).max(max, `不能超过 ${max}`);
+
+/** What a master agent may do with its children; administrators change these in the panel. */
+export const orchestrationSettingsSchema = z.object({
   /** Children with a task in progress, per master and per user. */
-  runningPerMaster: 4,
-  runningPerUser: 8,
-  /** Children allowed to modify files that may run at once under one master: they share the project directory. */
-  writersPerMaster: 1,
-  /** Automatic report turns after the user's last message; then reports wait for the user. */
-  reportTurnsPerMessage: 20,
+  runningPerMaster: count(1, 16),
+  runningPerUser: count(1, 64),
+  /** Writing children that share the project directory, per master; their directories must not contain each other. */
+  sharedWritersPerMaster: count(0, 8),
+  /** Writing children in their own Git worktree, per master; each costs a mirror and a sync session. */
+  worktreeWritersPerMaster: count(0, 8),
+  /** Automatic report turns after the user's last message; later reports wait for the user. */
+  reportTurnsPerMessage: count(1, 100),
+}).strict();
+export type OrchestrationSettings = z.infer<typeof orchestrationSettingsSchema>;
+
+export const orchestrationDefaults: OrchestrationSettings = {
+  runningPerMaster: 4, runningPerUser: 8, sharedWritersPerMaster: 1, worktreeWritersPerMaster: 4, reportTurnsPerMessage: 20,
+};
+
+/** Fixed by the protocol rather than by policy. */
+export const orchestrationConstants = {
   /** A report longer than this is cut; the master can read the rest with read_agent. */
   reportCharacters: 16 * 1024,
-  /** wait_agents returns after this at the latest. */
+  /** wait_agents returns after this at the latest; both CLIs keep a tool call open at least this long. */
   waitSeconds: 600,
   /** Reports finishing within this window reach the master as one message. */
   deliveryDelayMs: 2000,
 } as const;
+
+export class OrchestrationSettingsStore {
+  private cached?: OrchestrationSettings;
+
+  constructor(private readonly store: Store) {}
+
+  view(): OrchestrationSettings {
+    if (this.cached) return this.cached;
+    const row = this.store.get<{ config: string }>('SELECT config FROM orchestration_settings WHERE id=1');
+    // A stored value from an older version keeps what it has and takes today's defaults for the rest.
+    const parsed = row ? orchestrationSettingsSchema.partial().safeParse(JSON.parse(row.config)) : undefined;
+    this.cached = { ...orchestrationDefaults, ...(parsed?.success ? parsed.data : {}) };
+    return this.cached;
+  }
+
+  update(settings: OrchestrationSettings): OrchestrationSettings {
+    this.store.run(`INSERT INTO orchestration_settings(id,config) VALUES(1,?)
+      ON CONFLICT(id) DO UPDATE SET config=excluded.config`, JSON.stringify(orchestrationSettingsSchema.parse(settings)));
+    this.cached = undefined;
+    return this.view();
+  }
+}

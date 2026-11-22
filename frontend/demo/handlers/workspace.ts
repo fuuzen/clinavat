@@ -224,6 +224,13 @@ export const workspaceHandlers = [
     syncRules.set(project.id, rules);
     return HttpResponse.json(project, { status: 202 });
   }),
+  http.put("/api/projects/:id/worktree-setup", async ({ params, request }) => {
+    const project = findProject(params.id);
+    if (!project) return fail(404, "项目不存在");
+    const { command } = await readBody<{ command: string | null }>(request);
+    project.worktree_setup = command?.trim() || null;
+    return HttpResponse.json(project);
+  }),
   http.get("/api/projects/:id/usage", () => HttpResponse.json({ mirrorBytes: 2_404_200 })),
   http.get("/api/projects/:id/files", ({ request }) =>
     HttpResponse.json({ entries: listFiles(new URL(request.url).searchParams.get("path") || "") })),

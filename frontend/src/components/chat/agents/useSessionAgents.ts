@@ -37,5 +37,12 @@ export function useSessionAgents(sessionId: string | undefined, enabled: boolean
     stopAll: () => act(() => post(`/sessions/${sessionId}/agents/stop`, {})),
     stop: (childId: string) => act(() => post(`/sessions/${childId}/stop`)),
     deliver: () => act(async () => setView(await post<AgentPanelView>(`/sessions/${sessionId}/agents/deliver`, {}))),
+    /** Merges a child's branch; on conflict the project stays as it was unless `leave` keeps the markers for the user. */
+    merge: (childId: string, onConflict: "abort" | "leave") => act(async () => {
+      const outcome = await post<{ status: string; detail: string; files: string[] }>(`/sessions/${sessionId}/agents/${childId}/merge`, { onConflict });
+      if (outcome.status !== "merged") onNotice(`${outcome.detail}${outcome.files.length ? `（${outcome.files.join("、")}）` : ""}`);
+    }),
+    discard: (childId: string) => act(async () => setView(await post<AgentPanelView>(`/sessions/${sessionId}/agents/${childId}/discard`, {}))),
+    handoff: (childId: string) => act(() => post(`/sessions/${sessionId}/agents/${childId}/handoff`, {})),
   };
 }

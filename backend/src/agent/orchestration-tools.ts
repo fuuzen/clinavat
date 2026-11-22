@@ -1,8 +1,22 @@
+import path from 'node:path';
 import { getPermissionMode } from './permissions.js';
+import { workspacePath } from './environment.js';
 import type { AgentContext, HubToolResult, RunServices } from './types.js';
 
 /** The namespace of the Hub's tools: Claude Code shows them as mcp__clinavat__<tool>, Codex as clinavat.<tool>. */
 export const hubToolNamespace = 'clinavat';
+
+/** Where the CLI works: a child agent's directory, or the project root. */
+export function workingDirectory(context: AgentContext): string {
+  return context.session.agent_directory ? path.join(context.project.local_path, context.session.agent_directory) : context.project.local_path;
+}
+
+/** Refuses a change outside a child agent's directory; reading the rest of the project stays allowed. */
+export async function assertWritable(context: AgentContext, target: string): Promise<void> {
+  if (!context.session.agent_directory) return;
+  try { await workspacePath(workingDirectory(context), target, true); }
+  catch { throw new Error(`你的工作目录是 ${context.session.agent_directory}，只能修改其中的文件；需要改动其他位置时，请在最终回复中说明。`); }
+}
 
 export function orchestrates(context: AgentContext): boolean {
   return !!context.session.orchestration && !context.session.parent_session_id;

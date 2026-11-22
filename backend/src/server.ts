@@ -38,6 +38,8 @@ import { SiteSettingsService } from './site-settings.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 import type { AgentContext, AgentEvent, OrchestrationHost } from './agent/types.js';
 import { Orchestrator } from './orchestration/service.js';
+import { OrchestrationSettingsStore } from './orchestration/limits.js';
+import { Worktrees } from './orchestration/worktrees.js';
 import { sessionAgentRoutes } from './routes/session-agents.js';
 import { AccountCredentials } from './accounts/credentials.js';
 import { SlotTokens } from './accounts/slot-tokens.js';
@@ -286,7 +288,9 @@ app.addHook('onSend', async (_request, reply) => {
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
 const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
-  usageSettings, machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
+  usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
+const worktrees = new Worktrees(context);
+Object.assign(context, { worktrees });
 const orchestrator = new Orchestrator(context);
 agentConfig.orchestration = orchestrator;
 observeAgentEvent = event => orchestrator.observe(event);

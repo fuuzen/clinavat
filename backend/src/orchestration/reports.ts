@@ -3,7 +3,7 @@ import type { Session, User } from '../models.js';
 import type { AgentEvent } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { reportBlock } from './instructions.js';
-import { orchestrationLimits } from './limits.js';
+import { orchestrationConstants } from './limits.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
 
 const finishedStatuses = new Set(['completed', 'interrupted', 'error']);
@@ -48,11 +48,17 @@ export class ReportDelivery {
     const error = this.errors.get(child.id);
     this.errors.delete(child.id);
     const failure = status === 'error' ? `\n\n[子智能体出错：${error ?? '未知错误'}]` : '';
-    this.finish(child, status, (answer?.trim() || fallbackReports[status]) + (answer ? failure : failure.trimStart()));
+    void this.complete(child, status, (answer?.trim() || fallbackReports[status]) + (answer ? failure : failure.trimStart()));
   }
 
-  finish(child: Session, status: 'completed' | 'interrupted' | 'error', report: string): void {
-    const finished = this.tasks.finish(child.id, status, report);
+  /** Ends the child's tasks; a child in its own worktree first gets its work committed, and the report says where it is. */
+  async complete(child: Session, status: 'completed' | 'interrupted' | 'error', report: string): Promise<void> {
+    const ending = this.tasks.running(child.id).map(task => task.id);
+    if (!ending.length) return;
+    const worktree = child.agent_isolation === 'worktree' && this.context.worktrees
+      ? await this.context.worktrees.settle(child).catch((error: unknown) => `[worktree] 无法检查子智能体的修改：${error instanceof Error ? error.message : String(error)}`)
+      : '';
+    const finished = this.tasks.finish(child.id, status, worktree ? `${report}\n\n${worktree}` : report, ending);
     if (!finished.length || !child.parent_session_id) return;
     for (const task of finished) if (task.notify) this.deliverable.add(task.id);
     for (const wake of this.waiters.get(child.id) ?? []) wake();
@@ -99,7 +105,7 @@ export class ReportDelivery {
     const timer = setTimeout(() => {
       this.timers.delete(masterId);
       void this.deliver(masterId, false);
-    }, orchestrationLimits.deliveryDelayMs);
+    }, orchestrationConstants.deliveryDelayMs);
     timer.unref();
     this.timers.set(masterId, timer);
   }
@@ -112,11 +118,12 @@ export class ReportDelivery {
     if (!master || !user) return;
     const pending = this.tasks.pending(masterId).filter(task => manual || (this.deliverable.has(task.id) && !this.awaited.has(task.child_session_id)));
     if (!pending.length) return;
-    if (!manual && this.tasks.reportTurnsSinceUser(masterId) >= orchestrationLimits.reportTurnsPerMessage) {
+    const { reportTurnsPerMessage } = this.context.orchestrationSettings.view();
+    if (!manual && this.tasks.reportTurnsSinceUser(masterId) >= reportTurnsPerMessage) {
       if (!this.paused.has(masterId)) {
         this.paused.add(masterId);
         events.emit(user.id, { type: 'notice', sessionId: masterId, payload: {
-          message: `主智能体在你上一条消息之后已自动汇总 ${orchestrationLimits.reportTurnsPerMessage} 次，后续子智能体汇报已暂停，可在子智能体面板中手动投递。` } });
+          message: `主智能体在你上一条消息之后已自动汇总 ${reportTurnsPerMessage} 次，后续子智能体汇报已暂停，可在子智能体面板中手动投递。` } });
         this.changed(masterId);
       }
       return;

@@ -11,6 +11,7 @@ import HostManagement from "./HostManagement";
 import GatewayManagement from "./GatewayManagement";
 import ResourceManagement from "./ResourceManagement";
 import QuestionDefaults from "./QuestionDefaults";
+import OrchestrationLimits from "./OrchestrationLimits";
 import TokenUsageReport from "./TokenUsageReport";
 import type { AdminHealth, AdminTab } from "./types";
 
@@ -119,7 +120,7 @@ export default function AdminPanel(props: Props) {
             {(id === "workspaces" || id === "connections") && tab === id && <ResourceManagement kind={id} overview={props.overview} users={users} selectedUserId={resourceUserId} onSelectUser={setResourceUserId} onOpenProject={props.onOpenProject} onNewProject={props.onNewProject} onNewHost={props.onNewHost} onEditHost={props.onEditHost} onConnect={props.onConnect} onRefresh={refresh} refreshing={loading} />}
             {id === "users" && tab === id && <div className="admin-existing-module"><UserManagement currentUserId={props.overview.user.id} onRefresh={refresh} onSlots={() => selectTab("slots")} /></div>}
             {id === "slots" && tab === id && <div className="admin-existing-module"><SlotManagement onRefresh={refresh} /></div>}
-            {id === "questions" && tab === id && <QuestionDefaults />}
+            {id === "questions" && tab === id && <><QuestionDefaults /><OrchestrationLimits /></>}
             {id === "usage" && tab === id && <TokenUsageReport />}
           </section>
         ))}

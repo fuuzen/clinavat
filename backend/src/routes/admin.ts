@@ -12,6 +12,7 @@ import { resetSlotLimit } from '../accounts/limit-resets/service.js';
 import { initializeSlotProfile } from '../accounts/slot-runtime/profile.js';
 import { parseSetupToken } from '../accounts/slot-tokens.js';
 import { usageSettingsSchema } from '../accounts/usage-settings.js';
+import { orchestrationDefaults, orchestrationSettingsSchema } from '../orchestration/limits.js';
 import { adminUserRoutes } from './admin-users.js';
 import { adminMachineRoutes } from './admin-machines.js';
 import { agentEngines, engineProfiles } from '../agent/engines.js';
@@ -49,6 +50,14 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
   app.put('/api/admin/settings/usage', async request => {
     requireAdmin(request);
     return context.usageSettings.update(usageSettingsSchema.parse(request.body));
+  });
+  app.get('/api/admin/settings/orchestration', async request => {
+    requireAdmin(request);
+    return { settings: context.orchestrationSettings.view(), defaults: orchestrationDefaults };
+  });
+  app.put('/api/admin/settings/orchestration', async request => {
+    requireAdmin(request);
+    return { settings: context.orchestrationSettings.update(orchestrationSettingsSchema.parse(request.body)), defaults: orchestrationDefaults };
   });
   // Where local projects' commands run; reported only with slot machines.
   app.get('/api/admin/host-commands', async request => {

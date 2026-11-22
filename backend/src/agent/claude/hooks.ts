@@ -3,7 +3,7 @@ import { quoteShell, workspacePath } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import type { RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
-import { hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { assertWritable, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {
@@ -81,6 +81,7 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
         return nativeDecision();
       }
       await workspacePath(root, path.resolve(cwd, args.file_path), tool !== 'Read');
+      if (tool !== 'Read') await assertWritable(services.context, path.resolve(cwd, args.file_path));
       if (!yolo) return nativeDecision();
       const approved = await services.approve(tool, args);
       if (approved.decision === 'allow') await workspacePath(root, path.resolve(cwd, args.file_path), true);

@@ -31,8 +31,8 @@
 }
 .agent-card {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
   padding: 5px 6px 5px 10px;
   border: 1px solid var(--line);
@@ -40,7 +40,36 @@
   background: var(--surface);
   font-size: 12px;
 }
-.agent-card > .engine-logo {
+.agent-card-row,
+.agent-card-branch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.agent-card-branch {
+  padding: 2px 0 1px;
+  color: var(--text-secondary);
+}
+.agent-card-branch-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-card-branch > button {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.agent-card-branch > button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.agent-card-row > .engine-logo {
   flex: 0 0 auto;
   width: 14px;
   height: 14px;
@@ -144,7 +173,8 @@
   font-size: 11px;
   color: var(--success);
 }
-.agent-report-error {
+.agent-report-error,
+.agent-report-conflict {
   color: var(--danger);
 }
 .agent-report-interrupted {
@@ -193,4 +223,22 @@
 }
 .session-agent-name {
   font-weight: 600;
+}
+
+.orchestration-limits {
+  display: grid;
+  gap: 12px;
+}
+.orchestration-limits > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+.orchestration-limits > label > small {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--muted);
 }

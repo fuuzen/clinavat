@@ -14,6 +14,8 @@ import type { TokenUsageLedger } from './token-usage/ledger.js';
 import type { PriceBook } from './token-usage/price-book.js';
 import type { UsageSettingsStore } from './accounts/usage-settings.js';
 import type { AgentDefaults } from './agent-defaults.js';
+import type { OrchestrationSettingsStore } from './orchestration/limits.js';
+import type { Worktrees } from './orchestration/worktrees.js';
 import type { MachineResourceHost, MachineResourceSettingsStore } from './execution/machine-resources.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
@@ -28,6 +30,9 @@ export interface Context {
   tokenUsage: TokenUsageLedger;
   prices: PriceBook;
   usageSettings: UsageSettingsStore;
+  orchestrationSettings: OrchestrationSettingsStore;
+  /** Child agents' Git worktrees; set once the context exists, which it needs. */
+  worktrees?: Worktrees;
   machineResourceSettings: MachineResourceSettingsStore;
   /** Only with slot machines and workspace containers. */
   machineResources?: MachineResourceHost;

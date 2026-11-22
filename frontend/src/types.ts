@@ -58,6 +58,11 @@ export interface Project {
   sync_status: string;
   /** JSON of SkippedLinks, the symbolic links the sync last reported as skipped; null when there are none. */
   sync_skipped_links?: string | null;
+  /** Set on a child agent's Git worktree: the master project it belongs to. It is listed with that project. */
+  parent_project_id?: string | null;
+  worktree_branch?: string | null;
+  /** Run once in each new worktree of a child agent, such as installing dependencies. */
+  worktree_setup?: string | null;
 }
 
 export interface SkippedLink {
@@ -99,6 +104,9 @@ export interface Session {
   parent_session_id?: string | null;
   agent_name?: string | null;
   agent_access?: "read" | "write" | null;
+  /** Relative to the conversation's project root; edits outside it are refused. */
+  agent_directory?: string | null;
+  agent_isolation?: "shared" | "worktree" | null;
   /** 1 when the agent may start and direct child agents. */
   orchestration?: 0 | 1;
 }
@@ -115,8 +123,21 @@ export interface ChildAgent {
   archived: boolean;
   /** A task from the master is in progress. */
   running: boolean;
+  /** Relative to the child's project root; null for the root. */
+  directory: string | null;
+  isolation: "shared" | "worktree";
+  /** The child's own branch: "working" while it runs, "changes" to merge, "clean" once removed. */
+  worktree: { branch: string | null; state: "working" | "changes" | "conflict" | "resolving" | "clean"; conflicts: string[] } | null;
   lastTask: { status: "running" | "completed" | "interrupted" | "error"; finishedAt: string | null } | null;
   pendingReports: number;
+}
+/** Site-wide limits on master agents and their children. */
+export interface OrchestrationSettings {
+  runningPerMaster: number;
+  runningPerUser: number;
+  sharedWritersPerMaster: number;
+  worktreeWritersPerMaster: number;
+  reportTurnsPerMessage: number;
 }
 export interface AgentPanelView {
   agents: ChildAgent[];

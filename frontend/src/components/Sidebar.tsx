@@ -60,6 +60,7 @@ export default function Sidebar(props: Props) {
   const [menu, setMenu] = useState("");
   const waiting = new Set(overview.deferredQuestions.map((item) => item.session_id));
   const activeSessions = overview.sessions.filter((session) => !session.archived_at);
+  const worktreeParents = new Map(overview.projects.flatMap((project) => project.parent_project_id ? [[project.id, project.parent_project_id] as const] : []));
   function toggle(id: string) {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -123,7 +124,7 @@ export default function Sidebar(props: Props) {
           )}
           {overview.hosts.map((host) => {
             const projects = overview.projects.filter(
-              (project) => project.dev_host_id === host.id,
+              (project) => project.dev_host_id === host.id && !project.parent_project_id,
             );
             if (
               search &&
@@ -217,8 +218,9 @@ export default function Sidebar(props: Props) {
                 {!collapsed.has(host.id) && (
                   <div className="host-projects">
                     {projects.map((project) => {
+                      // A child agent in its own worktree is listed under its master's project.
                       const sessions = activeSessions.filter(
-                        (session) => session.project_id === project.id,
+                        (session) => session.project_id === project.id || worktreeParents.get(session.project_id) === project.id,
                       );
                       if (
                         search &&
@@ -309,7 +311,7 @@ export default function Sidebar(props: Props) {
                                     menuOpen={menu === session.id}
                                     onToggleMenu={() => setMenu(menu === session.id ? "" : session.id)}
                                     onSelect={() => {
-                                      props.onSelect(project, session);
+                                      props.onSelect(overview.projects.find((item) => item.id === session.project_id) ?? project, session);
                                       props.onClose();
                                     }}
                                     onRename={() => {

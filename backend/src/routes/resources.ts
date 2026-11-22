@@ -157,6 +157,17 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
       }
     });
   });
+  // Run by the Hub in each new worktree of a child agent, without approval: only the project's owner sets it.
+  app.put('/api/projects/:id/worktree-setup', async request => {
+    const { id } = identifier.parse(request.params);
+    const { command } = z.object({ command: z.string().max(4000).nullable() }).strict().parse(request.body);
+    const project = projectFor(context, id, request.user.id);
+    if (project.parent_project_id) throw new HttpError(400, '子智能体的 worktree 使用主项目的初始化命令');
+    store.run('UPDATE projects SET worktree_setup=? WHERE id=?', command?.trim() || null, id);
+    const updated = projectFor(context, id, request.user.id);
+    events.emit(request.user.id, { type: 'project', payload: updated });
+    return updated;
+  });
   app.get('/api/projects/:id/sync-rules', async request => {
     const { id } = identifier.parse(request.params);
     const project = projectFor(context, id, request.user.id);
@@ -217,8 +228,12 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`project:${id}`], async () => {
       const project = projectFor(context, id, request.user.id);
-      await assertProjectIdle(context, id);
-      await workspaces.remove(project);
+      // Child agents' worktree projects go with their master project, checkout and branch included.
+      const worktreeProjects = store.all<Project>('SELECT * FROM projects WHERE parent_project_id=?', id);
+      for (const item of [project, ...worktreeProjects]) await assertProjectIdle(context, item.id);
+      for (const item of worktreeProjects) await context.worktrees?.release(item);
+      if (project.parent_project_id) await context.worktrees?.release(project);
+      else await workspaces.remove(project);
       store.run('DELETE FROM projects WHERE id=?', id);
       context.connections.revokeResource(`project:${id}`);
       return { ok: true };

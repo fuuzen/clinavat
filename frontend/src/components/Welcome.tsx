@@ -21,6 +21,8 @@ export default function Welcome({
   onNewProject,
   onSelectProject,
 }: WelcomeProps) {
+  // Child agents' worktrees belong to their master project.
+  const projects = overview.projects.filter((project) => !project.parent_project_id);
   return (
     <div className="welcome">
       <div className="welcome-symbol">
@@ -70,13 +72,13 @@ export default function Welcome({
           <small>实时审阅代码与工具审批</small>
         </div>
       </div>
-      {overview.projects.length > 0 && (
+      {projects.length > 0 && (
         <div className="recent-projects">
           <div className="section-label">
             <span>回到项目</span>
-            <span>{overview.projects.length} 个项目</span>
+            <span>{projects.length} 个项目</span>
           </div>
-          {overview.projects.slice(0, 3).map((project) => (
+          {projects.slice(0, 3).map((project) => (
             <button key={project.id} onClick={() => onSelectProject(project)}>
               <FolderOpen size={17} />
               <div>

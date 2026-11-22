@@ -1,9 +1,14 @@
 import { http, HttpResponse } from "msw";
 import { withSiteDefaults, type SiteSettings } from "../../src/site/settings";
-import type { ModelPrice, ModelPriceList, QuestionPolicy, QuestionPreference, Slot, UsageSettings, User } from "../../src/types";
+import type { ModelPrice, ModelPriceList, OrchestrationSettings, QuestionPolicy, QuestionPreference, Slot, UsageSettings, User } from "../../src/types";
 import { db, timestamp } from "../store";
 import { tokenUsageReport } from "../token-usage";
 import { fail, readBody, unavailable } from "./respond";
+
+const orchestrationDefaults: OrchestrationSettings = {
+  runningPerMaster: 4, runningPerUser: 8, sharedWritersPerMaster: 1, worktreeWritersPerMaster: 4, reportTurnsPerMessage: 20,
+};
+let orchestrationSettings = { ...orchestrationDefaults };
 
 const snapshotPrices: Record<string, ModelPrice> = {
   "claude-haiku-5-5": [0.1, 0.01, 0.125, 0.5], "claude-opus-5-5": [4, 0.2, 5, 20],
@@ -145,6 +150,11 @@ export const adminHandlers = [
   http.put("/api/admin/settings/usage", async ({ request }) => {
     db.usageSettings = await readBody<UsageSettings>(request);
     return HttpResponse.json(db.usageSettings);
+  }),
+  http.get("/api/admin/settings/orchestration", () => HttpResponse.json({ settings: orchestrationSettings, defaults: orchestrationDefaults })),
+  http.put("/api/admin/settings/orchestration", async ({ request }) => {
+    orchestrationSettings = await readBody<OrchestrationSettings>(request);
+    return HttpResponse.json({ settings: orchestrationSettings, defaults: orchestrationDefaults });
   }),
   http.get("/api/settings/questions", () => HttpResponse.json({ site: db.siteQuestions, user: db.userQuestions })),
   http.put("/api/settings/questions", async ({ request }) => {

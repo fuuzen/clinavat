@@ -147,6 +147,7 @@ export class Store {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         media_type TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS orchestration_settings (id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         child_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, prompt TEXT NOT NULL,
@@ -205,6 +206,17 @@ export class Store {
     this.addColumn('sessions', 'agent_name', 'TEXT');
     this.addColumn('sessions', 'agent_access', "TEXT CHECK(agent_access IN ('read','write'))");
     this.addColumn('sessions', 'orchestration', 'INTEGER NOT NULL DEFAULT 0 CHECK(orchestration IN (0,1))');
+    // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
+    this.addColumn('sessions', 'agent_directory', 'TEXT');
+    this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");
+    // A worktree project: a child agent's own checkout of its master project's repository, on a branch of its own.
+    this.addColumn('projects', 'parent_project_id', 'TEXT REFERENCES projects(id) ON DELETE CASCADE');
+    // worktree_conflicts lists, as JSON, the files of the last merge that stopped on conflicts.
+    for (const column of ['worktree_repo', 'worktree_path', 'worktree_branch', 'worktree_base', 'worktree_state', 'worktree_conflicts']) {
+      this.addColumn('projects', column, 'TEXT');
+    }
+    // Run once in each new worktree of the project, such as installing dependencies; set by the user, never read from the repository.
+    this.addColumn('projects', 'worktree_setup', 'TEXT');
     // Images of a send that failed or of a discarded queued message. The day of grace keeps those of a send
     // retried across a restart.
     this.run(`DELETE FROM message_images WHERE created_at < datetime('now','-1 day')

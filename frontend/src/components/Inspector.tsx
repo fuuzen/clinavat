@@ -17,6 +17,7 @@ import { api, errorText, formatBytes, post } from "../api";
 import type { FileEntry, GitState, Project, ProjectUsage, SkippedLinks } from "../types";
 import SkippedLinksDialog from "./projects/SkippedLinksDialog";
 import SyncRulesDialog from "./projects/SyncRulesDialog";
+import WorktreeSetupDialog from "./projects/WorktreeSetupDialog";
 import FileBrowser from "./workspace/FileBrowser";
 import UploadStatus from "./workspace/UploadStatus";
 import { useUploads } from "./workspace/useUploads";
@@ -57,6 +58,7 @@ export default function Inspector({
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [rulesDialog, setRulesDialog] = useState<{ append: string[] } | null>(null);
+  const [worktreeDialog, setWorktreeDialog] = useState(false);
   const [linksOpen, setLinksOpen] = useState(false);
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
@@ -358,6 +360,12 @@ export default function Inspector({
                   排除规则
                 </button>
               )}
+              {!project.parent_project_id && (
+                <button onClick={() => setWorktreeDialog(true)} title="子智能体 worktree 的初始化命令">
+                  <GitBranch size={12} />
+                  Worktree
+                </button>
+              )}
               {showSyncAction && (
                 <button
                   disabled={syncing || project.sync_status === "CREATING"}
@@ -392,6 +400,7 @@ export default function Inspector({
           {rulesDialog && project && (
             <SyncRulesDialog project={project} append={rulesDialog.append} onClose={() => setRulesDialog(null)} onSaved={onRefresh} />
           )}
+          {worktreeDialog && project && <WorktreeSetupDialog project={project} onClose={() => setWorktreeDialog(false)} onSaved={onRefresh} />}
         </>
       )}
     </aside>

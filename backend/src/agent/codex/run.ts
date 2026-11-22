@@ -4,7 +4,7 @@ import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
 import { codexPermissions, createCodexRequests } from './requests.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { callHubTool, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { callHubTool, hubToolNamespace, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { roleInstructions } from '../session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
 import { CodexSubagents } from './subagents.js';
@@ -25,7 +25,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
   const { execution } = services.config;
   const scope = agentScope(services.context);
   const binary = await execution.binary(scope, 'codex');
-  const root = services.context.project.local_path;
+  const root = workingDirectory(services.context);
   const permissions = codexPermissions(services);
   const arguments_ = codexServerArguments(services.context);
   if (signal.aborted) throw new Error('会话已停止');

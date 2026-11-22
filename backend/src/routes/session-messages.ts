@@ -66,7 +66,12 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
   return withResourceLocks(context, [`session:${id}`], async () => {
     const session = sessionFor(context, id, user.id);
     if (session.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再继续');
-    const project = projectFor(context, session.project_id, user.id);
+    let project = projectFor(context, session.project_id, user.id);
+    // A child agent's worktree is removed while it has nothing to merge, and comes back for its next message.
+    if (project.parent_project_id && project.sync_status === 'DORMANT') {
+      if (!context.worktrees) throw new HttpError(503, 'worktree 服务尚未就绪');
+      project = await context.worktrees.revive(project);
+    }
     if (session.slot_mode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '当前对话自动选择账号，请勿指定固定账号');
     const currentRuntime = agents.view(id);
     if (currentRuntime.switching) throw new HttpError(409, '正在切换账号，请等待完成或停止对话');

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
-import { HttpError, type Session, type Slot, type User } from '../models.js';
+import { HttpError, type Project, type Session, type Slot, type User } from '../models.js';
 import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
 import { defaultPermissionModeFor, permissionModes, validatePermissionMode } from '../agent/permissions.js';
@@ -34,7 +34,12 @@ export const sessionInput = z.object({ projectId: z.uuid(), engine: z.enum(agent
   title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false), ...selectionFields });
 
 /** A child conversation's place under its master. */
-export interface ChildAgent { parentSessionId: string; name: string; access: 'read' | 'write' }
+export interface ChildAgent {
+  parentSessionId: string; name: string; access: 'read' | 'write';
+  /** Relative to the child's project root; null for the root. */
+  directory: string | null;
+  isolation: 'shared' | 'worktree';
+}
 
 /** Only a conversation the user started may direct others, and Codex fixes its tools when the thread starts. */
 export function assertOrchestration(session: Pick<Session, 'engine' | 'parent_session_id' | 'native_session_id'>, enable: boolean) {
@@ -62,9 +67,10 @@ export async function createSession(context: Context, user: User, input: z.infer
     if (input.slotMode === 'manual') await validate(slot);
     slotForUser(store, slot.id, user.id, input.engine);
     store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
-      orchestration,parent_session_id,agent_name,agent_access) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      orchestration,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
-    permissionMode, agentMode, rolePreset, input.orchestration ? 1 : 0, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null);
+    permissionMode, agentMode, rolePreset, input.orchestration ? 1 : 0, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
+    child?.directory ?? null, child?.isolation ?? null);
     const created = sessionFor(context, id, user.id);
     context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
     return created;
@@ -203,6 +209,13 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
       await releaseSession(context, id, request.user.id);
       store.run('DELETE FROM sessions WHERE id=?', id);
+      // A child agent's worktree project serves only its conversation.
+      const project = store.get<Project>('SELECT * FROM projects WHERE id=?', session.project_id);
+      if (project?.parent_project_id && !store.get('SELECT id FROM sessions WHERE project_id=?', project.id)) {
+        await context.worktrees?.release(project);
+        store.run('DELETE FROM projects WHERE id=?', project.id);
+        events.emit(request.user.id, { type: 'project', payload: { id: project.id, deleted: true } });
+      }
       return { ok: true };
     });
   });

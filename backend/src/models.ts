@@ -33,6 +33,19 @@ export interface Project {
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
   sync_rules: string | null;
   sync_skipped_links?: string | null;
+  /** Set on a child agent's worktree project: its master project, and where its checkout lives. */
+  parent_project_id?: string | null;
+  /** The repository root on the development host (or the host) that the worktree belongs to. */
+  worktree_repo?: string | null;
+  /** The worktree's root; the project's remote path may be a directory inside it. */
+  worktree_path?: string | null;
+  worktree_branch?: string | null;
+  /** The commit the branch started from. */
+  worktree_base?: string | null;
+  /** 'changes' when its branch has commits to merge, 'conflict' after a merge stopped, 'resolving' while the user resolves one. */
+  worktree_state?: 'changes' | 'conflict' | 'resolving' | null;
+  worktree_conflicts?: string | null;
+  worktree_setup?: string | null;
 }
 export interface Session {
   id: string; project_id: string; user_id: string; engine: AgentEngine; slot_id: string | null;
@@ -58,6 +71,9 @@ export interface Session {
   agent_access: 'read' | 'write' | null;
   /** Whether the agent may start and direct child agents through the Hub's tools. */
   orchestration: 0 | 1;
+  /** A child agent's working directory relative to its project's root; NULL for the root. */
+  agent_directory: string | null;
+  agent_isolation: 'shared' | 'worktree' | null;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

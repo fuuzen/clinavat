@@ -3,7 +3,7 @@ import { Markdown } from "../MessageView";
 
 interface Report { agent: string; engine: string; model: string; status: string; task: string; text: string }
 
-const statusNames: Record<string, string> = { completed: "已完成", interrupted: "已中断", error: "出错" };
+const statusNames: Record<string, string> = { completed: "已完成", interrupted: "已中断", error: "出错", conflict: "合并冲突" };
 
 /** Reads the report blocks the Hub writes into a report message; anything else in it is shown as it is. */
 function parseReports(content: string): { reports: Report[]; rest: string } {
