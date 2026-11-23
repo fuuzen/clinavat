@@ -28,7 +28,16 @@ export function sessionQuestionRoutes(app: FastifyInstance, context: Context) {
   app.get('/api/sessions/:id/questions', async request => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     sessionFor(context, id, request.user.id);
-    return [...deferred(id), ...agents.questions.list(id)];
+    const own = [...deferred(id), ...agents.questions.list(id)];
+    const children = store.all<{ id: string; agent_name: string | null; title: string }>(
+      'SELECT id,agent_name,title FROM sessions WHERE parent_session_id=? AND user_id=? AND archived_at IS NULL ORDER BY created_at,rowid',
+      id, request.user.id,
+    );
+    const childRequests = children.flatMap(child =>
+      [...deferred(child.id), ...agents.questions.list(child.id)]
+        .map(item => ({ ...item, agent_name: child.agent_name ?? child.title })),
+    );
+    return [...own, ...childRequests];
   });
   app.post('/api/sessions/:id/questions/:requestId', async request => {
     const { id, requestId } = z.object({ id: z.uuid(), requestId: z.uuid() }).parse(request.params);

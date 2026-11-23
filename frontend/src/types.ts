@@ -178,9 +178,15 @@ export interface WorkItemView {
   summary: string | null;
   updatedAt: string;
 }
+export interface MemoryEntryView {
+  key: string;
+  content: string;
+  updatedAt: string;
+}
 export interface AgentPanelView {
   agents: ChildAgent[];
   tasks: WorkItemView[];
+  memories: MemoryEntryView[];
   discussions: DiscussionView[];
   /** Finished reports the master has not received yet. */
   pendingReports: number;

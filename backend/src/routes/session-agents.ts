@@ -8,6 +8,7 @@ import { slotChoice } from '../orchestration/children.js';
 import { agentEngines } from '../agent/engines.js';
 import { createSession, sessionInput } from './sessions.js';
 import { profileInput } from '../orchestration/roster.js';
+import { memoryKeySchema } from '../orchestration/memory.js';
 
 const discussionInput = toolInputs.start_discussion.extend({
   // Synthesizes the record at the end, in a new conversation that hosts the discussion.
@@ -103,6 +104,13 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     sessionFor(context, id, request.user.id);
     z.object({}).strict().parse(request.body ?? {});
     await orchestrator.deliver(id);
+    return orchestrator.view(id);
+  });
+  app.delete('/api/sessions/:id/agents/memories/:key', async request => {
+    const { id, key } = z.object({ id: z.uuid(), key: memoryKeySchema }).parse(request.params);
+    const master = sessionFor(context, id, request.user.id);
+    orchestrator.memory.remove(master.project_id, key);
+    orchestrator.publish(id);
     return orchestrator.view(id);
   });
 }

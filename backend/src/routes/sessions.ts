@@ -263,6 +263,34 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         setSessionArchived(context, request.user.id, id, action === 'archive'));
     });
   }
+  app.post('/api/sessions/:id/rollover', async request => {
+    const { id } = identifier.parse(request.params);
+    const { note } = z.object({ note: z.string().trim().max(2000).optional() }).strict().parse(request.body ?? {});
+    sessionFor(context, id, request.user.id);
+    return withResourceLocks(context, [`session:${id}`], async () => {
+      const current = sessionFor(context, id, request.user.id);
+      if (current.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再操作');
+      const hasHistory = !!current.native_session_id
+        || !!store.get<{ id: string }>('SELECT id FROM messages WHERE session_id=? LIMIT 1', id);
+      if (!hasHistory) throw new HttpError(409, '当前对话尚未开始，无需续接上下文');
+      await releaseSession(context, id, request.user.id);
+      const messageId = randomUUID();
+      const summaryNote = note?.trim() ? `\n保留重点：${note.trim()}` : '';
+      const marker = `已执行无感上下文续接：下一条消息将启动全新底层会话，自动继承持久记忆、任务看板、子智能体状态与近期对话脉络。${summaryNote}`;
+      store.transaction(() => {
+        store.run(
+          `UPDATE sessions SET native_session_id=NULL,fork_native_id=NULL,fork_native_anchor=NULL,jsonl_file_path=NULL,
+           token_usage_cursor=NULL,updated_at=datetime('now') WHERE id=?`,
+          id,
+        );
+        store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, id, marker);
+      });
+      const updated = sessionFor(context, id, request.user.id);
+      events.emit(request.user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
+      events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
+      return updated;
+    });
+  });
   app.get('/api/sessions/:id/messages', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);

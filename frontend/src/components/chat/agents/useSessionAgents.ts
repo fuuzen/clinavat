@@ -45,6 +45,9 @@ export function useSessionAgents(sessionId: string | undefined, enabled: boolean
     discard: (childId: string) => act(async () => setView(await post<AgentPanelView>(`/sessions/${sessionId}/agents/${childId}/discard`, {}))),
     handoff: (childId: string) => act(() => post(`/sessions/${sessionId}/agents/${childId}/handoff`, {})),
     archiveChild: (childId: string) => act(() => post(`/sessions/${childId}/archive`, {})),
+    deleteMemory: (key: string) => act(async () => setView(await api<AgentPanelView>(
+      `/sessions/${sessionId}/agents/memories/${encodeURIComponent(key)}`, { method: "DELETE" },
+    ))),
     stopDiscussion: (discussionId: string) => act(() => post(`/discussions/${discussionId}/stop`, {})),
   };
 }

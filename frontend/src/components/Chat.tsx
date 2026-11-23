@@ -11,7 +11,6 @@ import {
   Terminal,
 } from "lucide-react";
 import Welcome from "./Welcome";
-import { ApprovalCard } from "./ToolCards";
 import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
@@ -26,11 +25,11 @@ import { useComposerDraft } from "./chat/composer/useComposerDraft";
 import { maxComposerImages, prepareImage, type ComposerImage } from "./chat/composer/imageAttachments";
 import ConversationOutline from "./chat/ConversationOutline";
 import BehaviorPicker from "./chat/native/BehaviorPicker";
-import QuestionPanel from "./chat/native/QuestionPanel";
 import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
 import ArchivedNotice from "./chat/ArchivedNotice";
 import ForkOrigin from "./chat/ForkOrigin";
+import ActionInbox from "./chat/agents/ActionInbox";
 import AgentOrigin from "./chat/agents/AgentOrigin";
 import AgentPanel from "./chat/agents/AgentPanel";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
@@ -52,7 +51,7 @@ import type {
   ToolEvent,
   Turn,
 } from "../types";
-import { errorText, isActive, statusLabel } from "../api";
+import { errorText, isActive, post, statusLabel } from "../api";
 import SyncProgressBar from "./projects/SyncProgressBar";
 import { engineProfiles } from "../engines";
 
@@ -138,12 +137,21 @@ export default function Chat(props: Props) {
   const currentEngine = accountSelection.engine;
   const { behavior, behaviorSaving, changeBehavior } = useAgentBehavior(session, project?.id, currentEngine, active, props.onBehaviorChange);
   const goal = useCodexGoal({ sessionId: session?.id, enabled: engineProfiles[currentEngine].goal && !session?.archived_at, connected: props.streamConnected, executing: active, onNotice: props.onNotice });
+  const rollover = async (note?: string): Promise<boolean> => {
+    if (!session) return false;
+    try {
+      await post(`/sessions/${session.id}/rollover`, note ? { note } : {});
+      await props.onProjectRefresh();
+      props.onNotice("已完成无感上下文续接，下一条消息将启动全新底层会话", "success");
+      return true;
+    } catch (cause) { props.onNotice(errorText(cause)); return false; }
+  };
   const commands = useChatCommands({
     engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,
     onNew: () => { if (project) props.onSelectProject(project); },
     onStop: props.onStop, onDiff: props.onDiff, onNotice: props.onNotice,
-    onPause: props.onPause, onResume: props.onResume, runStatus,
+    onPause: props.onPause, onResume: props.onResume, onRollover: rollover, runStatus,
     onGoalCommand: async arguments_ => {
       const handled = await goal.handleCommand(arguments_);
       if (handled) setStickToBottom(true);
@@ -286,21 +294,9 @@ export default function Chat(props: Props) {
         : "项目同步尚未就绪。请在工作区点击「立即同步」恢复后发送任务。"
       : undefined;
   const suggestions = [
-    {
-      icon: FileSearch,
-      title: "熟悉这个项目",
-      text: "请阅读项目结构，介绍主要模块、技术栈和开发入口。",
-    },
-    {
-      icon: Code2,
-      title: "一起实现新功能",
-      text: "请先了解项目现状，再和我讨论要实现的新功能。",
-    },
-    {
-      icon: GitBranch,
-      title: "审阅当前改动",
-      text: "请审阅当前工作区的代码变更，指出潜在问题和改进建议。",
-    },
+    { icon: FileSearch, title: "熟悉这个项目", text: "请阅读项目结构，介绍主要模块、技术栈和开发入口。" },
+    { icon: Code2, title: "一起实现新功能", text: "请先了解项目现状，再和我讨论要实现的新功能。" },
+    { icon: GitBranch, title: "审阅当前改动", text: "请审阅当前工作区的代码变更，指出潜在问题和改进建议。" },
   ];
   return (
     <main className="chat-panel">
@@ -392,21 +388,15 @@ export default function Chat(props: Props) {
                 />
               </>
             )}
-            {props.approvals
-              .filter(
-                (approval) =>
-                  approval.session_id === session?.id &&
-                  ["pending", "PENDING"].includes(approval.status),
-              )
-              .map((approval) => (
-                <ApprovalCard
-                  key={approval.id}
-                  approval={approval}
-                  onApproval={props.onApproval}
-                />
-              ))}
             <GoalPanel control={goal} />
-            <QuestionPanel sessionId={session?.id} connected={props.streamConnected} />
+            <ActionInbox
+              session={session}
+              sessions={overview.sessions}
+              approvals={props.approvals}
+              connected={props.streamConnected}
+              onApproval={props.onApproval}
+              onOpenSession={props.onOpenSession}
+            />
             {active && runStatus !== "paused" && runStatus !== "pausing" && !props.streaming && !currentTurn && (
               <div className="agent-working">
                 <span className="thinking-dots">
@@ -488,7 +478,8 @@ export default function Chat(props: Props) {
                   ? { scope: "all", reason: "Codex 对话在发送第一条消息后不能开启编排。" }
                   : { scope: "toggle", reason: "Codex 对话在发送第一条消息后不能关闭编排，但可在协作编排与 Super Agent 之间切换。" }
                 : undefined}
-            roster={{ profiles: overview.agentProfiles ?? [], session }} />
+            roster={{ profiles: overview.agentProfiles ?? [], session }}
+            onRollover={session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined} />
           <QuestionPolicyPicker key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`} session={session}
             defaults={overview.questionDefaults} onChange={props.onQuestionsChange} />
           <ModelPicker

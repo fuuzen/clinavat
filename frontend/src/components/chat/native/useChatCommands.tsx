@@ -15,6 +15,7 @@ const commonCommands = [
   { name: "plan", description: "切换到 Plan 规划模式" },
   { name: "normal", description: "切换到 Normal 执行模式" },
   { name: "compact", description: "压缩当前原生会话上下文" },
+  { name: "rollover", description: "无感续接新底层会话（保留记忆、看板与对话历史）", argumentHint: "[可选保留重点]" },
   { name: "stop", description: "停止当前任务" },
   { name: "pause", description: "暂停当前任务，保留对话进度" },
   { name: "resume", description: "继续已暂停的任务，无需发送消息" },
@@ -37,6 +38,7 @@ export function useChatCommands(props: {
   onStop: () => void;
   onPause: () => Promise<boolean>;
   onResume: () => Promise<boolean>;
+  onRollover: (note?: string) => Promise<boolean>;
   onGoalCommand: (arguments_: string) => Promise<boolean>;
   runStatus?: string;
   onDiff: () => void;
@@ -66,7 +68,7 @@ export function useChatCommands(props: {
       return await props.onGoalCommand(args) ? "handled" : "blocked";
     }
     if (!commands.some((command) => command.name === name)) return fail(`网页暂不支持 /${name}，输入 /help 查看可用命令。`);
-    if (!["compact", "role"].includes(name) && args) return fail(`/${name} 不需要参数。`);
+    if (!["compact", "role", "rollover"].includes(name) && args) return fail(`/${name} 不需要参数。`);
     if (name === "help") { setHelpOpen(true); return "handled"; }
     if (name === "stop") { props.onStop(); return "handled"; }
     if (name === "pause" || name === "resume") {
@@ -87,10 +89,14 @@ export function useChatCommands(props: {
     if (name === "clear") { props.onNew(); return "handled"; }
     if (props.active || props.busy) return fail("请等待当前任务结束或停止后再修改设置。");
     if (name === "compact") {
-      if (!profile.compact) return fail(`${engineLabel(props.engine)} 暂不支持 /compact。`);
+      if (!profile.compact) return fail(`${engineLabel(props.engine)} 暂不支持 /compact，可使用 /rollover 无感续接新上下文。`);
       if (!props.session) return fail("当前还没有原生会话可压缩，请先发送一条消息。");
       if (props.engine === "codex" && args) return fail("Codex 的 /compact 暂不接受参数。");
       return "message";
+    }
+    if (name === "rollover") {
+      if (!props.session) return fail("当前对话尚未开始，请先发送一条消息。");
+      return await props.onRollover(args || undefined) ? "handled" : "blocked";
     }
     if (name === "model") setModelRequest((value) => value + 1);
     if (name === "permissions") setPermissionRequest((value) => value + 1);

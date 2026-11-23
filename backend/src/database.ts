@@ -172,6 +172,12 @@ export class Store {
         UNIQUE(master_session_id,seq)
       );
       CREATE INDEX IF NOT EXISTS work_items_master ON work_items(master_session_id,seq);
+      CREATE TABLE IF NOT EXISTS project_memories (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        key TEXT NOT NULL, content TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(project_id,key)
+      );
       -- A discussion among child agents, hosted by the conversation that receives its record: a master, or a moderator.
       CREATE TABLE IF NOT EXISTS discussions (
         id TEXT PRIMARY KEY, host_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

@@ -4,6 +4,7 @@ import { isActive } from "../../../api";
 import type { Approval, ChildAgent, Session } from "../../../types";
 import { useSessionAgents } from "./useSessionAgents";
 import DiscussionCard from "./DiscussionCard";
+import MemoryCard from "./MemoryCard";
 import TaskBoardCard from "./TaskBoardCard";
 
 interface Props {
@@ -30,15 +31,16 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
   const [showArchived, setShowArchived] = useState(false);
   const superMode = session?.orchestration_mode === "super";
   const enabled = !!session && !session.archived_at && (session.orchestration === 1 || superMode || session.orchestration_mode === "hybrid" || sessions.some((item) => item.parent_session_id === session.id));
-  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, archiveChild, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
+  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, archiveChild, deleteMemory, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
   // Running discussions, or else the latest one.
   const discussions = view?.discussions.some((item) => item.status === "running")
     ? view.discussions.filter((item) => item.status === "running") : view?.discussions.slice(0, 1) ?? [];
   const tasks = view?.tasks ?? [];
+  const memories = view?.memories ?? [];
   const activeAgents = view?.agents.filter((agent) => !agent.archived) ?? [];
   const archivedAgents = view?.agents.filter((agent) => agent.archived) ?? [];
   const visibleAgents = showArchived ? view?.agents ?? [] : activeAgents;
-  if (!enabled || !view || (!activeAgents.length && !archivedAgents.length && !tasks.length && !view.pendingReports && !discussions.length)) return null;
+  if (!enabled || !view || (!activeAgents.length && !archivedAgents.length && !tasks.length && !memories.length && !view.pendingReports && !discussions.length)) return null;
   const waiting = (id: string) => approvals.filter((approval) => approval.session_id === id && ["pending", "PENDING"].includes(approval.status)).length;
   const busy = activeAgents.some((agent) => agent.running || isActive(agent.status));
   const open = (id: string) => {
@@ -51,7 +53,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
         <Workflow size={13} aria-hidden="true" />
         <span className="agent-panel-title">
           {superMode && <span className="super-agent-badge">Super Agent</span>}
-          {activeAgents.length ? `子智能体 ${activeAgents.length}` : tasks.length ? "任务编排" : discussions.length ? "讨论" : `已归档子智能体 ${archivedAgents.length}`}
+          {activeAgents.length ? `子智能体 ${activeAgents.length}` : tasks.length ? "任务编排" : discussions.length ? "讨论" : archivedAgents.length ? `已归档子智能体 ${archivedAgents.length}` : "工作记忆"}
         </span>
         {archivedAgents.length > 0 && (
           <button type="button" className="agent-panel-action" onClick={() => setShowArchived(!showArchived)}
@@ -75,6 +77,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
         )}
       </div>
       <TaskBoardCard tasks={tasks} agents={view.agents} sessions={sessions} onOpen={onOpen} />
+      <MemoryCard memories={memories} pending={pending} onDelete={(key) => void deleteMemory(key)} />
       {discussions.map((discussion) => (
         <DiscussionCard key={discussion.id} discussion={discussion} sessions={sessions} pending={pending} onOpen={onOpen}
           onStop={(id) => void stopDiscussion(id)} />

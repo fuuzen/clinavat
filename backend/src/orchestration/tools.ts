@@ -3,6 +3,7 @@ import { agentEngines } from '../agent/engines.js';
 import type { HubTool } from '../agent/types.js';
 import { workItemStatuses } from './board.js';
 import { orchestrationConstants } from './limits.js';
+import { memoryKeySchema } from './memory.js';
 
 const agentReference = z.string().trim().min(1).max(64).describe('The child agent\'s name, or the agentId start_agent returned.');
 
@@ -106,6 +107,14 @@ export const toolInputs = {
     round: z.number().int().min(1).max(10).optional().describe('Read only this round; omit for all rounds.'),
     participant: z.string().trim().min(1).max(64).optional().describe('Read only this participant\'s statements (name with or without d<N>- prefix).'),
   }),
+  memory: z.object({
+    action: z.enum(['list', 'read', 'write', 'delete'])
+      .describe('"list" lists all project memory keys and contents; "read" reads one key; "write" creates or replaces a key; "delete" removes a key.'),
+    key: memoryKeySchema.optional()
+      .describe('Memory topic key such as "architecture", "conventions", "decisions", "preferences", or "environment". Required for read, write and delete.'),
+    content: z.string().trim().min(1).max(4000).optional()
+      .describe('Concise, durable Markdown note to store under key. Required when action is "write".'),
+  }),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -124,6 +133,7 @@ const descriptions: Record<ToolName, string> = {
   start_discussion: 'Starts a discussion among read-only child agents, run by the Hub round by round. Returns at once; when it ends, its record arrives as a new message for you to synthesize. Use it for open questions, design choices, trade-offs and cross-vendor reviews.',
   stop_discussion: 'Stops a discussion and its participants; no record arrives.',
   read_discussion: 'Reads full statements of a discussion by ID (or "latest"), optionally filtered by round or participant.',
+  memory: 'Reads or updates persistent project-level memory notes (architecture, conventions, key decisions, user preferences) that survive context compaction and session rollover.',
 };
 
 export const hubTools: HubTool[] = Object.entries(toolInputs).map(([name, schema]) => {

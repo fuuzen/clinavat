@@ -17,10 +17,19 @@ interface Question {
 type QuestionRequest = {
   id: string;
   session_id: string;
+  agent_name?: string | null;
   questions: Question[];
 } & ({ status: "pending"; timeout_ms: number; on_timeout: QuestionMode } | { status: "deferred" });
 
-function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAnswered: () => void }) {
+function QuestionForm({
+  request,
+  onOpenSession,
+  onAnswered,
+}: {
+  request: QuestionRequest;
+  onOpenSession?: (sessionId: string) => void;
+  onAnswered: () => void;
+}) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
@@ -42,7 +51,15 @@ function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAns
   }
   const deferred = request.status === "deferred";
   return <form className={`agent-question${deferred ? " deferred" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(false); }}>
-    <div className="agent-question-heading" aria-live="polite"><HelpCircle size={16} /><strong>{deferred ? "智能体在等你回答" : "需要你的意见"}</strong></div>
+    <div className="agent-question-heading" aria-live="polite">
+      <HelpCircle size={16} />
+      <strong>{deferred ? "智能体在等你回答" : "需要你的意见"}</strong>
+      {request.agent_name && (
+        <button type="button" className="bubbled-agent-chip" onClick={() => onOpenSession?.(request.session_id)} title="打开该子智能体对话">
+          @{request.agent_name}
+        </button>
+      )}
+    </div>
     <p className="agent-question-hint">{deferred
       ? "提问时你不在，本轮已结束。回答或跳过后会作为新消息发送，智能体收到后继续。"
       : `${durationLabel(request.timeout_ms)}内未回答将${modeLabel(request.on_timeout)}（暂停期间不计时）。`}</p>
@@ -71,7 +88,15 @@ function QuestionForm({ request, onAnswered }: { request: QuestionRequest; onAns
   </form>;
 }
 
-export default function QuestionPanel({ sessionId, connected }: { sessionId?: string; connected: boolean }) {
+export default function QuestionPanel({
+  sessionId,
+  connected,
+  onOpenSession,
+}: {
+  sessionId?: string;
+  connected: boolean;
+  onOpenSession?: (sessionId: string) => void;
+}) {
   const [requests, setRequests] = useState<QuestionRequest[]>([]);
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState("");
@@ -90,7 +115,8 @@ export default function QuestionPanel({ sessionId, connected }: { sessionId?: st
     return () => controller.abort();
   }, [sessionId, revision, connected]);
   return <>
-    {requests.filter((request) => request.session_id === sessionId).map((request) => <QuestionForm key={request.id} request={request} onAnswered={() => setRequests((current) => current.filter((item) => item.id !== request.id))} />)}
+    {requests.map((request) => <QuestionForm key={request.id} request={request} onOpenSession={onOpenSession}
+      onAnswered={() => setRequests((current) => current.filter((item) => item.id !== request.id))} />)}
     {error && <div className="agent-question-error" role="status">问题加载失败：{error}<button className="button" onClick={() => setRevision((value) => value + 1)}>重试</button></div>}
   </>;
 }

@@ -37,9 +37,11 @@ export function ToolCard({ tool }: { tool: ToolEvent }) {
 
 export function ApprovalCard({
   approval,
+  childAgent,
   onApproval,
 }: {
   approval: Approval;
+  childAgent?: { name: string; onOpen: () => void };
   onApproval: ApprovalHandler;
 }) {
   const [reason, setReason] = useState("");
@@ -58,11 +60,17 @@ export function ApprovalCard({
         <span>
           <ShieldCheck size={17} />
           需要你的批准
+          {childAgent && (
+            <button type="button" className="bubbled-agent-chip" onClick={childAgent.onOpen} title="打开该子智能体对话">
+              @{childAgent.name}
+            </button>
+          )}
         </span>
         <span className="badge badge-amber">等待中</span>
       </div>
       <p>
-        智能体请求执行 <strong>{approval.tool}</strong>
+        {childAgent ? <>子智能体 <strong>@{childAgent.name}</strong> 请求执行 </> : <>智能体请求执行 </>}
+        <strong>{approval.tool}</strong>
       </p>
       <ApprovalPreview tool={approval.tool} input={approval.input} />
       <input

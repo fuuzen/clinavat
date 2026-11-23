@@ -159,8 +159,16 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
       try {
         // A branch's first run forks its source's native history, which already holds the copied messages.
+        // On rollover / native restart, skip raw child report dumps since synthesis replies, task board and memories already carry the state.
         const previousMessages = !session.native_session_id && !session.fork_native_id
-          ? store.all<{ role: string; content: string }>('SELECT role,substr(content,1,2000) AS content FROM (SELECT rowid,role,content FROM messages WHERE session_id=? AND id<>? ORDER BY rowid DESC LIMIT 12) ORDER BY rowid', id, messageId)
+          ? store.all<{ role: string; content: string }>(
+              `SELECT role,substr(content,1,2000) AS content FROM (
+                 SELECT rowid,role,content FROM messages
+                 WHERE session_id=? AND id<>? AND (source IS NULL OR source<>'report')
+                 ORDER BY rowid DESC LIMIT 14
+               ) ORDER BY rowid`,
+              id, messageId,
+            )
           : [];
         const prompt = previousMessages.length && !expandedContent.startsWith('/')
           ? `The native session was restarted. The following is saved conversation history for context; file paths may refer to the former workspace location. Use the current project working directory.\n<previous_conversation>\n${JSON.stringify(previousMessages)}\n</previous_conversation>\n\nCurrent user request:\n${expandedContent}`

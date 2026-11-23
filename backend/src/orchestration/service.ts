@@ -10,6 +10,7 @@ import { WorkBoard } from './board.js';
 import { assertNewName, childDirectory, createChild, engineSlots, type Placement } from './children.js';
 import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
+import { ProjectMemory } from './memory.js';
 import { ReportDelivery } from './reports.js';
 import { Discussions, type DiscussionInput } from './discussions.js';
 import { AgentRoster } from './roster.js';
@@ -26,11 +27,13 @@ export class Orchestrator implements OrchestrationHost {
   private readonly reports: ReportDelivery;
   private readonly discussions: Discussions;
   private readonly board: WorkBoard;
+  readonly memory: ProjectMemory;
   readonly roster: AgentRoster;
 
   constructor(private readonly context: Context) {
     this.tasks = new AgentTasks(context.store);
     this.board = new WorkBoard(context.store);
+    this.memory = new ProjectMemory(context.store);
     this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId), (user, master, delivered) => {
       for (const childId of new Set(delivered.map(task => task.child_session_id))) {
         void this.retireEphemeralIfSettled(user, master.id, childId);
@@ -65,6 +68,7 @@ export class Orchestrator implements OrchestrationHost {
       `- Limits: up to ${limits.runningPerMaster} running children (${limits.worktreeWritersPerMaster} parallel worktree writers)`,
       '- Profiles (pass via `profile` in `start_agent`):',
       ...roster.map(profile => `  - \`${profile.name}\` [${profile.engine}, ${profile.access}${profile.builtIn ? ', built-in' : ''}]: ${(profile.role ?? 'custom role').replace(/\s+/g, ' ').slice(0, 140)}`),
+      ...this.memory.briefingLines(master.project_id),
       ...this.board.briefingLines(master.id),
     ];
     if (children.length) {
@@ -167,6 +171,21 @@ export class Orchestrator implements OrchestrationHost {
       case 'read_discussion': {
         const input = toolInputs.read_discussion.parse(args);
         return json(this.discussions.read(master.id, input.discussion, input.round, input.participant));
+      }
+      case 'memory': {
+        const input = toolInputs.memory.parse(args);
+        if (input.action === 'list') return json({ memories: this.memory.view(master.project_id) });
+        if (!input.key) throw new HttpError(400, `memory(action="${input.action}") 需要指定 key`);
+        if (input.action === 'read') return json(this.memory.read(master.project_id, input.key));
+        if (input.action === 'delete') {
+          const deleted = this.memory.remove(master.project_id, input.key);
+          this.publish(master.id);
+          return json({ key: input.key, deleted });
+        }
+        if (!input.content) throw new HttpError(400, 'memory(action="write") 需要提供 content');
+        const saved = this.memory.write(master.project_id, input.key, input.content);
+        this.publish(master.id);
+        return json(saved);
       }
       case 'discard_agent': {
         const input = toolInputs.discard_agent.parse(args);
@@ -415,6 +434,7 @@ export class Orchestrator implements OrchestrationHost {
   }
 
   view(masterId: string) {
+    const master = this.context.store.get<Pick<Session, 'project_id'>>('SELECT project_id FROM sessions WHERE id=?', masterId);
     const pending = this.tasks.pending(masterId);
     return {
       // Participants of discussions show in their discussion's card.
@@ -430,6 +450,7 @@ export class Orchestrator implements OrchestrationHost {
         };
       }),
       tasks: this.board.view(masterId),
+      memories: master ? this.memory.view(master.project_id) : [],
       discussions: this.discussions.view(masterId),
       pendingReports: pending.length,
       reportsPaused: pending.length > 0 && this.tasks.reportTurnsSinceUser(masterId) >= this.context.orchestrationSettings.view().reportTurnsPerMessage,

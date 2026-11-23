@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, UserRound, Workflow } from "lucide-react";
+import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, RotateCw, UserRound, Workflow } from "lucide-react";
 import type { AgentBehavior, AgentProfile, OrchestrationMode, RolePreset, Session } from "../../../types";
 import { api } from "../../../api";
 import SettingsHelp from "../SettingsHelp";
@@ -32,6 +32,7 @@ export default function BehaviorPicker(props: {
   orchestrationLock?: OrchestrationLock;
   /** The user's roster, and the conversation that may limit which of it its master starts. */
   roster?: { profiles: AgentProfile[]; session?: Session };
+  onRollover?: () => void;
   onChange: (value: AgentBehavior) => void;
 }) {
   const planning = props.value.agentMode === "plan";
@@ -123,6 +124,17 @@ export default function BehaviorPicker(props: {
           </div>)}
         </>;
       })() : null}
+    </div>}
+    {props.onRollover && <div className="settings-menu-group" role="group" aria-label="长对话维护">
+      <div className="settings-menu-heading"><span><RotateCw size={13} />长对话维护</span>
+        <SettingsHelp menuItem text="保持当前网页对话不中断，重置底层 CLI 上下文并自动继承持久记忆、任务看板、子智能体与近期摘要（也可输入 /rollover 备注）。" /></div>
+      <div className="settings-menu-entry">
+        <button className="settings-menu-item compact" role="menuitem" tabIndex={-1} type="button" onClick={() => {
+          props.onRollover?.(); close();
+        }}>
+          <span className="settings-item-copy">无感续接新上下文</span>
+        </button>
+      </div>
     </div>}
   </>}</SettingsMenu>;
 }

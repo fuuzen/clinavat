@@ -314,7 +314,7 @@ export default function Sidebar(props: Props) {
                                     accessory={accessory}
                                     session={session}
                                     selected={selectedSession?.id === session.id}
-                                    waiting={waiting.has(session.id)}
+                                    waiting={waiting.has(session.id) || (session.id === entry.session.id && entry.children.some((child) => waiting.has(child.id)))}
                                     menuOpen={menu === session.id}
                                     onToggleMenu={() => setMenu(menu === session.id ? "" : session.id)}
                                     onSelect={() => {
