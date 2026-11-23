@@ -218,25 +218,45 @@ def gateway_rules(state):
     return "\n".join(rules) + "\n"
 
 
+def gateway_route_script(state):
+    lan, tun = state["gateway_interface"], state["tun"]
+    lines = ["#!/bin/sh", "set -eu", 'if [ "$1" = guard ]; then',
+             f"  nft -f {CONFIG / 'gateway.nft'}",
+             f"  ip -4 route replace unreachable default metric 32767 table {GW_ROUTE_TABLE}"]
+    for profile in state["users"].values():
+        address = profile["address"]
+        rule = f"pref {GW_PRIORITY} from {address}/32 iif {lan} lookup {GW_ROUTE_TABLE}"
+        lines += [f"  ip -4 rule del {rule} 2>/dev/null || :", f"  ip -4 rule add {rule}"]
+    enabled = ("import json,sys; "
+               "sys.exit(json.load(open('/etc/clinavat-gw/state.json')).get('source_policy') != 'bound')")
+    lines += ["fi", f"if ! python3 -c {shlex.quote(enabled)}; then",
+              f"  ip -4 route del default dev {tun} metric 100 table {GW_ROUTE_TABLE} 2>/dev/null || :",
+              "  exit 0", "fi", "",
+              "# The guard starts before sing-box. Only its post-start hook waits for the TUN.",
+              "attempts=1",
+              '[ "$1" != route ] || attempts=40',
+              'while [ "$attempts" -gt 0 ]; do',
+              f"  if ip -o -4 addr show dev {tun} up scope global 2>/dev/null | grep -q . &&",
+              f"     ip -4 route replace default dev {tun} metric 100 table {GW_ROUTE_TABLE}; then",
+              "    exit 0", "  fi",
+              "  attempts=$((attempts - 1))",
+              '  [ "$attempts" -eq 0 ] || sleep 0.25',
+              "done",
+              'if [ "$1" = route ]; then',
+              f"  echo 'Timed out installing the user egress route through {tun}' >&2",
+              "  exit 1", "fi"]
+    return "\n".join(lines) + "\n"
+
+
 def gateway_policy(gateway, current, previous):
-    lan, tun = current["gateway_interface"], current["tun"]
+    lan = current["gateway_interface"]
     sources = [p["address"] for p in current["users"].values()]
     nft_file = str(CONFIG / "gateway.nft")
     rules = gateway_rules(current)
     gateway.run("nft", "-c", "-f", "-", data=rules)
     gateway.put(nft_file, rules)
     if sources:
-        lines = ["#!/bin/sh", "set -eu", 'if [ "$1" = guard ]; then',
-                 f"  nft -f {nft_file}", f"  ip -4 route replace unreachable default metric 32767 table {GW_ROUTE_TABLE}"]
-        for address in sources:
-            rule = f"pref {GW_PRIORITY} from {address}/32 iif {lan} lookup {GW_ROUTE_TABLE}"
-            lines += [f"  ip -4 rule del {rule} 2>/dev/null || :", f"  ip -4 rule add {rule}"]
-        enabled = ("import json,sys; "
-                   "sys.exit(json.load(open('/etc/clinavat-gw/state.json')).get('source_policy') != 'bound')")
-        lines += ["fi", f"if ip link show dev {tun} >/dev/null 2>&1 && python3 -c {shlex.quote(enabled)}; then",
-                  f"  ip -4 route replace default dev {tun} metric 100 table {GW_ROUTE_TABLE}", "else",
-                  f"  ip -4 route del default dev {tun} metric 100 table {GW_ROUTE_TABLE} 2>/dev/null || :", "fi"]
-        gateway.put(GW_SCRIPT, "\n".join(lines) + "\n", "0755")
+        gateway.put(GW_SCRIPT, gateway_route_script(current), "0755")
         gateway.put(SYSTEMD / GW_UNIT, f"""[Unit]
 Description=Clinavat 本机用户网关出站限制
 DefaultDependencies=no
@@ -257,7 +277,7 @@ Wants={GW_UNIT}
 After={GW_UNIT}
 
 [Service]
-ExecStartPost={GW_SCRIPT} route
+ExecStartPost=-{GW_SCRIPT} route
 """)
         gateway.run("systemctl", "daemon-reload")
         gateway.run("systemctl", "enable", GW_UNIT)
