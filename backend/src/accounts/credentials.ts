@@ -8,7 +8,7 @@ import { assertSlotSessionState, bindSlotSessionState, detachSlotSessionState } 
 import { archiveUnboundSlotProfile, initializeSlotProfile, restoreSlotProfile, saveSlotProfile } from './slot-runtime/profile.js';
 import type { SlotAuthMethod, SlotTokens } from './slot-tokens.js';
 import type { ExecutionHost } from '../execution/types.js';
-import { isAgentEngine, type AgentEngine } from '../agent/engines.js';
+import { engineProfiles, isAgentEngine, type AgentEngine } from '../agent/engines.js';
 
 interface CredentialContext {
   user: { id: string }; runtime_home: string; runtime_kind?: 'conversation' | 'probe';
@@ -129,10 +129,13 @@ export class AccountCredentials {
     const current = this.currentSlot(journal, true);
     if (current.status !== 'IDLE') throw new HttpError(409, '该授权槽位当前不可用');
     let lease = this.leases.get(journal.slotId);
-    if (lease?.parked && (lease.failure || lease.journal.userId !== journal.userId || lease.journal.revision !== journal.revision)) {
+    if (lease?.parked && (lease.failure || lease.journal.userId !== journal.userId || lease.journal.revision !== journal.revision
+      // A CLI can replace a link while it runs, as agy does when it rebuilds a damaged store; releasing sets the file aside.
+      || !await this.sessionStateIntact(lease.journal))) {
       await this.releaseParked(journal.slotId);
       return this.acquire(context, reclaimed);
     }
+    lease = this.leases.get(journal.slotId);
     if (lease) {
       this.assertHealthy(lease);
       if (lease.journal.userId !== journal.userId) {
@@ -142,6 +145,8 @@ export class AccountCredentials {
       }
       if (lease.finishing) { await lease.finishing; return this.acquire(context, reclaimed); }
     }
+    // Synchronous from here until the lease counts this run, so two slots cannot both pass the check.
+    this.assertOneMachine(journal);
     const sessionId = context.runtime_kind === 'probe' ? '' : context.session.id;
     if (sessionId) {
       accountIdentifier(sessionId);
@@ -258,6 +263,25 @@ export class AccountCredentials {
   private writeJournal(journal: SlotJournal, phase: SlotJournal['phase']): Promise<void> {
     journal.phase = phase;
     return writePrivateJson(this.file(journal.slotId), JSON.stringify(journal));
+  }
+
+  /**
+   * An engine that keeps SQLite files among its session state runs a user's sessions in one slot machine at a time:
+   * every machine mounts the same files, without locks or shared memory between machines, and two at once corrupt them.
+   */
+  private assertOneMachine(journal: SlotJournal): void {
+    if (this.execution.kind !== 'vm' || !engineProfiles[journal.engine].sessionFiles.length) return;
+    const other = [...this.leases.values()].find(lease => lease.count > 0 && lease.journal.slotId !== journal.slotId
+      && lease.journal.userId === journal.userId && lease.journal.engine === journal.engine);
+    if (!other) return;
+    const label = this.store.get<{ label: string }>('SELECT label FROM account_slots WHERE id=?', other.journal.slotId)?.label
+      ?? other.journal.slotId;
+    throw new HttpError(409, `你的 ${engineProfiles[journal.engine].label} 正在槽位 ${label} 上运行，它的会话数据库不能同时在两台槽位虚拟机中使用；`
+      + `请改用槽位 ${label}，或等那里的对话结束后再试`);
+  }
+
+  private sessionStateIntact(journal: SlotJournal): Promise<boolean> {
+    return assertSlotSessionState(this.dataDir, journal.userId, journal.home, journal.engine).then(() => true, () => false);
   }
 
   private assertHealthy(lease: SlotLease): void {

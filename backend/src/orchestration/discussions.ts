@@ -10,6 +10,7 @@ import {
   aggregateRanking, agreed, compactRecordMessage, critiquePrompt, debatePrompt, openingPrompt, parseRanking, recordMessage,
   type Contribution, type DiscussionFormat, type DiscussionRecord,
 } from './discussion-prompts.js';
+import { orchestrationConstants } from './limits.js';
 import type { ReportDelivery } from './reports.js';
 import type { AgentRoster } from './roster.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
@@ -143,9 +144,10 @@ export class Discussions {
     this.finish(id, record.status as DiscussionRow['status'], record.detail);
     if (record.status === 'stopped') return;
     const currentHost = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', host.id) ?? host;
-    const fullRecord = recordMessage(record);
-    const promptRecord = orchestrationModeOf(currentHost) === 'super' || fullRecord.length > 24_000
-      ? compactRecordMessage(record) : fullRecord;
+    const hostMode = orchestrationModeOf(currentHost);
+    const fullRecord = recordMessage(record, orchestrationConstants.discussionRecordCharacters, hostMode !== 'off');
+    const promptRecord = hostMode === 'super' ? compactRecordMessage(record)
+      : recordMessage(record, orchestrationConstants.discussionHostCharacters, hostMode !== 'off');
     try {
       await sendSessionMessage(this.context, user, host.id, messageInput.parse({ content: fullRecord, mode: 'queue' }),
         { source: 'report', prompt: () => promptRecord });

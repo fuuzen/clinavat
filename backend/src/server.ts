@@ -183,7 +183,11 @@ const agents: AgentManager = new AgentManager(agentConfig, {
         return;
       }
       if (event.type === 'error') observeAgentEvent(event);
-      if (event.type === 'runtime') { events.broadcast(session.user_id, event); return; }
+      if (event.type === 'runtime') {
+        events.broadcast(session.user_id, event);
+        observeAgentEvent(event);
+        return;
+      }
       if (event.type === 'turn-anchor') {
         const anchor = event.payload as { turnId?: string; ref: string; nativeSessionId: string };
         if (anchor.turnId) turns.anchor(event.sessionId, anchor.turnId, anchor.ref, anchor.nativeSessionId);

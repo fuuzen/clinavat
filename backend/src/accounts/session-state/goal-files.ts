@@ -6,8 +6,9 @@ import { metadata } from './files.js';
 import { sessionStateFiles } from './layout.js';
 import type { AgentEngine } from '../../agent/engines.js';
 
-// Only a CLI started outside a lease can leave a real database here. It is never opened: the slot is writable from
-// execution environments, and the Hub must not parse files from there as SQLite.
+// A real database here comes from a CLI started outside a lease, or from agy rebuilding a damaged store in place of
+// the link. It is never opened: the slot is writable from execution environments, and the Hub must not parse files
+// from there as SQLite.
 async function archiveUnboundDatabase(file: string, root: string): Promise<void> {
   const entry = await metadata(file);
   if (!entry) return;
@@ -45,6 +46,7 @@ export async function detachSessionStateFiles(directory: string, root: string, e
     const file = join(directory, name);
     const entry = await metadata(file);
     if (!entry) continue;
+    if (entry.isFile()) { await archiveUnboundDatabase(file, root); continue; }
     if (!entry.isSymbolicLink() || resolve(directory, await readlink(file)) !== join(root, name)) {
       throw new Error('槽位原生目标数据库映射已被替换，已保留现场并停止释放');
     }

@@ -49,9 +49,14 @@ except Exception as error:
 /** What agy prefixes to the output of a command a hook rewrote; its absence means a command ran without routing. */
 export const rewrittenCommandNotice = 'A pre-tool hook changed the arguments of this tool call before it ran.';
 
+/** The shared Stop log starts over at the next run beyond this size; runs still reading it notice and start from the top. */
+const stopLogLimit = 1024 * 1024;
+
 export interface AntigravityHome {
-  /** Where the Stop hook records each end of agy's execution loop. */
+  /** Where the Stop hook records each end of agy's execution loop, for every agy on the slot. */
   stopLog: string;
+  /** Where the log ended when this run prepared it; earlier records belong to other runs. */
+  stopOffset: number;
   /** The wrapper commands are routed through; null where they run beside the CLI. */
   shell: string | null;
   /** The stdio MCP server that carries a master agent's calls to the Hub. */
@@ -111,7 +116,13 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   // The swarm plugin lets the agent start coordinated workers that spend quota in parallel.
   await atomicWrite(path.join(config, 'config.json'), JSON.stringify({ plugins: { swarm: { enabled: false } } }));
   await atomicWrite(path.join(cli, 'settings.json'), JSON.stringify(settings));
-  await atomicWrite(stopLog, '');
+  // Other agy runs on the slot may still be reading the log, so it is only started over when it grows large.
+  const stopEntry = await lstat(stopLog).catch(() => undefined);
+  let stopOffset = stopEntry?.isFile() ? stopEntry.size : -1;
+  if (stopOffset < 0 || stopOffset > stopLogLimit) {
+    await atomicWrite(stopLog, '');
+    stopOffset = 0;
+  }
   await atomicWrite(toolShim, toolShimProgram);
-  return { stopLog, shell, toolShim };
+  return { stopLog, stopOffset, shell, toolShim };
 }

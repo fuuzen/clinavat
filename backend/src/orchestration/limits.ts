@@ -38,6 +38,17 @@ export const orchestrationConstants = {
   waitSeconds: 600,
   /** Reports finishing within this window reach the master as one message. */
   deliveryDelayMs: 2000,
+  /**
+   * How long a child's report waits after its turn ends while its CLI still runs background work; it is sent as soon
+   * as a later turn ends or the process exits, and after this with a note that the work was still running.
+   */
+  backgroundReportWaitMs: 30 * 60_000,
+  /** Statements of the others in one participant's prompt, shared out so that shorter ones stay whole. */
+  discussionPromptCharacters: 64 * 1024,
+  /** Statements in the host's prompt when the host is not a Super Agent. */
+  discussionHostCharacters: 48 * 1024,
+  /** Statements in the saved record, which must fit one message. */
+  discussionRecordCharacters: 80_000,
 } as const;
 
 export class OrchestrationSettingsStore {

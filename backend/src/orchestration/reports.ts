@@ -1,6 +1,7 @@
 import type { Context } from '../context.js';
 import type { Session, User } from '../models.js';
 import { orchestrationModeOf } from '../agent/orchestration-tools.js';
+import type { RuntimeView } from '../agent/manager.js';
 import type { AgentEvent } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { reportBlock } from './instructions.js';
@@ -14,6 +15,9 @@ const fallbackReports: Record<string, string> = {
   error: '子智能体出错，没有给出最终回复。',
 };
 
+/** A child whose turn ended while its CLI still ran work of its own; `idle` says whether that work has ended since. */
+interface DeferredReport { turnId?: string; idle: boolean; timer: NodeJS.Timeout }
+
 /**
  * Ends a child's tasks when it goes idle, and hands their reports to the master: as one new message after a short
  * delay, or to a wait_agents call that is waiting for them.
@@ -26,6 +30,7 @@ export class ReportDelivery {
   private deliverable = new Set<string>();
   private timers = new Map<string, NodeJS.Timeout>();
   private paused = new Set<string>();
+  private deferred = new Map<string, DeferredReport>();
 
   constructor(
     private readonly context: Context,
@@ -37,6 +42,7 @@ export class ReportDelivery {
   observe(event: AgentEvent): void {
     const payload = event.payload as { status?: string; message?: string; turnId?: string } | undefined;
     if (event.type === 'error' && payload?.message) this.errors.set(event.sessionId, payload.message);
+    if (event.type === 'runtime') { this.runtimeChanged(event.sessionId, event.payload as RuntimeView); return; }
     if (event.type !== 'turn-state' || !finishedStatuses.has(payload?.status ?? '')) return;
     const session = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', event.sessionId);
     if (!session) return;
@@ -45,20 +51,69 @@ export class ReportDelivery {
   }
 
   private childTurnEnded(child: Session, status: 'completed' | 'interrupted' | 'error', turnId?: string): void {
+    this.clearDeferred(child.id);
     // Called before the manager starts the next queued message, so a queue still holds what comes next.
     const runtime = this.context.agents.view(child.id);
-    if (runtime.switching || runtime.queue.length || (status === 'completed' && runtime.tasks.length)) return;
+    if (runtime.switching || runtime.queue.length) return;
     if (!this.tasks.running(child.id).length) return;
+    // The CLI resumes by itself when its own work ends: Claude after a background agent, agy after a command it moved
+    // to the background. Reporting now would hand the master a reply that only says it is waiting.
+    if (status === 'completed' && (runtime.tasks.length || this.context.agents.hasBackgroundWork(child.id))) {
+      this.defer(child.id, turnId);
+      return;
+    }
+    this.finishChild(child, status, turnId);
+  }
+
+  private finishChild(child: Session, status: 'completed' | 'interrupted' | 'error', turnId?: string, note = ''): void {
     const answer = turnId ? this.context.store.get<{ content: string }>(`SELECT messages.content FROM session_turns
       JOIN messages ON messages.id=session_turns.assistant_message_id WHERE session_turns.id=?`, turnId)?.content : undefined;
     const error = this.errors.get(child.id);
     this.errors.delete(child.id);
-    const failure = status === 'error' ? `\n\n[子智能体出错：${error ?? '未知错误'}]` : '';
-    void this.complete(child, status, (answer?.trim() || fallbackReports[status]) + (answer ? failure : failure.trimStart()));
+    const suffix = (status === 'error' ? `\n\n[子智能体出错：${error ?? '未知错误'}]` : '') + note;
+    void this.complete(child, status, (answer?.trim() || fallbackReports[status]) + (answer ? suffix : suffix.trimStart()));
+  }
+
+  private defer(childId: string, turnId?: string): void {
+    const timer = setTimeout(() => this.settleDeferred(childId, 'timeout'), orchestrationConstants.backgroundReportWaitMs);
+    timer.unref();
+    this.deferred.set(childId, { turnId, idle: false, timer });
+  }
+
+  private clearDeferred(childId: string): void {
+    clearTimeout(this.deferred.get(childId)?.timer);
+    this.deferred.delete(childId);
+  }
+
+  /** A waiting child's report follows its process out: the next turn would never come. */
+  private runtimeChanged(childId: string, runtime: RuntimeView): void {
+    const entry = this.deferred.get(childId);
+    if (!entry) return;
+    if (runtime.resident) {
+      entry.idle = !runtime.turnActive && !runtime.tasks.length && !this.context.agents.hasBackgroundWork(childId);
+      return;
+    }
+    // A stop delivers its own report right after the process ends; this one only covers an exit nobody asked for.
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => this.settleDeferred(childId, 'exited'), orchestrationConstants.deliveryDelayMs);
+    entry.timer.unref();
+  }
+
+  private settleDeferred(childId: string, reason: 'exited' | 'timeout'): void {
+    const entry = this.deferred.get(childId);
+    this.clearDeferred(childId);
+    // A turn under way reports when it ends.
+    if (!entry || this.context.agents.view(childId).turnActive) return;
+    const child = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', childId);
+    if (!child) return;
+    if (entry.idle) this.finishChild(child, 'completed', entry.turnId);
+    else if (reason === 'timeout') this.finishChild(child, 'completed', entry.turnId, '\n\n[子智能体的后台工作仍在运行，以上是它最近一轮的回复]');
+    else this.finishChild(child, 'interrupted', entry.turnId, '\n\n[子智能体的进程在后台工作结束前退出]');
   }
 
   /** Ends the child's tasks; a child in its own worktree first gets its work committed, and the report says where it is. */
   async complete(child: Session, status: 'completed' | 'interrupted' | 'error', report: string): Promise<void> {
+    this.clearDeferred(child.id);
     const ending = this.tasks.running(child.id).map(task => task.id);
     if (!ending.length) return;
     const worktree = child.agent_isolation === 'worktree' && this.context.worktrees

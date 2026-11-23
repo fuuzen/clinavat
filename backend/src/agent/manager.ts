@@ -64,6 +64,12 @@ export class AgentManager {
     };
   }
 
+  /** No turn is open, but the process still has work of its own, such as a command agy moved to the background. */
+  hasBackgroundWork(sessionId: string): boolean {
+    const state = this.active.get(sessionId);
+    return !!state?.run && !state.finishing && !state.closing && !state.turnActive && !state.run.isIdle();
+  }
+
   /** The resident process can take a new turn with these settings without restarting. */
   accepts(sessionId: string, context: AgentContext): boolean {
     const state = this.active.get(sessionId);

@@ -5,10 +5,39 @@ export type DiscussionFormat = 'council' | 'debate' | 'review';
 
 export interface Contribution { name: string; engine: AgentEngine; model: string | null; stance: string | null; text: string; status: string }
 
-/** Statements are cut here in prompts and in the record; each participant's conversation keeps the full text. */
-const statementCharacters = 12 * 1024;
 const attribute = (value: string) => value.replace(/["<>\n]/g, ' ').slice(0, 200);
-const cut = (text: string) => text.length > statementCharacters ? `${text.slice(0, statementCharacters)}\n[cut at ${statementCharacters} characters]` : text;
+
+/** Room each statement's tags and omission note take in the record, counted against its budget. */
+const statementTagCharacters = 600;
+const minimumStatementCharacters = 500;
+
+/**
+ * The length up to which statements stay whole when they share `budget`: shorter ones keep their full text and pass
+ * what they leave on to the longer ones, which are shortened to this length.
+ */
+function statementLimit(lengths: number[], budget: number): number {
+  const sorted = [...lengths].sort((left, right) => left - right);
+  let remaining = budget;
+  for (const [index, length] of sorted.entries()) {
+    const share = Math.floor(remaining / (sorted.length - index));
+    if (length > share) return Math.max(share, minimumStatementCharacters);
+    remaining -= length;
+  }
+  return Infinity;
+}
+
+/** Keeps the start and the end, where answers put their conclusions, and says what the Hub left out. */
+const cutMiddle = (text: string, limit: number, hint: string) => {
+  if (text.length <= limit) return text;
+  const head = Math.floor(limit * 0.7);
+  const tail = Math.max(200, limit - head);
+  const omitted = text.length - head - tail;
+  return omitted <= 80 ? `${text.slice(0, limit)}\n[${hint}]`
+    : `${text.slice(0, head).trimEnd()}\n\n[... the Hub omitted ${omitted} of ${text.length} characters here; ${hint} ...]\n\n${text.slice(-tail).trimStart()}`;
+};
+
+// Participants cannot read the record, so they are told the gap is not the author's.
+const peerHint = 'the author\'s answer is complete, so do not count the gap against it';
 
 export function openingPrompt(format: DiscussionFormat, topic: string, stance: string | null): string {
   if (format === 'council') {
@@ -27,15 +56,17 @@ export function openingPrompt(format: DiscussionFormat, topic: string, stance: s
 
 /** The second council round: everyone else's answer under a letter, without names or models. */
 export function critiquePrompt(topic: string, answers: { label: string; text: string }[]): string {
+  const limit = statementLimit(answers.map(answer => answer.text.length), orchestrationConstants.discussionPromptCharacters);
   return `The other council members answered the question independently. Their answers are below, labelled by letter; the authors are hidden.\n\n`
-    + `Question:\n${topic}\n\n${answers.map(answer => `--- Answer ${answer.label} ---\n${cut(answer.text)}`).join('\n\n')}\n\n`
+    + `Question:\n${topic}\n\n${answers.map(answer => `--- Answer ${answer.label} ---\n${cutMiddle(answer.text, limit, peerHint)}`).join('\n\n')}\n\n`
     + 'Critique each answer: what it gets right, what is wrong, and what it misses. You may revise your own view. Then rank these answers '
     + `from best to worst, ending your reply with a last line of exactly this form: RANKING: ${answers.map(answer => answer.label).join(' > ')}`;
 }
 
 export function debatePrompt(topic: string, round: number, stance: string | null, previous: Contribution[]): string {
+  const limit = statementLimit(previous.map(item => item.text.length), orchestrationConstants.discussionPromptCharacters);
   return `Debate round ${round}. Topic:\n${topic}\n\n${stance ? `Your position or perspective: ${stance}\n\n` : ''}Statements of the previous round:\n\n`
-    + previous.map(item => `--- ${item.name}${item.stance ? ` (${item.stance})` : ''} ---\n${cut(item.text)}`).join('\n\n')
+    + previous.map(item => `--- ${item.name}${item.stance ? ` (${item.stance})` : ''} ---\n${cutMiddle(item.text, limit, peerHint)}`).join('\n\n')
     + '\n\nRespond to the others: rebut, concede or refine. If the participants now agree and you have nothing to add, end your reply with a last '
     + 'line of exactly AGREE; otherwise end it with a last line of exactly CONTINUE.';
 }
@@ -64,15 +95,6 @@ export interface DiscussionRecord {
   ranking?: { label: string; points: number }[];
 }
 
-const cutMiddle = (text: string, limit: number, hint: string) => {
-  if (text.length <= limit) return text;
-  const head = Math.floor(limit * 0.7);
-  const tail = Math.max(200, limit - head);
-  const omitted = text.length - head - tail;
-  return omitted <= 80 ? `${text.slice(0, limit)}\n[${hint}]`
-    : `${text.slice(0, head).trimEnd()}\n\n[... omitted ${omitted} characters; ${hint} ...]\n\n${text.slice(-tail).trimStart()}`;
-};
-
 function discussionTask(record: DiscussionRecord): string {
   return record.status === 'completed'
     ? { council: 'Synthesize the council: where the answers agree, where they differ and who is right, and your recommendation. The ranking aggregates the members\' rankings of each other.',
@@ -81,10 +103,18 @@ function discussionTask(record: DiscussionRecord): string {
     : `The discussion did not finish (${record.detail ?? record.status}). Summarize what the statements so far show.`;
 }
 
-/** The saved message in the conversation: the full record rendered by the web UI. */
-export function recordMessage(record: DiscussionRecord): string {
-  const rounds = record.rounds.map(({ round, contributions }) => `<round number="${round}">\n${contributions.map(item =>
-    `<statement participant="${attribute(item.name)}" engine="${item.engine}" model="${attribute(item.model ?? 'default')}"${item.stance ? ` stance="${attribute(item.stance)}"` : ''} status="${item.status}">\n${cut(item.text)}\n</statement>`).join('\n')}\n</round>`).join('\n');
+/**
+ * The record as the web UI renders it, with every statement sharing `budget`. `readable` says whether the reader can
+ * call read_discussion; every participant's conversation keeps its full statements either way.
+ */
+export function recordMessage(record: DiscussionRecord, budget: number, readable: boolean): string {
+  const statements = record.rounds.flatMap(({ contributions }) => contributions);
+  const limit = statementLimit(statements.map(item => item.text.length), budget - statements.length * statementTagCharacters);
+  const rounds = record.rounds.map(({ round, contributions }) => `<round number="${round}">\n${contributions.map(item => {
+    const hint = `the full statement is in the conversation of ${attribute(item.name)}`
+      + (readable ? `; call read_discussion(discussion="${record.id}", round=${round}, participant="${attribute(item.name)}") for it` : '');
+    return `<statement participant="${attribute(item.name)}" engine="${item.engine}" model="${attribute(item.model ?? 'default')}"${item.stance ? ` stance="${attribute(item.stance)}"` : ''} status="${item.status}">\n${cutMiddle(item.text, limit, hint)}\n</statement>`;
+  }).join('\n')}\n</round>`).join('\n');
   const ranking = record.ranking?.length
     ? `\n<ranking>${record.ranking.map(item => `${record.labels?.[item.label] ?? item.label} (${item.label}): ${item.points}`).join('; ')}</ranking>` : '';
   return `<clinavat_discussion id="${record.id}" format="${record.format}" status="${record.status}" topic="${attribute(record.topic)}">\n${rounds}${ranking}\n</clinavat_discussion>\n\n`

@@ -17,6 +17,9 @@ const EXIT_GRACE_MS = 10_000;
 // A prompt lasts as long as its turn; the RunControl timer leaves out paused time.
 const PROMPT_TIMEOUT_MS = 7 * 24 * 3_600_000;
 const TEXT_LIMIT = 8 * 1024 * 1024;
+// How long a finished prompt waits for the Stop hook to record whether agy still runs commands in the background.
+const STOP_RECORD_WAIT_MS = 3_000;
+const STOP_READ_LIMIT = 1024 * 1024;
 
 interface ConfigOption { id: string; category?: string; currentValue?: unknown; options?: { value?: unknown }[] }
 
@@ -50,6 +53,9 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   // The turn began without a prompt, when agy resumed after a background command; its end comes from the Stop hook.
   let autonomous = false;
   let fullyIdle = true;
+  // Stop records read for this conversation, and how many there were when the current turn began.
+  let stops = 0;
+  let turnStops = 0;
   let closing = false;
   let stopped = false;
   let exitGrace: NodeJS.Timeout | undefined;
@@ -84,6 +90,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     turnActive = true;
     turnAbort = new AbortController();
     turnKey = randomUUID();
+    turnStops = stops;
     segment = thinking = 0;
     segmentOpen = thinkingOpen = false;
   };
@@ -192,7 +199,12 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     const reason = result?.stopReason;
     if (error) endTurn('error', error.message);
     else if (interruptRequested || reason === 'cancelled') endTurn('interrupted');
-    else if (reason === 'end_turn') endTurn('completed');
+    else if (reason === 'end_turn') {
+      // agy also ends a turn while a command it moved to the background runs, and resumes when it finishes. Only the Stop
+      // hook tells the two apart, so the turn ends once its record is read and the process can say whether it is idle.
+      const key = turnKey;
+      void awaitTurnStop().then(() => { if (turnKey === key && prompts === 0) endTurn('completed'); });
+    }
     else endTurn('error', reason === 'refusal' ? '模型拒绝了这次请求' : `Antigravity 本轮提前结束（${String(reason)}）`);
   };
   const sendPrompt = (input: AgentPrompt) => {
@@ -204,14 +216,17 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   };
 
   // The Stop hook marks every end of agy's loop; it is the only sign that a turn agy began by itself is over.
-  let stopOffset = 0;
+  // Every agy on the slot appends to the same log, so this run reads from where the log ended when it started.
+  let stopOffset = home.stopOffset;
   const readStops = async () => {
     const opened = await openContained(context.runtime_home, '.clinavat-agy-stop.jsonl').catch(() => undefined);
     if (!opened) return;
     let chunk = '';
     try {
-      if (opened.size <= stopOffset || opened.size > 4 * 1024 * 1024) return;
-      const buffer = Buffer.alloc(opened.size - stopOffset);
+      // A later run on the slot started the log over.
+      if (opened.size < stopOffset) stopOffset = 0;
+      if (opened.size === stopOffset) return;
+      const buffer = Buffer.alloc(Math.min(opened.size - stopOffset, STOP_READ_LIMIT));
       await opened.handle.read(buffer, 0, buffer.length, stopOffset);
       chunk = buffer.toString('utf8');
     } finally { await opened.handle.close(); }
@@ -221,6 +236,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       let stop: Record<string, unknown>;
       try { stop = JSON.parse(line); } catch { continue; }
       if (stop.conversationId !== sessionId) continue;
+      stops++;
       fullyIdle = stop.fullyIdle !== false;
       // agy states that nothing runs any more, including commands an interrupt ended without a final update.
       if (fullyIdle) runningCommands.clear();
@@ -228,7 +244,18 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       services.activityChanged();
     }
   };
-  const stopWatch = setInterval(() => { void readStops().catch(() => undefined); }, 1000);
+  // Reads run one at a time: two at once would handle the same records twice.
+  let stopReads = Promise.resolve();
+  const refreshStops = () => (stopReads = stopReads.then(readStops).catch(() => undefined));
+  const awaitTurnStop = async () => {
+    const deadline = Date.now() + STOP_RECORD_WAIT_MS;
+    await refreshStops();
+    while (stops === turnStops && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await refreshStops();
+    }
+  };
+  const stopWatch = setInterval(() => { void refreshStops(); }, 1000);
   stopWatch.unref();
 
   const abort = () => {

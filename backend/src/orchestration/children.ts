@@ -30,7 +30,10 @@ export function slotChoice(context: Context, user: User, engine: AgentEngine, sl
   if (slotId) return { slotMode: 'manual' as const, slotId };
   const slots = engineSlots(context, user.id, engine);
   if (engineProfiles[engine].automaticSlot && slots.some(({ slot }) => context.slots.eligible(slot, user.id, model))) return { slotMode: 'auto' as const };
-  const free = slots.find(entry => entry.usable);
+  // Slot machines cannot share an engine's SQLite session state, so the slot the user already runs it on comes first.
+  const shared = context.config.execution.kind === 'vm' && engineProfiles[engine].sessionFiles.length > 0
+    && slots.find(entry => entry.usable && context.config.credentials.activeUserId(entry.slot.id) === user.id);
+  const free = shared || slots.find(entry => entry.usable);
   if (free) return { slotMode: 'manual' as const, slotId: free.slot.id };
   throw new HttpError(409, slots.length
     ? `没有可用的 ${engineProfiles[engine].label} 槽位：${slots.map(({ slot, inUseByOther }) => `${slot.id}（${inUseByOther ? '其他用户正在使用' : slot.status}）`).join('、')}`
