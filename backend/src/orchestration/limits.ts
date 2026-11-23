@@ -14,11 +14,16 @@ export const orchestrationSettingsSchema = z.object({
   worktreeWritersPerMaster: count(0, 8),
   /** Automatic report turns after the user's last message; later reports wait for the user. */
   reportTurnsPerMessage: count(1, 100),
+  /** Participants of one discussion; they run at the same time, outside the per-master limit. */
+  discussionParticipants: count(2, 8),
+  /** Rounds a debate may take before it ends without agreement. */
+  debateRounds: count(1, 10),
 }).strict();
 export type OrchestrationSettings = z.infer<typeof orchestrationSettingsSchema>;
 
 export const orchestrationDefaults: OrchestrationSettings = {
   runningPerMaster: 4, runningPerUser: 8, sharedWritersPerMaster: 1, worktreeWritersPerMaster: 4, reportTurnsPerMessage: 20,
+  discussionParticipants: 5, debateRounds: 4,
 };
 
 /** Fixed by the protocol rather than by policy. */

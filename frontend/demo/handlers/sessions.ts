@@ -153,9 +153,12 @@ export const sessionHandlers = [
   http.get("/api/sessions/:id/runtime", () =>
     HttpResponse.json({ resident: false, turnActive: false, queue: [], tasks: [] })),
   // The preview has no other CLIs to start, so a master conversation never gets children.
-  http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
+  http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], discussions: [], pendingReports: 0, reportsPaused: false })),
+  // The preview runs no CLIs, so there is nobody to discuss with.
+  http.post("/api/projects/:id/discussions", () => fail(409, "在线预览中无法启动参与讨论的 CLI")),
+  http.post("/api/discussions/:id/stop", () => fail(404, "讨论不存在")),
   http.post("/api/sessions/:id/agents/stop", () => HttpResponse.json({ ok: true })),
-  http.post("/api/sessions/:id/agents/deliver", () => HttpResponse.json({ agents: [], pendingReports: 0, reportsPaused: false })),
+  http.post("/api/sessions/:id/agents/deliver", () => HttpResponse.json({ agents: [], discussions: [], pendingReports: 0, reportsPaused: false })),
   http.post("/api/sessions/:id/agents/:childId/:action", () => fail(404, "子智能体不存在")),
   http.get("/api/sessions/:id/turns", ({ params }) =>
     HttpResponse.json(db.turns.filter((turn) => turn.session_id === params.id))),

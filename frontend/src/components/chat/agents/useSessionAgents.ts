@@ -44,5 +44,6 @@ export function useSessionAgents(sessionId: string | undefined, enabled: boolean
     }),
     discard: (childId: string) => act(async () => setView(await post<AgentPanelView>(`/sessions/${sessionId}/agents/${childId}/discard`, {}))),
     handoff: (childId: string) => act(() => post(`/sessions/${sessionId}/agents/${childId}/handoff`, {})),
+    stopDiscussion: (discussionId: string) => act(() => post(`/discussions/${discussionId}/stop`, {})),
   };
 }

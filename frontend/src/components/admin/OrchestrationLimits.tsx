@@ -12,6 +12,8 @@ const fields: { key: keyof OrchestrationSettings; label: string; min: number; ma
   { key: "sharedWritersPerMaster", label: "共用项目目录的可写子智能体", min: 0, max: 8, help: "它们的工作目录还必须互不包含；0 表示只允许使用 worktree 的可写子智能体。" },
   { key: "worktreeWritersPerMaster", label: "使用 worktree 的可写子智能体", min: 0, max: 8, help: "每个都有自己的分支、镜像和同步会话，占用工作区磁盘。" },
   { key: "reportTurnsPerMessage", label: "每条用户消息后的自动汇总轮数", min: 1, max: 100, help: "超过后汇报留在子智能体面板中，由用户手动投递。" },
+  { key: "discussionParticipants", label: "每场讨论的参与者", min: 2, max: 8, help: "参与者同时运行，不计入每个主对话的上限，但计入每个用户的上限。" },
+  { key: "debateRounds", label: "辩论的最多轮数", min: 1, max: 10, help: "所有参与者都表示同意时提前结束。" },
 ];
 
 /** Limits on master agents and their children, for every user; changes apply to the next tool call. */

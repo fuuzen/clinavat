@@ -156,6 +156,21 @@ export class Store {
         created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT, delivered_at TEXT
       );
       CREATE INDEX IF NOT EXISTS agent_tasks_master ON agent_tasks(master_session_id,status);
+      -- A discussion among child agents, hosted by the conversation that receives its record: a master, or a moderator.
+      CREATE TABLE IF NOT EXISTS discussions (
+        id TEXT PRIMARY KEY, host_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        topic TEXT NOT NULL, format TEXT NOT NULL CHECK(format IN ('council','debate','review')),
+        rounds INTEGER NOT NULL, round INTEGER NOT NULL DEFAULT 0, started_by TEXT NOT NULL CHECK(started_by IN ('master','user')),
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','stopped','error')), detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS discussions_host ON discussions(host_session_id,created_at);
+      CREATE TABLE IF NOT EXISTS discussion_statements (
+        discussion_id TEXT NOT NULL REFERENCES discussions(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, round INTEGER NOT NULL,
+        status TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(discussion_id,session_id,round)
+      );
       CREATE INDEX IF NOT EXISTS agent_tasks_child ON agent_tasks(child_session_id,status);
       CREATE INDEX IF NOT EXISTS message_images_session ON message_images(session_id);
       CREATE INDEX IF NOT EXISTS events_user ON events(user_id,id);
@@ -209,6 +224,9 @@ export class Store {
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
     this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");
+    // A participant of a discussion, with the position or perspective it argues from in a debate.
+    this.addColumn('sessions', 'discussion_id', 'TEXT REFERENCES discussions(id) ON DELETE SET NULL');
+    this.addColumn('sessions', 'discussion_stance', 'TEXT');
     // A worktree project: a child agent's own checkout of its master project's repository, on a branch of its own.
     this.addColumn('projects', 'parent_project_id', 'TEXT REFERENCES projects(id) ON DELETE CASCADE');
     // worktree_conflicts lists, as JSON, the files of the last merge that stopped on conflicts.
@@ -256,6 +274,7 @@ export class Store {
     // Their reports wait for the user in the master's agent panel; a restart never replays them by itself.
     this.run(`UPDATE agent_tasks SET status='interrupted',finished_at=?,report=COALESCE(report,'服务重新启动，子智能体的执行被中断')
       WHERE status='running'`, interruptedAt);
+    this.run(`UPDATE discussions SET status='stopped',finished_at=?,detail='服务重新启动，讨论被中断' WHERE status='running'`, interruptedAt);
     this.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE status='CONNECTED' AND kind='ssh'");
     for (const user of this.all<User>("SELECT * FROM users WHERE role='admin'")) ensureLocalHost(this, user.id);
     this.run("UPDATE approvals SET status='expired', reason='服务重新启动' WHERE status='pending'");

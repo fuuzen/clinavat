@@ -26,7 +26,7 @@ export function engineSlots(context: Context, userId: string, engine: AgentEngin
 }
 
 /** Where a child runs when the master named no slot: the automatic choice where some slot qualifies, else the first free slot. */
-function slotChoice(context: Context, user: User, engine: AgentEngine, slotId?: string, model?: string) {
+export function slotChoice(context: Context, user: User, engine: AgentEngine, slotId?: string, model?: string) {
   if (slotId) return { slotMode: 'manual' as const, slotId };
   const slots = engineSlots(context, user.id, engine);
   if (engineProfiles[engine].automaticSlot && slots.some(({ slot }) => context.slots.eligible(slot, user.id, model))) return { slotMode: 'auto' as const };

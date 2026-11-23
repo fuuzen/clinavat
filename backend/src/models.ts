@@ -74,6 +74,9 @@ export interface Session {
   /** A child agent's working directory relative to its project's root; NULL for the root. */
   agent_directory: string | null;
   agent_isolation: 'shared' | 'worktree' | null;
+  /** Set on a participant of a discussion. */
+  discussion_id: string | null;
+  discussion_stance: string | null;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

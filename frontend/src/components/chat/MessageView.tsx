@@ -129,7 +129,7 @@ export default function MessageView({
         ) : (
           <AgentAvatar engine={engine} />
         )}
-        <strong>{source === "delegation" ? "主智能体的任务" : source === "report" ? "子智能体汇报" : user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
+        <strong>{source === "delegation" ? "主智能体的任务" : source === "report" ? (message.content.includes("<clinavat_discussion") ? "讨论记录" : "子智能体汇报") : user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
         <time>{formatTime(message.created_at)}</time>
         {message.role === "assistant" && (
           <span className="message-actions">

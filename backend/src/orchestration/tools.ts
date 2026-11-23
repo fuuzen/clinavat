@@ -47,6 +47,23 @@ export const toolInputs = {
       .describe('"abort" leaves the project as it was and lists the conflicting files; "leave" keeps the conflict markers in the project for you to resolve and commit.'),
   }),
   discard_agent: z.object({ agent: agentReference }),
+  start_discussion: z.object({
+    topic: z.string().trim().min(1).max(20_000)
+      .describe('The question or decision to discuss; for a review, what to review, such as the uncommitted changes, a branch or some files.'),
+    format: z.enum(['council', 'debate', 'review']).describe('"council": everyone answers independently, then critiques and ranks the others\' anonymous answers. '
+      + '"debate": participants argue from given positions over several rounds until they agree. "review": everyone reviews the same work and lists problems by severity.'),
+    participants: z.array(z.object({
+      name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/, 'participant name: letters, digits, "-" and "_", at most 24 characters'),
+      engine: z.enum(agentEngines),
+      model: z.string().trim().min(1).max(200).optional(),
+      effort: z.string().trim().min(1).max(32).optional(),
+      slot: z.string().trim().min(1).max(64).optional(),
+      stance: z.string().trim().max(500).optional().describe('Debate only: the position or perspective this participant argues from.'),
+    })).min(1).max(8).describe('Prefer different vendors and models: the point is independent views.'),
+    rounds: z.number().int().min(1).max(10).optional().describe('Debate only: the most rounds; the administrator\'s limit applies.'),
+    directory: z.string().trim().max(1024).optional().describe('Project-relative directory the participants start in.'),
+  }),
+  stop_discussion: z.object({ discussion: z.uuid() }),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -60,6 +77,8 @@ const descriptions: Record<ToolName, string> = {
   stop_agent: 'Stops what a child agent is doing; the conversation stays and can be messaged again.',
   merge_agent: 'Merges the branch of a child agent that worked in its own worktree into the project, then removes its worktree and branch. The child must have finished.',
   discard_agent: 'Throws away the branch and worktree of a child agent that worked in its own worktree, or cleans them up after a conflict you resolved yourself.',
+  start_discussion: 'Starts a discussion among read-only child agents, run by the Hub round by round. Returns at once; when it ends, its whole record arrives as a new message for you to synthesize. Use it for open questions, design choices, trade-offs and cross-vendor reviews.',
+  stop_discussion: 'Stops a discussion and its participants; no record arrives.',
 };
 
 export const hubTools: HubTool[] = Object.entries(toolInputs).map(([name, schema]) => {

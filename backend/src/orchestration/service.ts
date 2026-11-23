@@ -9,6 +9,7 @@ import { assertNewName, childDirectory, createChild, engineSlots, type Placement
 import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
 import { ReportDelivery } from './reports.js';
+import { Discussions, type DiscussionInput } from './discussions.js';
 import { AgentTasks } from './tasks.js';
 import { hubTools, isToolName, toolInputs, type ToolName } from './tools.js';
 
@@ -20,13 +21,19 @@ export class Orchestrator implements OrchestrationHost {
   readonly tools = hubTools;
   private readonly tasks: AgentTasks;
   private readonly reports: ReportDelivery;
+  private readonly discussions: Discussions;
 
   constructor(private readonly context: Context) {
     this.tasks = new AgentTasks(context.store);
     this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId));
+    this.discussions = new Discussions(context, this.tasks, this.reports, this);
   }
 
-  directs(tool: string): boolean { return ['start_agent', 'message_agent', 'merge_agent', 'discard_agent'].includes(tool); }
+  /** A discussion the user starts from the web, hosted by the moderator conversation created for it. */
+  startDiscussion(user: User, host: Session, input: DiscussionInput) { return this.discussions.start(user, host, input, 'user'); }
+  stopDiscussion(user: User, id: string) { return this.discussions.stop(user, id); }
+
+  directs(tool: string): boolean { return ['start_agent', 'message_agent', 'merge_agent', 'discard_agent', 'start_discussion'].includes(tool); }
 
   observe(event: AgentEvent): void { this.reports.observe(event); }
 
@@ -89,6 +96,17 @@ export class Orchestrator implements OrchestrationHost {
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);
         return json(await this.merge(this.child(master, input.agent), input.mode, input.onConflict));
+      }
+      case 'start_discussion': {
+        const input = toolInputs.start_discussion.parse(args);
+        const { id, participants } = await this.discussions.start(user, master, input, 'master');
+        return json({ discussionId: id, participants: participants.map(participant => participant.agent_name), status: 'running',
+          note: 'The record arrives as a new message when the discussion ends. Participants are read-only children; read_agent reads any of them.' });
+      }
+      case 'stop_discussion': {
+        const { discussion } = toolInputs.stop_discussion.parse(args);
+        await this.discussions.stop(user, discussion);
+        return json({ discussion, status: 'stopped' });
       }
       case 'discard_agent': {
         const child = this.worktreeChild(this.child(master, toolInputs.discard_agent.parse(args).agent));
@@ -192,7 +210,8 @@ export class Orchestrator implements OrchestrationHost {
     return this.context.worktrees;
   }
 
-  private async send(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean, notes: string[] = []) {
+  /** Sends a child one task; when the send fails, the task ends at once and the error goes to the caller. */
+  async dispatch(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean) {
     const task = this.tasks.create(master.id, child.id, text, notify);
     this.publish(master.id);
     try {
@@ -200,21 +219,26 @@ export class Orchestrator implements OrchestrationHost {
         source: 'delegation',
         prompt: expanded => delegationPrompt(master, { name: child.agent_name!, access: child.agent_access ?? 'write' }, expanded),
       });
-      if (child.agent_access === 'write' && child.agent_isolation !== 'worktree') {
-        notes.push('This child modifies the shared project directory: do not edit the files it is working on until its report arrives.');
-      }
-      return json({ agentId: child.agent_name, sessionId: child.id, engine: child.engine, model: child.model ?? 'default', slot: child.slot_id,
-        access: child.agent_access, isolation: child.agent_isolation, directory: child.agent_directory ?? '.', status: sent.status,
-        ...(notify ? {} : { notify: false }), ...(notes.length ? { notes } : {}) });
+      return { task, status: sent.status };
     } catch (error) {
-      // The master gets the failure as the tool result, so the task needs no report.
       this.tasks.discard(task.id, `任务未能发送：${error instanceof Error ? error.message : String(error)}`);
       this.publish(master.id);
       throw error;
     }
   }
 
-  private async stopChild(user: User, child: Session): Promise<void> {
+  private async send(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean, notes: string[] = []) {
+    // A failed send reaches the master as the tool's error, so its task needs no report.
+    const { status } = await this.dispatch(user, master, child, text, mode, notify);
+    if (child.agent_access === 'write' && child.agent_isolation !== 'worktree') {
+      notes.push('This child modifies the shared project directory: do not edit the files it is working on until its report arrives.');
+    }
+    return json({ agentId: child.agent_name, sessionId: child.id, engine: child.engine, model: child.model ?? 'default', slot: child.slot_id,
+      access: child.agent_access, isolation: child.agent_isolation, directory: child.agent_directory ?? '.', status,
+      ...(notify ? {} : { notify: false }), ...(notes.length ? { notes } : {}) });
+  }
+
+  async stopChild(user: User, child: Session): Promise<void> {
     await stopSession(this.context, user.id, child.id);
     // A child stopped before its process started reports no turn end.
     await this.reports.complete(sessionFor(this.context, child.id, user.id), 'interrupted', '子智能体已被停止。');
@@ -262,7 +286,8 @@ export class Orchestrator implements OrchestrationHost {
   view(masterId: string) {
     const pending = this.tasks.pending(masterId);
     return {
-      agents: this.tasks.children(masterId).map(child => {
+      // Participants of discussions show in their discussion's card.
+      agents: this.tasks.children(masterId).filter(child => !child.discussion_id).map(child => {
         const latest = this.tasks.latest(child.id);
         return {
           sessionId: child.id, name: child.agent_name ?? child.title, engine: child.engine, model: child.model, slotId: child.slot_id,
@@ -273,6 +298,7 @@ export class Orchestrator implements OrchestrationHost {
           pendingReports: pending.filter(task => task.child_session_id === child.id).length,
         };
       }),
+      discussions: this.discussions.view(masterId),
       pendingReports: pending.length,
       reportsPaused: pending.length > 0 && this.tasks.reportTurnsSinceUser(masterId) >= this.context.orchestrationSettings.view().reportTurnsPerMessage,
     };
@@ -300,7 +326,7 @@ export class Orchestrator implements OrchestrationHost {
 
   deliver(masterId: string): Promise<void> { return this.reports.deliver(masterId, true); }
 
-  private publish(masterId: string): void {
+  publish(masterId: string): void {
     const master = this.context.store.get<Session>('SELECT user_id FROM sessions WHERE id=?', masterId);
     if (master) this.context.events.broadcast(master.user_id, { type: 'agents', sessionId: masterId, payload: this.view(masterId) });
   }

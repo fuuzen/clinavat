@@ -1,5 +1,6 @@
 import { engineProfiles, type AgentEngine } from "../../../engines";
 import { Markdown } from "../MessageView";
+import DiscussionRecord, { parseDiscussion } from "./DiscussionRecord";
 
 interface Report { agent: string; engine: string; model: string; status: string; task: string; text: string }
 
@@ -17,6 +18,8 @@ function parseReports(content: string): { reports: Report[]; rest: string } {
 }
 
 export default function AgentReports({ content }: { content: string }) {
+  const discussion = parseDiscussion(content);
+  if (discussion) return <DiscussionRecord discussion={discussion} />;
   const { reports, rest } = parseReports(content);
   if (!reports.length) return <div className="message-plain">{content}</div>;
   return (

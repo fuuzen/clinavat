@@ -6,6 +6,7 @@ import {
   Folder,
   FolderPlus,
   LogOut,
+  MessagesSquare,
   Monitor,
   MoreHorizontal,
   Network,
@@ -47,6 +48,8 @@ interface Props {
   ) => void;
   onRename: (session: Session) => void;
   onArchive: (session: Session, archived: boolean) => void;
+  /** Starts a discussion among CLIs in the project. */
+  onDiscuss: (project: Project) => void;
   onSettings: () => void;
   adminOpen: boolean;
   onAdmin: () => void;
@@ -270,6 +273,10 @@ export default function Sidebar(props: Props) {
                               </button>
                               {menu === project.id && (
                                 <div className="context-menu">
+                                  <button onClick={() => { props.onDiscuss(project); setMenu(""); }}>
+                                    <MessagesSquare size={14} />
+                                    发起讨论
+                                  </button>
                                   <button
                                     className="danger-text"
                                     onClick={() => {

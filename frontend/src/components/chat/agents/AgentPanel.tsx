@@ -2,6 +2,7 @@ import { GitBranch, Inbox, Square, Workflow } from "lucide-react";
 import { isActive } from "../../../api";
 import type { Approval, ChildAgent, Session } from "../../../types";
 import { useSessionAgents } from "./useSessionAgents";
+import DiscussionCard from "./DiscussionCard";
 
 interface Props {
   session?: Session;
@@ -23,9 +24,13 @@ function stateOf(agent: ChildAgent, approvals: number): { label: string; tone: s
 
 /** A master conversation's child agents above its composer: their state, their approvals and their reports. */
 export default function AgentPanel({ session, sessions, approvals, connected, onOpen, onNotice }: Props) {
-  const enabled = session?.orchestration === 1 && !session.archived_at;
-  const { view, pending, stopAll, stop, deliver, merge, discard, handoff } = useSessionAgents(session?.id, enabled && connected, onNotice);
-  if (!enabled || !view || (!view.agents.length && !view.pendingReports)) return null;
+  // A master, or a conversation that hosts a discussion the user started.
+  const enabled = !!session && !session.archived_at && (session.orchestration === 1 || sessions.some((item) => item.parent_session_id === session.id));
+  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
+  // Running discussions, or else the latest one.
+  const discussions = view?.discussions.some((item) => item.status === "running")
+    ? view.discussions.filter((item) => item.status === "running") : view?.discussions.slice(0, 1) ?? [];
+  if (!enabled || !view || (!view.agents.length && !view.pendingReports && !discussions.length)) return null;
   const waiting = (id: string) => approvals.filter((approval) => approval.session_id === id && ["pending", "PENDING"].includes(approval.status)).length;
   const busy = view.agents.some((agent) => agent.running || isActive(agent.status));
   const open = (id: string) => {
@@ -36,7 +41,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
     <div className="agent-panel" aria-label="子智能体">
       <div className="agent-panel-header">
         <Workflow size={13} aria-hidden="true" />
-        <span className="agent-panel-title">子智能体 {view.agents.length}</span>
+        <span className="agent-panel-title">{view.agents.length ? `子智能体 ${view.agents.length}` : "讨论"}</span>
         {view.pendingReports > 0 && (
           <button type="button" className="agent-panel-action" disabled={pending} onClick={() => void deliver()}
             title={view.reportsPaused ? "自动汇总已达上限，点击后把汇报交给主智能体" : "把尚未送达的汇报交给主智能体"}>
@@ -51,6 +56,10 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
           </button>
         )}
       </div>
+      {discussions.map((discussion) => (
+        <DiscussionCard key={discussion.id} discussion={discussion} sessions={sessions} pending={pending} onOpen={onOpen}
+          onStop={(id) => void stopDiscussion(id)} />
+      ))}
       {view.agents.map((agent) => {
         const approvalCount = waiting(agent.sessionId);
         const state = stateOf(agent, approvalCount);

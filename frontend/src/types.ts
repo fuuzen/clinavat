@@ -107,6 +107,9 @@ export interface Session {
   /** Relative to the conversation's project root; edits outside it are refused. */
   agent_directory?: string | null;
   agent_isolation?: "shared" | "worktree" | null;
+  /** Set on a participant of a discussion; the stance is the position it argues from in a debate. */
+  discussion_id?: string | null;
+  discussion_stance?: string | null;
   /** 1 when the agent may start and direct child agents. */
   orchestration?: 0 | 1;
 }
@@ -138,9 +141,28 @@ export interface OrchestrationSettings {
   sharedWritersPerMaster: number;
   worktreeWritersPerMaster: number;
   reportTurnsPerMessage: number;
+  discussionParticipants: number;
+  debateRounds: number;
+}
+export type DiscussionFormat = "council" | "debate" | "review";
+/** A discussion hosted by a conversation: the master that started it, or the moderator created for it. */
+export interface DiscussionView {
+  id: string;
+  topic: string;
+  format: DiscussionFormat;
+  status: "running" | "completed" | "stopped" | "error";
+  detail: string | null;
+  round: number;
+  rounds: number;
+  startedBy: "master" | "user";
+  participants: {
+    sessionId: string; name: string; engine: AgentEngine; model: string | null; stance: string | null; running: boolean;
+    statements: { round: number; status: string }[];
+  }[];
 }
 export interface AgentPanelView {
   agents: ChildAgent[];
+  discussions: DiscussionView[];
   /** Finished reports the master has not received yet. */
   pendingReports: number;
   /** Automatic report turns reached their limit; the rest wait for the user. */

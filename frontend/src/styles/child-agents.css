@@ -242,3 +242,162 @@
   font-size: 11px;
   color: var(--muted);
 }
+
+.discussion-format {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--text);
+}
+.discussion-participants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.discussion-participant {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.discussion-participant .engine-logo {
+  width: 12px;
+  height: 12px;
+}
+.discussion-participant small {
+  color: var(--muted);
+}
+.participant-running {
+  border-color: var(--info-line);
+  color: var(--info);
+}
+.participant-done {
+  border-color: var(--success-line);
+}
+.participant-error {
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.discussion-record {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 2px solid var(--info-line);
+  padding-left: 10px;
+}
+.discussion-record-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+}
+.discussion-record-head > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.discussion-record-head > small,
+.discussion-ranking {
+  font-size: 11px;
+  color: var(--muted);
+}
+.discussion-round {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.discussion-round > summary {
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.discussion-statements {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+.discussion-statement {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.discussion-statement > header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.discussion-statement > header .engine-logo {
+  width: 13px;
+  height: 13px;
+}
+.discussion-statement > header small {
+  color: var(--muted);
+}
+.discussion-statement-status,
+.statement-error > header strong,
+.statement-timeout > header strong {
+  color: var(--danger);
+}
+
+.discussion-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.discussion-form legend {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.discussion-formats > label {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.discussion-formats > label.selected {
+  border-color: var(--accent);
+}
+.discussion-formats small {
+  color: var(--muted);
+}
+.discussion-seat,
+.discussion-moderator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.discussion-seat > input:first-child {
+  flex: 0 0 120px;
+  min-width: 0;
+}
+.discussion-seat > select,
+.discussion-seat > input,
+.discussion-moderator > select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.discussion-seats > .button {
+  align-self: flex-start;
+}

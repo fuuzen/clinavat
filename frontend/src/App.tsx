@@ -28,6 +28,7 @@ import ClientHubSwitch from "./components/ClientHubSwitch";
 import Sidebar from "./components/Sidebar";
 import Chat from "./components/Chat";
 import Inspector from "./components/Inspector";
+import DiscussionDialog from "./components/chat/agents/DiscussionDialog";
 import Settings from "./components/Settings";
 import AppNotices, { type Notice } from "./components/AppNotices";
 import { ConfirmDialog, RenameDialog } from "./components/Dialogs";
@@ -44,6 +45,7 @@ type Dialog =
       name: string;
     }
   | { type: "rename"; session: Session }
+  | { type: "discussion"; project: Project }
   | { type: "settings" }
   | null;
 
@@ -360,6 +362,7 @@ export default function App() {
           setDialog({ type: "rename", session: selected })
         }
         onArchive={(selected, archived) => void archive(selected, archived)}
+        onDiscuss={(target) => setDialog({ type: "discussion", project: target })}
         onSettings={() => setDialog({ type: "settings" })}
         adminOpen={showAdmin}
         onAdmin={() => {
@@ -487,6 +490,8 @@ export default function App() {
         />
       )}
       {dialog?.type === "settings" && <Settings overview={overview} onClose={closeDialog} />}
+      {dialog?.type === "discussion" && <DiscussionDialog overview={overview} project={dialog.project} onClose={closeDialog}
+        onCreated={(sessionId) => { setDialog(null); void refresh().then(() => changeSelection(dialog.project.id, sessionId)); }} />}
       <AppNotices notices={notices} onDismiss={(id) => setNotices((current) => current.filter((notice) => notice.id !== id))} />
     </div>
   );

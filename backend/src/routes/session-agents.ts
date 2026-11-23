@@ -1,8 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { sessionFor, withResourceLocks, type Context } from '../context.js';
+import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError } from '../models.js';
 import type { Orchestrator } from '../orchestration/service.js';
+import { toolInputs } from '../orchestration/tools.js';
+import { slotChoice } from '../orchestration/children.js';
+import { agentEngines } from '../agent/engines.js';
+import { createSession, sessionInput } from './sessions.js';
+
+const discussionInput = toolInputs.start_discussion.extend({
+  // Synthesizes the record at the end, in a new conversation that hosts the discussion.
+  moderator: z.object({ engine: z.enum(agentEngines), slotId: z.string().trim().min(1).max(64).optional(),
+    model: z.string().trim().min(1).max(200).optional(), reasoningEffort: z.string().trim().min(1).max(32).optional() }),
+}).strict();
 
 const identifier = z.object({ id: z.uuid() });
 
@@ -41,6 +51,30 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     const { id, childId } = child.parse(request.params);
     z.object({}).strict().parse(request.body ?? {});
     await orchestrator.handoff(request.user, id, childId);
+    return { ok: true };
+  });
+  app.post('/api/projects/:id/discussions', async (request, reply) => {
+    const { id } = identifier.parse(request.params);
+    const { moderator, ...input } = discussionInput.parse(request.body);
+    const project = projectFor(context, id, request.user.id);
+    if (project.parent_project_id) throw new HttpError(400, '请在主项目中发起讨论');
+    const host = await createSession(context, request.user, sessionInput.parse({
+      projectId: id, engine: moderator.engine, ...slotChoice(context, request.user, moderator.engine, moderator.slotId, moderator.model),
+      title: `讨论：${input.topic.replace(/\s+/g, ' ').slice(0, 40)}`, model: moderator.model, reasoningEffort: moderator.reasoningEffort,
+    }));
+    try {
+      const { id: discussionId } = await orchestrator.startDiscussion(request.user, host, input);
+      return reply.code(201).send({ sessionId: host.id, discussionId });
+    } catch (error) {
+      context.store.run('DELETE FROM sessions WHERE id=?', host.id);
+      context.events.emit(request.user.id, { type: 'session', sessionId: host.id, payload: { id: host.id, deleted: true } });
+      throw error;
+    }
+  });
+  app.post('/api/discussions/:id/stop', async request => {
+    const { id } = identifier.parse(request.params);
+    z.object({}).strict().parse(request.body ?? {});
+    await orchestrator.stopDiscussion(request.user, id);
     return { ok: true };
   });
   app.post('/api/sessions/:id/agents/deliver', async request => {

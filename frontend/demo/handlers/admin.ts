@@ -7,6 +7,7 @@ import { fail, readBody, unavailable } from "./respond";
 
 const orchestrationDefaults: OrchestrationSettings = {
   runningPerMaster: 4, runningPerUser: 8, sharedWritersPerMaster: 1, worktreeWritersPerMaster: 4, reportTurnsPerMessage: 20,
+  discussionParticipants: 5, debateRounds: 4,
 };
 let orchestrationSettings = { ...orchestrationDefaults };
 
