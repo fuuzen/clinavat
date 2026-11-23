@@ -481,7 +481,13 @@ export default function Chat(props: Props) {
             onChange={(mode) => void changePermission(mode)}
           />
           <BehaviorPicker engine={currentEngine} value={behavior} disabled={active || slotSaving || permissionSaving || !slotAvailable} saving={behaviorSaving} onChange={(value) => void changeBehavior(value)} openRequest={commands.behaviorRequest}
-            orchestrationLock={session?.parent_session_id ? "子智能体不能再派生子智能体。" : currentEngine === "codex" && session?.native_session_id ? "Codex 对话的编排设置在发送第一条消息后不能更改。" : undefined}
+            orchestrationLock={session?.parent_session_id
+              ? { scope: "all", reason: "子智能体不能再派生子智能体。" }
+              : currentEngine === "codex" && session?.native_session_id
+                ? behavior.orchestrationMode === "off"
+                  ? { scope: "all", reason: "Codex 对话在发送第一条消息后不能开启编排。" }
+                  : { scope: "toggle", reason: "Codex 对话在发送第一条消息后不能关闭编排，但可在协作编排与 Super Agent 之间切换。" }
+                : undefined}
             roster={{ profiles: overview.agentProfiles ?? [], session }} />
           <QuestionPolicyPicker key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`} session={session}
             defaults={overview.questionDefaults} onChange={props.onQuestionsChange} />

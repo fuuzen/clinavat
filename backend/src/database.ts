@@ -228,6 +228,7 @@ export class Store {
     this.addColumn('sessions', 'agent_name', 'TEXT');
     this.addColumn('sessions', 'agent_access', "TEXT CHECK(agent_access IN ('read','write'))");
     this.addColumn('sessions', 'orchestration', 'INTEGER NOT NULL DEFAULT 0 CHECK(orchestration IN (0,1))');
+    this.addColumn('sessions', 'orchestration_mode', "TEXT CHECK(orchestration_mode IN ('off','hybrid','super'))");
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
     this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");

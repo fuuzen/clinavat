@@ -1,4 +1,5 @@
 import type { RunControl } from './run-control.js';
+import { orchestrationModeOf } from './orchestration-tools.js';
 import type { AgentContext, AgentRun, QueuedInput, RunTask } from './types.js';
 
 export interface RunContinuation { queue: QueuedInput[]; attemptedSlotIds: string[] }
@@ -41,5 +42,5 @@ export interface RuntimeView {
 
 export const settingsKey = (context: AgentContext) => JSON.stringify([context.slot.id, context.slot.credential_revision,
   context.session.model ?? null, context.session.reasoning_effort ?? null, context.session.permission_mode ?? null,
-  context.session.agent_mode ?? null, context.session.role_preset ?? null, !!context.session.orchestration,
+  context.session.agent_mode ?? null, context.session.role_preset ?? null, orchestrationModeOf(context.session),
   context.session.agent_access ?? null]);

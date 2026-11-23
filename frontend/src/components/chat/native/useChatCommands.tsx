@@ -49,6 +49,7 @@ export function useChatCommands(props: {
   const profile = engineProfiles[props.engine];
   const commands = [
     ...commonCommands.filter((command) => command.name !== "compact" || profile.compact),
+    ...(profile.orchestration && !props.session?.parent_session_id ? [{ name: "super", description: "切换到 Super Agent 只读统筹编排模式" }] : []),
     ...(profile.rolePresets ? [{ name: "role", description: "切换 Codex 角色预设", argumentHint: "default | reviewer | architect" }] : []),
     ...(profile.goal ? [{ name: "goal", description: "查看、创建或管理原生 Goal", argumentHint: "pause | edit [目标内容] | resume | 目标内容" }] : []),
   ];
@@ -78,7 +79,8 @@ export function useChatCommands(props: {
       return await (name === "pause" ? props.onPause() : props.onResume()) ? "retained" : "blocked";
     }
     if (name === "status") {
-      props.onNotice(`${engineLabel(props.engine)} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort ? effortName(props.selection.reasoningEffort) : "默认思考强度"} · ${props.permissionMode}${engineProfiles[props.engine].rolePresets ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
+      const orchestrationLabel = props.behavior.orchestrationMode === "super" ? " · Super Agent" : props.behavior.orchestrationMode === "hybrid" ? " · 协作编排" : "";
+      props.onNotice(`${engineLabel(props.engine)} · ${statusLabel(props.session?.status || "idle")} · ${props.behavior.agentMode === "plan" ? "Plan" : "Normal"}${orchestrationLabel} · ${props.selection.model || "默认模型"} · ${props.selection.reasoningEffort ? effortName(props.selection.reasoningEffort) : "默认思考强度"} · ${props.permissionMode}${engineProfiles[props.engine].rolePresets ? ` · ${rolePresets.find((role) => role.value === props.behavior.rolePreset)?.label}` : ""}`, "success");
       return "handled";
     }
     if (name === "diff") { props.onDiff(); return "handled"; }
@@ -93,6 +95,12 @@ export function useChatCommands(props: {
     if (name === "model") setModelRequest((value) => value + 1);
     if (name === "permissions") setPermissionRequest((value) => value + 1);
     if ((name === "plan" || name === "normal") && !await props.onBehavior({ ...props.behavior, agentMode: name })) return "blocked";
+    if (name === "super") {
+      if (props.engine === "codex" && props.session?.native_session_id && props.behavior.orchestrationMode === "off") {
+        return fail("Codex 对话在发送第一条消息后不能开启编排。");
+      }
+      if (!await props.onBehavior({ ...props.behavior, orchestration: true, orchestrationMode: "super" })) return "blocked";
+    }
     if (name === "role") {
       if (!args) setBehaviorRequest((value) => value + 1);
       else {

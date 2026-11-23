@@ -25,7 +25,8 @@ function stateOf(agent: ChildAgent, approvals: number): { label: string; tone: s
 /** A master conversation's child agents above its composer: their state, their approvals and their reports. */
 export default function AgentPanel({ session, sessions, approvals, connected, onOpen, onNotice }: Props) {
   // A master, or a conversation that hosts a discussion the user started.
-  const enabled = !!session && !session.archived_at && (session.orchestration === 1 || sessions.some((item) => item.parent_session_id === session.id));
+  const superMode = session?.orchestration_mode === "super";
+  const enabled = !!session && !session.archived_at && (session.orchestration === 1 || superMode || session.orchestration_mode === "hybrid" || sessions.some((item) => item.parent_session_id === session.id));
   const { view, pending, stopAll, stop, deliver, merge, discard, handoff, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
   // Running discussions, or else the latest one.
   const discussions = view?.discussions.some((item) => item.status === "running")
@@ -41,7 +42,10 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
     <div className="agent-panel" aria-label="子智能体">
       <div className="agent-panel-header">
         <Workflow size={13} aria-hidden="true" />
-        <span className="agent-panel-title">{view.agents.length ? `子智能体 ${view.agents.length}` : "讨论"}</span>
+        <span className="agent-panel-title">
+          {superMode && <span className="super-agent-badge">Super Agent</span>}
+          {view.agents.length ? `子智能体 ${view.agents.length}` : "讨论"}
+        </span>
         {view.pendingReports > 0 && (
           <button type="button" className="agent-panel-action" disabled={pending} onClick={() => void deliver()}
             title={view.reportsPaused ? "自动汇总已达上限，点击后把汇报交给主智能体" : "把尚未送达的汇报交给主智能体"}>
@@ -96,7 +100,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
                 {branch.state === "conflict" && <>
                   <button type="button" disabled={pending} onClick={() => void merge(agent.sessionId, "leave")}
                     title="在主目录中重新合并并保留冲突标记，由你解决后提交">我来处理</button>
-                  <button type="button" disabled={pending} onClick={() => void handoff(agent.sessionId)} title="把冲突交给主智能体处理">交给主智能体</button>
+                  <button type="button" disabled={pending} onClick={() => void handoff(agent.sessionId)} title={superMode ? "交给 Super Agent 协调子智能体解决冲突" : "把冲突交给主智能体处理"}>交给主智能体</button>
                   <button type="button" className="danger-text" disabled={pending} onClick={() => void discard(agent.sessionId)}>丢弃</button>
                 </>}
                 {branch.state === "resolving" && (

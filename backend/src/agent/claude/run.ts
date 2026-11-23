@@ -6,7 +6,7 @@ import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } f
 import { readJsonLines } from '../ndjson.js';
 import { claudePermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { hubToolNamespace, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { hubToolNamespace, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { ClaudeQuotaTracker } from './quota.js';
 import { ClaudeRetries } from './retries.js';
 import { ClaudeUsageMeter } from '../../token-usage/meters.js';
@@ -45,15 +45,18 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         .flatMap((pattern) => [`Read(${pattern})`, `Edit(${pattern})`]);
     }) },
   };
+  const superAgent = isSuperAgent(services.context);
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     // Without summarized display the API streams thinking blocks with empty text.
     '--thinking-display', 'summarized',
     ...(permissionMode === 'bypassPermissions' ? [] : ['--restricted']),
     '--permission-mode', permissionMode, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
     '--setting-sources', '', '--settings', JSON.stringify(settings),
-    '--append-system-prompt', conversationInstructions(services.context, 'claude') + (permissionMode === 'plan'
+    '--append-system-prompt', conversationInstructions(services.context, 'claude', services.config.orchestration?.briefing?.(services.context)) + (permissionMode === 'plan'
       ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
-    '--tools', 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
+    '--tools', superAgent
+      ? 'Read,Glob,Grep,WebFetch,WebSearch,AskUserQuestion,ExitPlanMode'
+      : 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
     // The Hub's tools are an in-process server: the CLI reaches it through control requests on stdio.
     '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: orchestrates(services.context)
       ? { [hubToolNamespace]: { type: 'sdk', name: hubToolNamespace } } : {} }),

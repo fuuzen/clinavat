@@ -3,6 +3,7 @@ import path from 'node:path';
 import { privateSubdirectory } from '../../accounts/credential-files.js';
 import { atomicWrite } from '../../runtime/process.js';
 import { quoteShell } from '../environment.js';
+import { isSuperAgent } from '../orchestration-tools.js';
 import type { AgentContext } from '../types.js';
 import { toolShimProgram } from './tool-bridge.js';
 
@@ -81,15 +82,21 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   const stopLog = path.join(home, '.clinavat-agy-stop.jsonl');
   const toolShim = path.join(config, 'clinavat-mcp.py');
   const run = (...args: string[]) => ['python3', '-I', hook, ...args].map(quoteShell).join(' ');
-  const deny = (tool: string) => ({ matcher: tool, hooks: [{ type: 'command', command: run('deny',
-    'Subagents are disabled in this workspace; do the work yourself.'), timeout: 30 }] });
+  const superAgent = isSuperAgent(context);
+  const deny = (tool: string, reason = 'Subagents are disabled in this workspace; do the work yourself.') =>
+    ({ matcher: tool, hooks: [{ type: 'command', command: run('deny', reason), timeout: 30 }] });
+  const superDenyReason = 'You are running in Super Agent (delegate-first) mode and cannot directly edit files or run commands; delegate implementation and command execution to child agents using the clinavat tools.';
+  const readOnlyDenyReason = 'You are a read-only child agent and cannot modify files; describe the changes you need in your final reply.';
   const hooks = { clinavat: {
     PreToolUse: [
-      { matcher: 'run_command', hooks: [{ type: 'command', command: run('command', shell ?? ''), timeout: 30 }] },
+      ...(superAgent
+        ? ['run_command', 'write_file', 'edit_file', 'run_workflow'].map(tool => deny(tool, superDenyReason))
+        : [{ matcher: 'run_command', hooks: [{ type: 'command', command: run('command', shell ?? ''), timeout: 30 }] }]),
       // A subagent's permission requests never reach an ACP client, so its commands would wait and fail.
-      ...['invoke_subagent', 'define_subagent', 'manage_subagents'].map(deny),
-      ...(context.session.agent_access === 'read' ? [{ matcher: 'write_file', hooks: [{ type: 'command', command: run('deny',
-        'You are a read-only child agent and cannot modify files; describe the changes you need in your final reply.'), timeout: 30 }] }] : []),
+      ...['invoke_subagent', 'define_subagent', 'manage_subagents'].map(tool => deny(tool)),
+      ...(!superAgent && context.session.agent_access === 'read'
+        ? ['write_file', 'edit_file'].map(tool => deny(tool, readOnlyDenyReason))
+        : []),
     ],
     Stop: [{ type: 'command', command: run('stop', stopLog), timeout: 10 }],
   } };

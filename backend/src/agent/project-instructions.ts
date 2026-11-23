@@ -2,7 +2,8 @@ import path from 'node:path';
 import { quoteShell } from './environment.js';
 import type { AgentEngine } from './engines.js';
 import type { AgentContext } from './types.js';
-import { childInstructions, masterInstructions } from '../orchestration/instructions.js';
+import { isSuperAgent, orchestrates } from './orchestration-tools.js';
+import { childInstructions, masterInstructions, superAgentInstructions } from '../orchestration/instructions.js';
 
 interface EngineInstructions {
   background: string;
@@ -32,9 +33,21 @@ const instructions: Record<AgentEngine, EngineInstructions> = {
 };
 
 /** The project instructions, then what the conversation's place among master and child agents adds. */
-export function conversationInstructions(context: AgentContext, engine: AgentEngine): string {
+export function conversationInstructions(context: AgentContext, engine: AgentEngine, briefing?: string): string {
+  if (isSuperAgent(context)) {
+    return superProjectInstructions(context.project, engine) + superAgentInstructions(briefing);
+  }
   return projectInstructions(context.project, engine) + childInstructions(context.session)
-    + (context.session.orchestration && !context.session.parent_session_id ? masterInstructions() : '');
+    + (orchestrates(context) ? masterInstructions(briefing) : '');
+}
+
+function superProjectInstructions(project: AgentContext['project'], engine: AgentEngine): string {
+  const inspection = engine === 'claude'
+    ? 'You have read-only inspection tools (Read, Glob, Grep) for quick spot checks.'
+    : engine === 'codex'
+      ? 'You run in a read-only sandbox: only safe local read-only file inspection commands (such as rg, cat, sed -n, ls) are allowed for quick spot checks; file patches, mutating commands and host/remote shell wrappers are disabled.'
+      : 'You have read-only file reading (read_file) for quick spot checks; file editing and shell commands are disabled.';
+  return `The project root is ${JSON.stringify(project.local_path)}. ${inspection} Do not attempt to edit files, run builds/tests, or inspect Git/workspace internals (.bin, .git, .claude, .codex). Delegate codebase exploration, code changes, and command execution to child agents through the clinavat tools.`;
 }
 
 export function projectInstructions(project: AgentContext['project'], engine: AgentEngine): string {

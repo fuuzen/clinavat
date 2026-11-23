@@ -14,7 +14,27 @@
   color: var(--muted);
 }
 .agent-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex: 1 1 auto;
+}
+.super-agent-badge,
+.session-super-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--info-line);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--info);
+  background: var(--info-bg);
+}
+.session-super-icon {
+  color: var(--info);
 }
 .agent-panel-action {
   display: inline-flex;

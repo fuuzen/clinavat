@@ -1,9 +1,10 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { projectFor, sessionFor, type Context } from '../context.js';
 import { HttpError, type Session, type User } from '../models.js';
+import { agentEngines } from '../agent/engines.js';
 import type { AgentEngine } from '../agent/engines.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
-import { childDirectory, createChild } from './children.js';
+import { childDirectory, createChild, engineSlots } from './children.js';
 import {
   aggregateRanking, agreed, critiquePrompt, debatePrompt, openingPrompt, parseRanking, recordMessage,
   type Contribution, type DiscussionFormat, type DiscussionRecord,
@@ -60,13 +61,15 @@ export class Discussions {
     const number = store.get<{ count: number }>('SELECT COUNT(*) AS count FROM discussions WHERE host_session_id=?', host.id)!.count + 1;
     store.run('INSERT INTO discussions(id,host_session_id,topic,format,rounds,started_by) VALUES(?,?,?,?,?,?)', id, host.id, input.topic, input.format, rounds, startedBy);
     const participants: Session[] = [];
+    const usableEngines = agentEngines.filter(engine => engineSlots(this.context, user.id, engine).some(entry => entry.usable));
+    const availableEngines = usableEngines.length ? usableEngines : agentEngines.filter(engine => engineSlots(this.context, user.id, engine).length > 0);
     try {
       for (const participant of input.participants) {
         // Participants only speak, so a roster profile lends its CLI, account, model and role but never write access.
         const request = this.roster.resolve(host, toolInputs.start_agent.parse({
           name: `d${number}-${participant.name}`.slice(0, 32), profile: participant.profile, engine: participant.engine, model: participant.model,
           effort: participant.effort, slot: participant.slot, prompt: input.topic, notify: false,
-        }));
+        }), availableEngines);
         const child = await createChild(this.context, user, host, { ...request, access: 'read' }, { project, directory, isolation: 'shared' });
         store.run('UPDATE sessions SET discussion_id=?,discussion_stance=? WHERE id=?', id, participant.stance?.trim() || null, child.id);
         participants.push(sessionFor(this.context, child.id, user.id));

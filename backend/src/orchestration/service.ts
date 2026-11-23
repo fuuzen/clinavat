@@ -1,7 +1,8 @@
 import type { Context } from '../context.js';
 import { projectFor, sessionFor } from '../context.js';
 import { HttpError, type Project, type Session, type User } from '../models.js';
-import { agentEngines, engineProfiles } from '../agent/engines.js';
+import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
+import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { stopSession } from '../routes/sessions.js';
@@ -38,6 +39,36 @@ export class Orchestrator implements OrchestrationHost {
 
   directs(tool: string): boolean { return ['start_agent', 'message_agent', 'merge_agent', 'discard_agent', 'start_discussion'].includes(tool); }
 
+  briefing(agent: AgentContext): string {
+    const master = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', agent.session.id, agent.user.id);
+    if (!master || orchestrationModeOf(master) === 'off') return '';
+    const available = this.availableEngines(master.user_id);
+    const engineSummary = agentEngines.map(engine => {
+      const slots = engineSlots(this.context, master.user_id, engine);
+      if (!slots.length) return null;
+      const usable = slots.filter(entry => entry.usable).length;
+      return `${engine} (${usable}/${slots.length} usable)`;
+    }).filter((entry): entry is string => !!entry);
+    const roster = this.roster.effective(master, available);
+    const children = this.view(master.id).agents.filter(child => !child.archived);
+    const limits = this.context.orchestrationSettings.view();
+    const lines = [
+      '### Current Orchestration Snapshot',
+      `- Engines: ${engineSummary.length ? engineSummary.join(', ') : 'none available'}`,
+      `- Limits: up to ${limits.runningPerMaster} running children (${limits.worktreeWritersPerMaster} parallel worktree writers)`,
+      '- Profiles (pass via `profile` in `start_agent`):',
+      ...roster.map(profile => `  - \`${profile.name}\` [${profile.engine}, ${profile.access}${profile.builtIn ? ', built-in' : ''}]: ${(profile.role ?? 'custom role').replace(/\s+/g, ' ').slice(0, 140)}`),
+    ];
+    if (children.length) {
+      lines.push('- Existing children in this conversation:');
+      for (const child of children.slice(-12)) {
+        const worktree = child.worktree?.state && child.worktree.state !== 'clean' ? `, worktree:${child.worktree.state}` : '';
+        lines.push(`  - \`${child.name}\` [${child.engine}, ${child.access}, ${child.running ? 'running' : child.status}${worktree}]`);
+      }
+    }
+    return lines.join('\n');
+  }
+
   observe(event: AgentEvent): void { this.reports.observe(event); }
 
   async call(agent: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult> {
@@ -45,12 +76,18 @@ export class Orchestrator implements OrchestrationHost {
     const user = this.context.store.get<User>('SELECT * FROM users WHERE id=?', agent.user.id);
     if (!user) return { text: '用户不存在', isError: true };
     const master = sessionFor(this.context, agent.session.id, user.id);
-    if (!master.orchestration || master.parent_session_id) return { text: '当前对话未开启编排', isError: true };
+    if (orchestrationModeOf(master) === 'off') return { text: '当前对话未开启编排', isError: true };
     try {
       return await this.run(tool, user, master, args, signal, agent.session.agent_mode === 'plan');
     } catch (error) {
       return { text: error instanceof Error ? error.message : String(error), isError: true };
     }
+  }
+
+  private availableEngines(userId: string): AgentEngine[] {
+    const usable = agentEngines.filter(engine => engineSlots(this.context, userId, engine).some(entry => entry.usable));
+    if (usable.length) return usable;
+    return agentEngines.filter(engine => engineSlots(this.context, userId, engine).length > 0);
   }
 
   private async run(tool: ToolName, user: User, master: Session, args: unknown, signal: AbortSignal, planning: boolean): Promise<HubToolResult> {
@@ -60,7 +97,7 @@ export class Orchestrator implements OrchestrationHost {
         return json(this.list(user, master));
       }
       case 'start_agent': {
-        const input = this.roster.resolve(master, toolInputs.start_agent.parse(args));
+        const input = this.roster.resolve(master, toolInputs.start_agent.parse(args), this.availableEngines(user.id));
         if (planning && input.access === 'write') throw new HttpError(409, 'Plan 模式下只能派生只读子智能体');
         assertNewName(this.context, master, input.name);
         const main = projectFor(this.context, master.project_id, user.id);
@@ -189,9 +226,11 @@ export class Orchestrator implements OrchestrationHost {
     const project = this.worktrees.project(child.project_id);
     if (project.worktree_state !== 'conflict') throw new HttpError(409, '该子智能体没有待处理的合并冲突');
     const files = JSON.parse(project.worktree_conflicts ?? '[]') as string[];
-    const text = `Merging the branch ${project.worktree_branch} of ${child.agent_name} into the project stopped on conflicts in: ${files.join(', ') || 'unknown files'}. `
-      + 'The user asks you to resolve them. Either call merge_agent with onConflict "leave", resolve the markers, commit, and call discard_agent to clean up; '
-      + `or ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch, then call merge_agent again.`;
+    const resolution = orchestrationModeOf(master) === 'super'
+      ? `The user asks you to coordinate resolving them. Ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch and resolve the conflicts, then call merge_agent again.`
+      : 'The user asks you to resolve them. Either call merge_agent with onConflict "leave", resolve the markers, commit, and call discard_agent to clean up; '
+        + `or ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch, then call merge_agent again.`;
+    const text = `Merging the branch ${project.worktree_branch} of ${child.agent_name} into the project stopped on conflicts in: ${files.join(', ') || 'unknown files'}. ${resolution}`;
     await sendSessionMessage(this.context, user, master.id, messageInput.parse({ content: reportBlock({ name: child.agent_name ?? child.id,
       engine: child.engine, model: child.model, status: 'conflict', task: '合并冲突', text }), mode: 'queue' }), { source: 'report', prompt: content => content });
   }
@@ -260,8 +299,7 @@ export class Orchestrator implements OrchestrationHost {
         })),
       })).filter(engine => engine.slots.length),
       // Start one with start_agent's profile; the master may still override any field.
-      roster: this.roster.available(master).map(profile => ({ name: profile.name, engine: profile.engine, model: profile.model ?? 'default',
-        effort: profile.reasoning_effort, slot: profile.slot_id, access: profile.access, role: profile.instructions?.slice(0, 300) ?? null })),
+      roster: this.roster.effective(master, this.availableEngines(user.id)),
       children: this.view(master.id).agents.map(({ name, engine, model, access, status, running }) => ({ name, engine, model, access, status, running })),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };

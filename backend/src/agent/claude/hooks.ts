@@ -3,7 +3,7 @@ import { quoteShell, workspacePath } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import type { RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
-import { assertWritable, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { assertWritable, hubToolNamespace, isSuperAgent, orchestrates } from '../orchestration-tools.js';
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {
@@ -48,6 +48,9 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
     }
     if (tool.startsWith(`mcp__${hubToolNamespace}__`)) {
       return orchestrates(services.context) ? decision(true, '编排工具由本系统在执行时按授权模式审批') : decision(false, '当前对话未开启编排');
+    }
+    if (isSuperAgent(services.context) && ['Edit', 'Write', 'Bash', 'Agent'].includes(tool)) {
+      return decision(false, '当前处于 Super Agent 只读统筹模式，不能直接修改文件、执行命令或调用原生子代理；请通过 clinavat 编排工具（start_agent / message_agent）委派子智能体实施。');
     }
     if (services.context.session.agent_access === 'read' && (tool === 'Edit' || tool === 'Write')) {
       return decision(false, '你是只读子智能体，不能修改文件；请在最终回复中说明需要的修改。');

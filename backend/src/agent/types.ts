@@ -10,6 +10,7 @@ import type { ExecutionHost } from '../execution/types.js';
 import type { TokenUsageUpdate, UsageOwner } from '../token-usage/ledger.js';
 import type { SlotModelCatalogs } from './model-catalog.js';
 import type { AgentEngine } from './engines.js';
+import type { OrchestrationMode } from './orchestration-tools.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -37,6 +38,8 @@ export interface OrchestrationHost {
   tools: HubTool[];
   /** Calls that make other conversations act; they follow the master's approval mode. */
   directs(tool: string): boolean;
+  /** Compact live snapshot of available engines, roster profiles, children and limits for the master's prompt. */
+  briefing?(context: AgentContext): string;
   call(context: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult>;
 }
 
@@ -70,6 +73,7 @@ export interface AgentContext {
     turn_id?: string;
     goal?: { action: 'create' | 'resume'; objective?: string };
     orchestration?: number | boolean | null;
+    orchestration_mode?: OrchestrationMode | null;
     parent_session_id?: string | null;
     agent_name?: string | null;
     agent_access?: 'read' | 'write' | null;

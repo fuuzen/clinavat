@@ -18,8 +18,27 @@ export async function assertWritable(context: AgentContext, target: string): Pro
   catch { throw new Error(`你的工作目录是 ${context.session.agent_directory}，只能修改其中的文件；需要改动其他位置时，请在最终回复中说明。`); }
 }
 
+export const orchestrationModes = ['off', 'hybrid', 'super'] as const;
+export type OrchestrationMode = typeof orchestrationModes[number];
+
+export function orchestrationModeOf(session: {
+  orchestration?: number | boolean | null;
+  orchestration_mode?: string | null;
+  parent_session_id?: string | null;
+}): OrchestrationMode {
+  if (session.parent_session_id) return 'off';
+  if (session.orchestration_mode === 'super' || session.orchestration_mode === 'hybrid' || session.orchestration_mode === 'off') {
+    return session.orchestration_mode;
+  }
+  return session.orchestration ? 'hybrid' : 'off';
+}
+
 export function orchestrates(context: AgentContext): boolean {
-  return !!context.session.orchestration && !context.session.parent_session_id;
+  return orchestrationModeOf(context.session) !== 'off';
+}
+
+export function isSuperAgent(context: AgentContext): boolean {
+  return orchestrationModeOf(context.session) === 'super';
 }
 
 /**

@@ -11,7 +11,7 @@ export const toolInputs = {
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'name: letters, digits, "-" and "_", at most 32 characters')
       .describe('A short name for the child, unique in this conversation, such as "reviewer" or "impl-api".'),
     profile: z.string().trim().min(1).max(24).optional()
-      .describe('An agent from the user\'s roster in list_agents; it sets the CLI, account, model, access and role, and fields you give override it.'),
+      .describe('A profile from the user\'s roster or built-in specialists ("explorer", "coder", "verifier") in list_agents; sets default CLI, account, model, access and role, and explicit fields override it.'),
     engine: z.enum(agentEngines).optional().describe('Which CLI the child runs; required without a profile.'),
     model: z.string().trim().min(1).max(200).optional().describe('Model ID from list_agents; omit for the account\'s default.'),
     effort: z.string().trim().min(1).max(32).optional().describe('Reasoning effort the model offers; omit for its default.'),

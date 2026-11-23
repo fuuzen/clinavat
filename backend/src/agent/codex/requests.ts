@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { getPermissionMode } from '../permissions.js';
 import type { RpcMessage } from '../rpc.js';
-import { assertWritable, workingDirectory } from '../orchestration-tools.js';
+import { assertWritable, isSuperAgent, workingDirectory } from '../orchestration-tools.js';
 import type { RunServices } from '../types.js';
 import { unansweredNotice, type UserInputQuestion } from '../user-input.js';
 
@@ -32,6 +32,15 @@ function usesRemoteShell(command: unknown, cwd: string, project: RunServices['co
 
 export function codexPermissions(services: RunServices) {
   const mode = getPermissionMode(services.context.session);
+  // Super Agent keeps Codex's read-only sandbox for safe local inspection (rg/cat/ls) while rejecting edits and untrusted commands.
+  if (isSuperAgent(services.context)) {
+    return {
+      approvalPolicy: 'untrusted',
+      approvalsReviewer: 'user',
+      sandbox: 'read-only',
+      sandboxPolicy: { type: 'readOnly' },
+    };
+  }
   // Codex cannot turn off apply_patch, and its read-only sandbox breaks remote-shell, which writes its lock in the
   // project. A read-only child instead asks for everything Codex does not know to be safe, and the Hub declines file changes.
   const readOnly = services.context.session.agent_access === 'read';
@@ -126,6 +135,10 @@ export function createCodexRequests(
         const changes = Array.isArray(item?.changes) ? item.changes as { path?: unknown }[] : [];
         const outside = fileChange && (await Promise.all(changes.map(change => typeof change.path === 'string'
           ? assertWritable(services.context, path.resolve(cwd, change.path)).then(() => false, () => true) : false))).some(Boolean);
+        if (isSuperAgent(services.context)) {
+          if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
+          return true;
+        }
         if (fileChange && (services.context.session.agent_access === 'read' || outside)) {
           if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
           return true;

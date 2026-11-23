@@ -5,7 +5,7 @@ import { antigravityUsage } from '../../token-usage/meters.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { assertWritable, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { assertWritable, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { isHubToolCall, startToolBridge } from './tool-bridge.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import type { AgentPrompt, AgentRun, RunServices, TurnOutcome } from '../types.js';
@@ -155,12 +155,14 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       if (tool === 'Bash' && home.shell) await services.verifyShell();
       // Full access lets the CLI's own rules decide; agy has no mode that skips its asks, so the Hub allows them.
       const writes = ['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool);
+      const executes = params.toolCall?.kind === 'execute' || tool === 'Bash';
       // A child confined to a directory may change only paths agy names inside it; a change naming none is refused.
       const targets = [input.file_path, ...(Array.isArray(params.toolCall?.locations) ? params.toolCall.locations.map((location: { path?: unknown }) => location.path) : [])]
         .filter((target): target is string => typeof target === 'string');
       const outside = writes && !!context.session.agent_directory && (!targets.length
         || (await Promise.all(targets.map(target => assertWritable(context, target).then(() => false, () => true)))).some(Boolean));
-      const decision = (context.session.agent_access === 'read' && writes) || outside ? { decision: 'deny' as const }
+      const blockedBySuper = isSuperAgent(context) && (writes || executes);
+      const decision = blockedBySuper || (context.session.agent_access === 'read' && writes) || outside ? { decision: 'deny' as const }
         : getPermissionMode(context.session) === 'full-access' && context.session.agent_mode !== 'plan'
           ? { decision: 'allow' as const } : await services.approve(tool, input, requestSignal);
       const optionId = requestSignal.aborted ? undefined : pick(decision.decision === 'allow' ? 'allow_once' : 'reject_once');
@@ -257,7 +259,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       clientInfo: { name: 'clinavat', title: 'Clinavat', version: '0.1.0' } }, 60_000);
     if (initialized?.protocolVersion !== 1) throw new Error('ACP 协议版本不兼容');
     const planning = context.session.agent_mode === 'plan';
-    const instructions = conversationInstructions(context, 'antigravity') + (planning
+    const instructions = conversationInstructions(context, 'antigravity', services.config.orchestration?.briefing?.(context)) + (planning
       ? '\nThe user selected Plan mode in the web UI. When the plan is complete, present the whole plan in your final response: the user cannot open files outside the project.' : '');
     const opening = { cwd: workingDirectory(context), mcpServers: tools ? [tools.server] : [],
       _meta: { antigravity: { systemPrompt: { append: instructions } } } };

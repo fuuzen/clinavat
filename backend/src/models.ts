@@ -1,6 +1,7 @@
 import type { PermissionMode } from './agent/permissions.js';
 import type { AgentMode, QuestionMode, RolePreset } from './agent/session-settings.js';
 import type { AgentEngine } from './agent/engines.js';
+import type { OrchestrationMode } from './agent/orchestration-tools.js';
 
 export interface User {
   id: string; username: string; password_hash: string; role: 'admin' | 'user'; created_at: string;
@@ -71,6 +72,8 @@ export interface Session {
   agent_access: 'read' | 'write' | null;
   /** Whether the agent may start and direct child agents through the Hub's tools. */
   orchestration: 0 | 1;
+  /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
+  orchestration_mode?: OrchestrationMode | null;
   /** A child agent's working directory relative to its project's root; NULL for the root. */
   agent_directory: string | null;
   agent_isolation: 'shared' | 'worktree' | null;

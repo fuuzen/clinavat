@@ -1,4 +1,4 @@
-import { Archive, MessageCircleQuestion, MessageSquare, MoreHorizontal, Pause, Trash2 } from "lucide-react";
+import { Archive, MessageCircleQuestion, MessageSquare, MoreHorizontal, Pause, Trash2, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
 import { isActive } from "../../api";
 import type { Session } from "../../types";
@@ -27,10 +27,13 @@ export default function SessionRow({ session, selected, waiting, menuOpen, onTog
           <span className="running-dot" />
         ) : waiting ? (
           <MessageCircleQuestion size={13} className="session-waiting" aria-label="有待回答的问题" />
+        ) : session.orchestration_mode === "super" ? (
+          <Workflow size={13} className="session-super-icon" aria-label="Super Agent" />
         ) : (
           <MessageSquare size={13} />
         )}
         <span>{session.agent_name && session.parent_session_id ? <><strong className="session-agent-name">{session.agent_name}</strong> {session.title.replace(`${session.agent_name} · `, "")}</> : session.title}</span>
+        {session.orchestration_mode === "super" && !session.parent_session_id && <span className="session-super-badge">Super</span>}
       </button>
       {accessory}
       <div className="row-menu-anchor">

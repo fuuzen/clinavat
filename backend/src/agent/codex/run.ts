@@ -4,7 +4,7 @@ import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
 import { codexPermissions, createCodexRequests } from './requests.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { callHubTool, hubToolNamespace, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { callHubTool, hubToolNamespace, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { roleInstructions } from '../session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
 import { CodexSubagents } from './subagents.js';
@@ -291,9 +291,10 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     const effort = selection.reasoning_effort || models.find(item => item.id === model)?.defaultReasoningEffort;
     await services.verifyShell();
     const shared = { cwd: root, sandbox: permissions.sandbox, approvalPolicy: permissions.approvalPolicy,
-      approvalsReviewer: permissions.approvalsReviewer, developerInstructions: conversationInstructions(services.context, 'codex') + roleInstructions(selection.role_preset),
+      approvalsReviewer: permissions.approvalsReviewer,
+      developerInstructions: conversationInstructions(services.context, 'codex', services.config.orchestration?.briefing?.(services.context)) + roleInstructions(selection.role_preset),
       ...(model ? { model } : {}),
-      config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': true, 'features.goals': true,
+      config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': !isSuperAgent(services.context), 'features.goals': true,
         ...(effort ? { model_reasoning_effort: effort } : {}) } };
     const nativeId = services.context.session.native_session_id;
     // Each slot indexes the shared history through its own path; native resume resolves that path by ID.

@@ -114,6 +114,8 @@ export interface Session {
   agent_profiles?: string | null;
   /** 1 when the agent may start and direct child agents. */
   orchestration?: 0 | 1;
+  /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
+  orchestration_mode?: OrchestrationMode | null;
 }
 
 /** A master conversation's children as its agent panel shows them. */
@@ -193,11 +195,14 @@ export interface AccountSelection {
 export type PermissionMode = "manual" | "accept-edits" | "auto" | "full-access" | "yolo";
 export type AgentMode = "normal" | "plan";
 export type RolePreset = "default" | "reviewer" | "architect";
+export type OrchestrationMode = "off" | "hybrid" | "super";
 export interface AgentBehavior {
   agentMode: AgentMode;
   rolePreset: RolePreset;
   /** The agent may start and direct child agents. */
   orchestration: boolean;
+  /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
+  orchestrationMode: OrchestrationMode;
 }
 
 export interface AgentSelection {

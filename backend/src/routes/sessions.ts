@@ -14,6 +14,7 @@ import { sessionQuestionRoutes } from './session-questions.js';
 import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { questionTimeout } from '../question-defaults.js';
 import { agentEngines, engineProfiles } from '../agent/engines.js';
+import { orchestrationModeOf, orchestrationModes, type OrchestrationMode } from '../agent/orchestration-tools.js';
 import { assertAutomaticSlot } from '../accounts/selection.js';
 
 const identifier = z.object({ id: z.uuid() });
@@ -31,7 +32,8 @@ async function releaseSession(context: Context, id: string, userId: string): Pro
 
 export const sessionInput = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
   slotMode: z.enum(['manual', 'auto']).default('manual'),
-  title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false), ...selectionFields });
+  title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false),
+  orchestrationMode: z.enum(orchestrationModes).optional(), ...selectionFields });
 
 /** A child conversation's place under its master. */
 export interface ChildAgent {
@@ -57,7 +59,8 @@ export async function createSession(context: Context, user: User, input: z.infer
     projectFor(context, input.projectId, user.id);
     if (input.slotMode === 'manual' && !input.slotId) throw new HttpError(400, '请选择固定账号');
     if (input.slotMode === 'auto' && input.slotId) throw new HttpError(400, '自动选择时请勿指定固定账号');
-    assertOrchestration({ engine: input.engine, parent_session_id: child?.parentSessionId ?? null, native_session_id: null }, input.orchestration);
+    const orchestrationMode: OrchestrationMode = input.orchestrationMode ?? (input.orchestration ? 'hybrid' : 'off');
+    assertOrchestration({ engine: input.engine, parent_session_id: child?.parentSessionId ?? null, native_session_id: null }, orchestrationMode !== 'off');
     const permissionMode = validatePermissionMode(input.engine, input.permissionMode
       ?? context.agentDefaults.forUser(user.id, input.engine).permissionMode ?? defaultPermissionModeFor(input.engine));
     const { agentMode, rolePreset } = validateSessionSettings(input.engine, input.agentMode ?? 'normal', input.rolePreset ?? 'default');
@@ -69,9 +72,9 @@ export async function createSession(context: Context, user: User, input: z.infer
     if (input.slotMode === 'manual') await validate(slot);
     slotForUser(store, slot.id, user.id, input.engine);
     store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
-      orchestration,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      orchestration,orchestration_mode,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
-    permissionMode, agentMode, rolePreset, input.orchestration ? 1 : 0, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
+    permissionMode, agentMode, rolePreset, orchestrationMode !== 'off' ? 1 : 0, orchestrationMode, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
     child?.directory ?? null, child?.isolation ?? null, child?.instructions ?? null);
     const created = sessionFor(context, id, user.id);
     context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
@@ -167,6 +170,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       questionMode: z.enum(questionModes).nullable().optional(),
       questionTimeoutMs: questionTimeout.nullable().optional(),
       orchestration: z.boolean().optional(),
+      orchestrationMode: z.enum(orchestrationModes).optional(),
       // Roster profiles this master may start; null for the whole roster.
       agentProfiles: z.array(z.uuid()).max(100).nullable().optional(),
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
@@ -182,11 +186,19 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       if (slotMode === 'auto' && input.slotId !== undefined) throw new HttpError(400, '自动选择时请勿指定固定账号');
       const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
       const changedMode = slotMode !== current.slot_mode;
-      const orchestration = input.orchestration ?? current.orchestration === 1;
-      const changedOrchestration = orchestration !== (current.orchestration === 1);
+      const currentMode = orchestrationModeOf(current);
+      const nextMode: OrchestrationMode = input.orchestrationMode
+        ?? (input.orchestration !== undefined ? (input.orchestration ? (currentMode === 'super' ? 'super' : 'hybrid') : 'off') : currentMode);
+      const changedOrchestration = nextMode !== currentMode;
       if (changedOrchestration) {
-        assertOrchestration(current, orchestration);
-        if (current.engine === 'codex' && current.native_session_id) throw new HttpError(409, 'Codex 对话的编排设置在发送第一条消息后不能更改');
+        const toggled = (currentMode === 'off') !== (nextMode === 'off');
+        if (toggled) {
+          assertOrchestration(current, nextMode !== 'off');
+          if (current.engine === 'codex' && current.native_session_id) throw new HttpError(409, 'Codex 对话在发送第一条消息后不能开启或关闭编排');
+        } else if (nextMode !== 'off') {
+          if (!engineProfiles[current.engine].orchestration) throw new HttpError(400, `${engineProfiles[current.engine].label} 暂不能作为主智能体`);
+          if (current.parent_session_id) throw new HttpError(400, '子智能体不能再派生子智能体');
+        }
       }
       if (changedSlot || changedMode || changedOrchestration || permissionMode !== current.permission_mode || agentMode !== current.agent_mode
         || rolePreset !== current.role_preset) {
@@ -202,11 +214,11 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         if (input.agentProfiles.some(profile => !owned.has(profile))) throw new HttpError(400, '名册中没有所选的智能体');
       }
       store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,slot_mode=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,
-        question_mode=?,question_timeout_ms=?,orchestration=?,agent_profiles=?,updated_at=datetime('now') WHERE id=?`,
+        question_mode=?,question_timeout_ms=?,orchestration=?,orchestration_mode=?,agent_profiles=?,updated_at=datetime('now') WHERE id=?`,
         input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId, slotMode,
         changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset,
         input.questionMode === undefined ? current.question_mode : input.questionMode,
-        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, orchestration ? 1 : 0,
+        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, nextMode !== 'off' ? 1 : 0, nextMode,
         input.agentProfiles === undefined ? current.agent_profiles : input.agentProfiles && JSON.stringify(input.agentProfiles), id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
