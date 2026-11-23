@@ -1,5 +1,6 @@
 import type { Context } from '../context.js';
 import type { Session, User } from '../models.js';
+import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { AgentEvent } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { reportBlock } from './instructions.js';
@@ -26,7 +27,12 @@ export class ReportDelivery {
   private timers = new Map<string, NodeJS.Timeout>();
   private paused = new Set<string>();
 
-  constructor(private readonly context: Context, private readonly tasks: AgentTasks, private readonly changed: (masterId: string) => void) {}
+  constructor(
+    private readonly context: Context,
+    private readonly tasks: AgentTasks,
+    private readonly changed: (masterId: string) => void,
+    private readonly deliveredTasks?: (user: User, master: Session, tasks: AgentTask[]) => void,
+  ) {}
 
   observe(event: AgentEvent): void {
     const payload = event.payload as { status?: string; message?: string; turnId?: string } | undefined;
@@ -129,21 +135,27 @@ export class ReportDelivery {
       return;
     }
     const children = new Map(this.tasks.children(masterId).map(child => [child.id, child]));
+    const promptLimit = orchestrationModeOf(master) === 'super'
+      ? orchestrationConstants.superReportCharacters : orchestrationConstants.reportCharacters;
     let content = '';
+    let promptContent = '';
     const sent: AgentTask[] = [];
     for (const task of pending) {
       const child = children.get(task.child_session_id);
       if (!child) continue;
-      const block = reportBlock({ name: child.agent_name ?? child.id, engine: child.engine, model: child.model, status: task.status,
-        task: task.prompt, text: task.report ?? '' });
+      const source = { name: child.agent_name ?? child.id, engine: child.engine, model: child.model, status: task.status,
+        task: task.prompt, text: task.report ?? '' };
+      const block = reportBlock(source);
       if (content && content.length + block.length > 90_000) break;
       content += (content ? '\n\n' : '') + block;
+      promptContent += (promptContent ? '\n\n' : '') + reportBlock(source, promptLimit);
       sent.push(task);
     }
     try {
-      await sendSessionMessage(this.context, user, masterId, messageInput.parse({ content, mode: 'queue' }), { source: 'report', prompt: text => text });
+      await sendSessionMessage(this.context, user, masterId, messageInput.parse({ content, mode: 'queue' }), { source: 'report', prompt: () => promptContent });
       this.paused.delete(masterId);
       this.received(sent);
+      this.deliveredTasks?.(user, master, sent);
       if (sent.length < pending.length) this.schedule(masterId);
     } catch (error) {
       events.emit(user.id, { type: 'error', sessionId: masterId,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { agentEngines } from '../agent/engines.js';
 import type { HubTool } from '../agent/types.js';
+import { workItemStatuses } from './board.js';
 import { orchestrationConstants } from './limits.js';
 
 const agentReference = z.string().trim().min(1).max(64).describe('The child agent\'s name, or the agentId start_agent returned.');
@@ -24,6 +25,10 @@ export const toolInputs = {
       .describe('"read" (the default, unless the profile says otherwise) cannot modify files; "write" can. Prefer read for research and review.'),
     prompt: z.string().trim().min(1).max(100_000)
       .describe('The complete, self-contained task. The child starts with no context: include goals, constraints, file paths to read, and what to report back.'),
+    task: z.string().trim().min(1).max(64).optional()
+      .describe('Optional task code from task_board (such as "T1") to link to this child and mark in_progress.'),
+    ephemeral: z.boolean().default(false)
+      .describe('Automatically archive this child conversation once its work is delivered (and merged or discarded if using a worktree). Recommended for one-off explorers, verifiers and scoped tasks.'),
     notify: z.boolean().default(true).describe('Deliver the child\'s report to you as a new message when it finishes. Set false if you will wait or read it yourself.'),
   }),
   message_agent: z.object({
@@ -47,8 +52,37 @@ export const toolInputs = {
     mode: z.enum(['merge', 'squash']).default('merge').describe('"merge" keeps the child\'s commits; "squash" makes them one commit.'),
     onConflict: z.enum(['abort', 'leave']).default('abort')
       .describe('"abort" leaves the project as it was and lists the conflicting files; "leave" keeps the conflict markers in the project for you to resolve and commit.'),
+    archive: z.boolean().optional()
+      .describe('Archive the child conversation after a successful merge; defaults to true for ephemeral children.'),
   }),
-  discard_agent: z.object({ agent: agentReference }),
+  discard_agent: z.object({
+    agent: agentReference,
+    archive: z.boolean().optional()
+      .describe('Archive the child conversation after discarding its worktree; defaults to true for ephemeral children.'),
+  }),
+  archive_agent: z.object({
+    agents: z.array(agentReference).min(1).max(16)
+      .describe('Completed child agents (with no unmerged worktree changes) to archive so only active workers stay in view.'),
+  }),
+  task_board: z.object({
+    action: z.enum(['list', 'add', 'update'])
+      .describe('"list" reads all tasks on the board; "add" appends new tasks; "update" modifies status, assignee, acceptance or summary of existing tasks.'),
+    tasks: z.array(z.object({
+      title: z.string().trim().min(1).max(200),
+      description: z.string().trim().max(4000).optional(),
+      acceptance: z.string().trim().max(2000).optional().describe('Concrete acceptance or verification criteria.'),
+      assignedAgent: z.string().trim().max(64).optional().describe('Child agent name assigned to this task, if already chosen.'),
+      dependsOn: z.array(z.string().trim().min(1).max(32)).max(16).optional().describe('Task codes (such as "T1") that must finish first.'),
+    })).min(1).max(20).optional().describe('Required when action is "add".'),
+    updates: z.array(z.object({
+      task: z.string().trim().min(1).max(64).describe('Task code such as "T1", or task ID.'),
+      title: z.string().trim().min(1).max(200).optional(),
+      status: z.enum(workItemStatuses).optional(),
+      assignedAgent: z.string().trim().max(64).nullable().optional(),
+      acceptance: z.string().trim().max(2000).nullable().optional(),
+      summary: z.string().trim().max(4000).nullable().optional().describe('Concise outcome, verification result, or blocker note.'),
+    })).min(1).max(20).optional().describe('Required when action is "update".'),
+  }),
   start_discussion: z.object({
     topic: z.string().trim().min(1).max(20_000)
       .describe('The question or decision to discuss; for a review, what to review, such as the uncommitted changes, a branch or some files.'),
@@ -67,6 +101,11 @@ export const toolInputs = {
     directory: z.string().trim().max(1024).optional().describe('Project-relative directory the participants start in.'),
   }),
   stop_discussion: z.object({ discussion: z.uuid() }),
+  read_discussion: z.object({
+    discussion: z.string().trim().min(1).max(64).describe('The discussion ID from <clinavat_discussion>, or "latest".'),
+    round: z.number().int().min(1).max(10).optional().describe('Read only this round; omit for all rounds.'),
+    participant: z.string().trim().min(1).max(64).optional().describe('Read only this participant\'s statements (name with or without d<N>- prefix).'),
+  }),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -80,8 +119,11 @@ const descriptions: Record<ToolName, string> = {
   stop_agent: 'Stops what a child agent is doing; the conversation stays and can be messaged again.',
   merge_agent: 'Merges the branch of a child agent that worked in its own worktree into the project, then removes its worktree and branch. The child must have finished.',
   discard_agent: 'Throws away the branch and worktree of a child agent that worked in its own worktree, or cleans them up after a conflict you resolved yourself.',
-  start_discussion: 'Starts a discussion among read-only child agents, run by the Hub round by round. Returns at once; when it ends, its whole record arrives as a new message for you to synthesize. Use it for open questions, design choices, trade-offs and cross-vendor reviews.',
+  archive_agent: 'Archives finished child agent conversations so completed workers retire cleanly from the active panel; read_agent still reads archived children.',
+  task_board: 'Reads or updates the persistent task board (T1, T2, ...) for decomposing multi-step work, tracking child assignments, verification status and outcomes across turns.',
+  start_discussion: 'Starts a discussion among read-only child agents, run by the Hub round by round. Returns at once; when it ends, its record arrives as a new message for you to synthesize. Use it for open questions, design choices, trade-offs and cross-vendor reviews.',
   stop_discussion: 'Stops a discussion and its participants; no record arrives.',
+  read_discussion: 'Reads full statements of a discussion by ID (or "latest"), optionally filtered by round or participant.',
 };
 
 export const hubTools: HubTool[] = Object.entries(toolInputs).map(([name, schema]) => {

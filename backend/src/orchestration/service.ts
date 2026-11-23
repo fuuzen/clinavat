@@ -1,11 +1,12 @@
 import type { Context } from '../context.js';
-import { projectFor, sessionFor } from '../context.js';
+import { projectFor, sessionFor, withResourceLocks } from '../context.js';
 import { HttpError, type Project, type Session, type User } from '../models.js';
 import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
 import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
-import { stopSession } from '../routes/sessions.js';
+import { setSessionArchived, stopSession } from '../routes/sessions.js';
+import { WorkBoard } from './board.js';
 import { assertNewName, childDirectory, createChild, engineSlots, type Placement } from './children.js';
 import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
@@ -24,11 +25,17 @@ export class Orchestrator implements OrchestrationHost {
   private readonly tasks: AgentTasks;
   private readonly reports: ReportDelivery;
   private readonly discussions: Discussions;
+  private readonly board: WorkBoard;
   readonly roster: AgentRoster;
 
   constructor(private readonly context: Context) {
     this.tasks = new AgentTasks(context.store);
-    this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId));
+    this.board = new WorkBoard(context.store);
+    this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId), (user, master, delivered) => {
+      for (const childId of new Set(delivered.map(task => task.child_session_id))) {
+        void this.retireEphemeralIfSettled(user, master.id, childId);
+      }
+    });
     this.roster = new AgentRoster(context.store);
     this.discussions = new Discussions(context, this.tasks, this.reports, this, this.roster);
   }
@@ -58,6 +65,7 @@ export class Orchestrator implements OrchestrationHost {
       `- Limits: up to ${limits.runningPerMaster} running children (${limits.worktreeWritersPerMaster} parallel worktree writers)`,
       '- Profiles (pass via `profile` in `start_agent`):',
       ...roster.map(profile => `  - \`${profile.name}\` [${profile.engine}, ${profile.access}${profile.builtIn ? ', built-in' : ''}]: ${(profile.role ?? 'custom role').replace(/\s+/g, ' ').slice(0, 140)}`),
+      ...this.board.briefingLines(master.id),
     ];
     if (children.length) {
       lines.push('- Existing children in this conversation:');
@@ -122,6 +130,10 @@ export class Orchestrator implements OrchestrationHost {
           if (placement.isolation === 'worktree') await this.removeProject(placement.project);
           throw error;
         });
+        if (input.task) {
+          const linked = this.board.assign(master.id, input.task, input.name);
+          notes.push(`Linked to task ${linked.code} (${linked.title}).`);
+        }
         return this.send(user, master, child, input.prompt, 'queue', input.notify, notes);
       }
       case 'message_agent': {
@@ -135,24 +147,58 @@ export class Orchestrator implements OrchestrationHost {
       }
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);
-        return json(await this.merge(this.child(master, input.agent), input.mode, input.onConflict));
+        const child = this.child(master, input.agent);
+        const result = await this.merge(child, input.mode, input.onConflict);
+        const shouldArchive = result.status === 'merged' && (input.archive ?? child.agent_ephemeral === 1);
+        const archived = shouldArchive ? await this.tryArchiveChild(user, master.id, child.id) : false;
+        return json({ ...result, ...(archived ? { archived: true } : {}) });
       }
       case 'start_discussion': {
         const input = toolInputs.start_discussion.parse(args);
         const { id, participants } = await this.discussions.start(user, master, input, 'master');
         return json({ discussionId: id, participants: participants.map(participant => participant.agent_name), status: 'running',
-          note: 'The record arrives as a new message when the discussion ends. Participants are read-only children; read_agent reads any of them.' });
+          note: 'The record arrives as a new message when the discussion ends. Use read_discussion or read_agent for full statements.' });
       }
       case 'stop_discussion': {
         const { discussion } = toolInputs.stop_discussion.parse(args);
         await this.discussions.stop(user, discussion);
         return json({ discussion, status: 'stopped' });
       }
+      case 'read_discussion': {
+        const input = toolInputs.read_discussion.parse(args);
+        return json(this.discussions.read(master.id, input.discussion, input.round, input.participant));
+      }
       case 'discard_agent': {
-        const child = this.worktreeChild(this.child(master, toolInputs.discard_agent.parse(args).agent));
+        const input = toolInputs.discard_agent.parse(args);
+        const child = this.worktreeChild(this.child(master, input.agent));
         await this.worktrees.discard(child);
+        const archived = (input.archive ?? child.agent_ephemeral === 1) ? await this.tryArchiveChild(user, master.id, child.id) : false;
         this.publish(master.id);
-        return json({ agent: child.agent_name, status: 'discarded' });
+        return json({ agent: child.agent_name, status: 'discarded', ...(archived ? { archived: true } : {}) });
+      }
+      case 'archive_agent': {
+        const { agents } = toolInputs.archive_agent.parse(args);
+        const archived: string[] = [];
+        for (const reference of agents) {
+          const child = this.child(master, reference, true);
+          if (!child.archived_at) await this.archiveChild(user, master.id, child);
+          archived.push(child.agent_name ?? child.id);
+        }
+        return json({ archived });
+      }
+      case 'task_board': {
+        const input = toolInputs.task_board.parse(args);
+        if (input.action === 'list') return json({ tasks: this.board.view(master.id) });
+        if (input.action === 'add') {
+          if (!input.tasks?.length) throw new HttpError(400, 'task_board(action="add") 需要提供 tasks 列表');
+          const created = this.board.add(master.id, input.tasks);
+          this.publish(master.id);
+          return json({ created, tasks: this.board.view(master.id) });
+        }
+        if (!input.updates?.length) throw new HttpError(400, 'task_board(action="update") 需要提供 updates 列表');
+        const updated = this.board.update(master.id, input.updates);
+        this.publish(master.id);
+        return json({ updated, tasks: this.board.view(master.id) });
       }
       case 'wait_agents': {
         const input = toolInputs.wait_agents.parse(args);
@@ -160,15 +206,20 @@ export class Orchestrator implements OrchestrationHost {
         const finished = await this.reports.wait(children.map(child => child.id), input.timeoutSeconds * 1000, signal);
         const reports = this.tasks.pending(master.id, children.map(child => child.id));
         this.reports.received(reports);
+        for (const childId of new Set(reports.map(task => task.child_session_id))) {
+          void this.retireEphemeralIfSettled(user, master.id, childId);
+        }
+        const limit = orchestrationModeOf(master) === 'super'
+          ? orchestrationConstants.superReportCharacters : orchestrationConstants.reportCharacters;
         return json({
           finished,
-          reports: reports.map(task => reportBlock(this.reportSource(children.find(child => child.id === task.child_session_id)!, task))),
+          reports: reports.map(task => reportBlock(this.reportSource(children.find(child => child.id === task.child_session_id)!, task), limit)),
           stillRunning: children.filter(child => this.tasks.running(child.id).length).map(child => child.agent_name),
         });
       }
       case 'read_agent': {
         const input = toolInputs.read_agent.parse(args);
-        return json(this.read(this.child(master, input.agent), input.turns, input.includeTools));
+        return json(this.read(this.child(master, input.agent, true), input.turns, input.includeTools));
       }
       case 'stop_agent': {
         const child = this.child(master, toolInputs.stop_agent.parse(args).agent);
@@ -178,11 +229,41 @@ export class Orchestrator implements OrchestrationHost {
     }
   }
 
-  private child(master: Session, reference: string): Session {
+  private child(master: Session, reference: string, allowArchived = false): Session {
     const child = this.tasks.children(master.id).find(item => item.agent_name === reference || item.id === reference);
     if (!child) throw new HttpError(404, `本对话没有名为 ${reference} 的子智能体，请先用 list_agents 查看`);
-    if (child.archived_at) throw new HttpError(409, `子智能体 ${reference} 的对话已归档`);
+    if (child.archived_at && !allowArchived) throw new HttpError(409, `子智能体 ${reference} 的对话已归档（仍可用 read_agent 查看历史回复）`);
     return child;
+  }
+
+  private async archiveChild(user: User, masterId: string, child: Session): Promise<void> {
+    if (this.tasks.running(child.id).length || isActive(child.status)) {
+      throw new HttpError(409, `子智能体 ${child.agent_name} 仍在运行，请等待完成或先停止后再归档`);
+    }
+    if (this.tasks.pending(masterId, [child.id]).length) {
+      throw new HttpError(409, `子智能体 ${child.agent_name} 仍有未送达的汇报，请等待送达后再归档`);
+    }
+    if (child.agent_isolation === 'worktree') {
+      const worktree = this.worktreeView(child);
+      if (worktree && worktree.state !== 'clean') {
+        throw new HttpError(409, `子智能体 ${child.agent_name} 仍有待处理的 worktree 分支修改（${worktree.state}），请先 merge_agent 或 discard_agent`);
+      }
+    }
+    await withResourceLocks(this.context, [`session:${child.id}`], () => setSessionArchived(this.context, user.id, child.id, true));
+  }
+
+  private async tryArchiveChild(user: User, masterId: string, childId: string): Promise<boolean> {
+    const fresh = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', childId, user.id);
+    if (!fresh || fresh.archived_at) return false;
+    return this.archiveChild(user, masterId, fresh).then(() => true, () => false);
+  }
+
+  /** Automatically archives an ephemeral non-worktree child shortly after its final report is delivered. */
+  private async retireEphemeralIfSettled(user: User, masterId: string, childId: string): Promise<void> {
+    const child = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', childId, user.id);
+    if (!child || child.archived_at || child.agent_ephemeral !== 1 || child.agent_isolation === 'worktree') return;
+    await new Promise<void>(resolve => setTimeout(resolve, 400).unref());
+    await this.tryArchiveChild(user, masterId, childId);
   }
 
   /** Writers in their own worktree only count; writers sharing the project directory must also keep out of each other's directories. */
@@ -300,7 +381,13 @@ export class Orchestrator implements OrchestrationHost {
       })).filter(engine => engine.slots.length),
       // Start one with start_agent's profile; the master may still override any field.
       roster: this.roster.effective(master, this.availableEngines(user.id)),
-      children: this.view(master.id).agents.map(({ name, engine, model, access, status, running }) => ({ name, engine, model, access, status, running })),
+      children: this.view(master.id).agents.filter(child => !child.archived)
+        .map(({ name, engine, model, access, status, running, ephemeral, worktree }) => ({
+          name, engine, model, access, status, running, ...(ephemeral ? { ephemeral: true } : {}),
+          ...(worktree && worktree.state !== 'clean' ? { worktree: worktree.state } : {}),
+        })),
+      archivedChildren: this.view(master.id).agents.filter(child => child.archived).length,
+      tasks: this.board.view(master.id),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };
   }
@@ -335,13 +422,14 @@ export class Orchestrator implements OrchestrationHost {
         const latest = this.tasks.latest(child.id);
         return {
           sessionId: child.id, name: child.agent_name ?? child.title, engine: child.engine, model: child.model, slotId: child.slot_id,
-          access: child.agent_access ?? 'write', status: child.status, archived: !!child.archived_at,
+          access: child.agent_access ?? 'write', status: child.status, archived: !!child.archived_at, ephemeral: child.agent_ephemeral === 1,
           running: this.tasks.running(child.id).length > 0, directory: child.agent_directory, isolation: child.agent_isolation ?? 'shared',
           worktree: child.agent_isolation === 'worktree' ? this.worktreeView(child) : null,
           lastTask: latest ? { status: latest.status, finishedAt: latest.finished_at } : null,
           pendingReports: pending.filter(task => task.child_session_id === child.id).length,
         };
       }),
+      tasks: this.board.view(masterId),
       discussions: this.discussions.view(masterId),
       pendingReports: pending.length,
       reportsPaused: pending.length > 0 && this.tasks.reportTurnsSinceUser(masterId) >= this.context.orchestrationSettings.view().reportTurnsPerMessage,

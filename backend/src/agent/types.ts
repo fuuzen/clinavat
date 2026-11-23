@@ -40,6 +40,8 @@ export interface OrchestrationHost {
   directs(tool: string): boolean;
   /** Compact live snapshot of available engines, roster profiles, children and limits for the master's prompt. */
   briefing?(context: AgentContext): string;
+  /** Refreshes a master conversation's agent panel when a child conversation changes state externally. */
+  publish?(masterId: string): void;
   call(context: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult>;
 }
 

@@ -41,6 +41,7 @@ export interface ChildAgent {
   /** Relative to the child's project root; null for the root. */
   directory: string | null;
   isolation: 'shared' | 'worktree';
+  ephemeral?: boolean;
   /** The role from the child's roster profile. */
   instructions: string | null;
 }
@@ -72,14 +73,25 @@ export async function createSession(context: Context, user: User, input: z.infer
     if (input.slotMode === 'manual') await validate(slot);
     slotForUser(store, slot.id, user.id, input.engine);
     store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
-      orchestration,orchestration_mode,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      orchestration,orchestration_mode,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_ephemeral,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
     permissionMode, agentMode, rolePreset, orchestrationMode !== 'off' ? 1 : 0, orchestrationMode, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
-    child?.directory ?? null, child?.isolation ?? null, child?.instructions ?? null);
+    child?.directory ?? null, child?.isolation ?? null, child?.ephemeral ? 1 : 0, child?.instructions ?? null);
     const created = sessionFor(context, id, user.id);
     context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
     return created;
   }, [`project:${input.projectId}`]);
+}
+
+/** Archives or restores a conversation after reclaiming its idle resident CLI; caller holds `session:${id}` when needed. */
+export async function setSessionArchived(context: Context, userId: string, id: string, archive: boolean): Promise<Session> {
+  if (archive) await releaseSession(context, id, userId);
+  context.store.run(archive ? "UPDATE sessions SET archived_at=COALESCE(archived_at,datetime('now')) WHERE id=?"
+    : 'UPDATE sessions SET archived_at=NULL WHERE id=?', id);
+  const updated = sessionFor(context, id, userId);
+  context.events.emit(userId, { type: 'session', sessionId: id, payload: updated });
+  if (updated.parent_session_id) context.config.orchestration?.publish?.(updated.parent_session_id);
+  return updated;
 }
 
 /** Stops a conversation's CLI and hands its slot state back; the conversation itself stays. */
@@ -238,6 +250,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         store.run('DELETE FROM projects WHERE id=?', project.id);
         events.emit(request.user.id, { type: 'project', payload: { id: project.id, deleted: true } });
       }
+      if (session.parent_session_id) context.config.orchestration?.publish?.(session.parent_session_id);
       return { ok: true };
     });
   });
@@ -246,15 +259,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       const { id } = identifier.parse(request.params);
       sessionFor(context, id, request.user.id);
       z.object({}).strict().parse(request.body ?? {});
-      return withResourceLocks(context, [`session:${id}`], async () => {
-        // Archiving also hands the slot back, so an archived conversation never holds a resident CLI.
-        if (action === 'archive') await releaseSession(context, id, request.user.id);
-        store.run(action === 'archive' ? "UPDATE sessions SET archived_at=COALESCE(archived_at,datetime('now')) WHERE id=?"
-          : 'UPDATE sessions SET archived_at=NULL WHERE id=?', id);
-        const updated = sessionFor(context, id, request.user.id);
-        events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
-        return updated;
-      });
+      return withResourceLocks(context, [`session:${id}`], () =>
+        setSessionArchived(context, request.user.id, id, action === 'archive'));
     });
   }
   app.get('/api/sessions/:id/messages', async request => {

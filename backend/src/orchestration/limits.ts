@@ -30,6 +30,10 @@ export const orchestrationDefaults: OrchestrationSettings = {
 export const orchestrationConstants = {
   /** A report longer than this is cut; the master can read the rest with read_agent. */
   reportCharacters: 16 * 1024,
+  /** Compact report budget injected into a Super Agent's prompt; full text stays available via read_agent. */
+  superReportCharacters: 4 * 1024,
+  /** Compact per-statement budget injected into a Super Agent's discussion digest; full text stays via read_discussion. */
+  superStatementCharacters: 2 * 1024,
   /** wait_agents returns after this at the latest; both CLIs keep a tool call open at least this long. */
   waitSeconds: 600,
   /** Reports finishing within this window reach the master as one message. */

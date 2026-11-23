@@ -163,6 +163,15 @@ export class Store {
         created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT, delivered_at TEXT
       );
       CREATE INDEX IF NOT EXISTS agent_tasks_master ON agent_tasks(master_session_id,status);
+      CREATE TABLE IF NOT EXISTS work_items (
+        id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance TEXT,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','verifying','blocked','completed','cancelled')),
+        assigned_agent TEXT, depends_on TEXT, summary TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(master_session_id,seq)
+      );
+      CREATE INDEX IF NOT EXISTS work_items_master ON work_items(master_session_id,seq);
       -- A discussion among child agents, hosted by the conversation that receives its record: a master, or a moderator.
       CREATE TABLE IF NOT EXISTS discussions (
         id TEXT PRIMARY KEY, host_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -232,6 +241,7 @@ export class Store {
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
     this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");
+    this.addColumn('sessions', 'agent_ephemeral', 'INTEGER NOT NULL DEFAULT 0 CHECK(agent_ephemeral IN (0,1))');
     // A participant of a discussion, with the position or perspective it argues from in a debate.
     this.addColumn('sessions', 'discussion_id', 'TEXT REFERENCES discussions(id) ON DELETE SET NULL');
     this.addColumn('sessions', 'discussion_stance', 'TEXT');

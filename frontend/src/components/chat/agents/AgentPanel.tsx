@@ -1,8 +1,10 @@
-import { GitBranch, Inbox, Square, Workflow } from "lucide-react";
+import { useState } from "react";
+import { Archive, GitBranch, Inbox, Square, Workflow } from "lucide-react";
 import { isActive } from "../../../api";
 import type { Approval, ChildAgent, Session } from "../../../types";
 import { useSessionAgents } from "./useSessionAgents";
 import DiscussionCard from "./DiscussionCard";
+import TaskBoardCard from "./TaskBoardCard";
 
 interface Props {
   session?: Session;
@@ -25,15 +27,20 @@ function stateOf(agent: ChildAgent, approvals: number): { label: string; tone: s
 /** A master conversation's child agents above its composer: their state, their approvals and their reports. */
 export default function AgentPanel({ session, sessions, approvals, connected, onOpen, onNotice }: Props) {
   // A master, or a conversation that hosts a discussion the user started.
+  const [showArchived, setShowArchived] = useState(false);
   const superMode = session?.orchestration_mode === "super";
   const enabled = !!session && !session.archived_at && (session.orchestration === 1 || superMode || session.orchestration_mode === "hybrid" || sessions.some((item) => item.parent_session_id === session.id));
-  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
+  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, archiveChild, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
   // Running discussions, or else the latest one.
   const discussions = view?.discussions.some((item) => item.status === "running")
     ? view.discussions.filter((item) => item.status === "running") : view?.discussions.slice(0, 1) ?? [];
-  if (!enabled || !view || (!view.agents.length && !view.pendingReports && !discussions.length)) return null;
+  const tasks = view?.tasks ?? [];
+  const activeAgents = view?.agents.filter((agent) => !agent.archived) ?? [];
+  const archivedAgents = view?.agents.filter((agent) => agent.archived) ?? [];
+  const visibleAgents = showArchived ? view?.agents ?? [] : activeAgents;
+  if (!enabled || !view || (!activeAgents.length && !archivedAgents.length && !tasks.length && !view.pendingReports && !discussions.length)) return null;
   const waiting = (id: string) => approvals.filter((approval) => approval.session_id === id && ["pending", "PENDING"].includes(approval.status)).length;
-  const busy = view.agents.some((agent) => agent.running || isActive(agent.status));
+  const busy = activeAgents.some((agent) => agent.running || isActive(agent.status));
   const open = (id: string) => {
     const child = sessions.find((item) => item.id === id);
     if (child) onOpen(child);
@@ -44,8 +51,15 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
         <Workflow size={13} aria-hidden="true" />
         <span className="agent-panel-title">
           {superMode && <span className="super-agent-badge">Super Agent</span>}
-          {view.agents.length ? `子智能体 ${view.agents.length}` : "讨论"}
+          {activeAgents.length ? `子智能体 ${activeAgents.length}` : tasks.length ? "任务编排" : discussions.length ? "讨论" : `已归档子智能体 ${archivedAgents.length}`}
         </span>
+        {archivedAgents.length > 0 && (
+          <button type="button" className="agent-panel-action" onClick={() => setShowArchived(!showArchived)}
+            title={showArchived ? "隐藏已归档的子智能体" : "显示已归档的子智能体"}>
+            <Archive size={11} aria-hidden="true" />
+            {showArchived ? "隐藏已归档" : `已归档 ${archivedAgents.length}`}
+          </button>
+        )}
         {view.pendingReports > 0 && (
           <button type="button" className="agent-panel-action" disabled={pending} onClick={() => void deliver()}
             title={view.reportsPaused ? "自动汇总已达上限，点击后把汇报交给主智能体" : "把尚未送达的汇报交给主智能体"}>
@@ -60,18 +74,20 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
           </button>
         )}
       </div>
+      <TaskBoardCard tasks={tasks} agents={view.agents} sessions={sessions} onOpen={onOpen} />
       {discussions.map((discussion) => (
         <DiscussionCard key={discussion.id} discussion={discussion} sessions={sessions} pending={pending} onOpen={onOpen}
           onStop={(id) => void stopDiscussion(id)} />
       ))}
-      {view.agents.map((agent) => {
+      {visibleAgents.map((agent) => {
         const approvalCount = waiting(agent.sessionId);
-        const state = stateOf(agent, approvalCount);
+        const state = agent.archived ? { label: "已归档", tone: "idle" } : stateOf(agent, approvalCount);
         const meta = [agent.model || "默认模型", agent.access === "read" ? "只读" : agent.isolation === "worktree" ? "独立 worktree" : "可写",
-          agent.directory].filter(Boolean).join(" · ");
+          agent.ephemeral ? "自动回收" : null, agent.directory].filter(Boolean).join(" · ");
         const branch = agent.worktree && ["changes", "conflict", "resolving"].includes(agent.worktree.state) ? agent.worktree : null;
+        const canArchive = !agent.archived && !agent.running && !isActive(agent.status) && !branch && !agent.pendingReports;
         return (
-          <div key={agent.sessionId} className="agent-card">
+          <div key={agent.sessionId} className={`agent-card${agent.archived ? " agent-card-archived" : ""}`}>
             <div className="agent-card-row">
               <span className={`engine-logo engine-logo-${agent.engine}`} aria-hidden="true" />
               <button type="button" className="agent-card-name" onClick={() => open(agent.sessionId)} title="打开子对话">{agent.name}</button>
@@ -79,6 +95,12 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
               <span className={`agent-card-state agent-state-${state.tone}`}>{state.label}</span>
               {approvalCount > 0 && (
                 <button type="button" className="agent-card-approve" onClick={() => open(agent.sessionId)}>去审批 {approvalCount}</button>
+              )}
+              {canArchive && (
+                <button type="button" className="agent-card-stop" disabled={pending} onClick={() => void archiveChild(agent.sessionId)}
+                  title={`归档 ${agent.name}`} aria-label={`归档子智能体 ${agent.name}`}>
+                  <Archive size={12} aria-hidden="true" />
+                </button>
               )}
               {(agent.running || isActive(agent.status)) && (
                 <button type="button" className="agent-card-stop" disabled={pending} onClick={() => void stop(agent.sessionId)}

@@ -128,6 +128,7 @@ export interface ChildAgent {
   access: "read" | "write";
   status: string;
   archived: boolean;
+  ephemeral?: boolean;
   /** A task from the master is in progress. */
   running: boolean;
   /** Relative to the child's project root; null for the root. */
@@ -164,8 +165,22 @@ export interface DiscussionView {
     statements: { round: number; status: string }[];
   }[];
 }
+export type WorkItemStatus = "pending" | "in_progress" | "verifying" | "blocked" | "completed" | "cancelled";
+export interface WorkItemView {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  acceptance: string | null;
+  status: WorkItemStatus;
+  assignedAgent: string | null;
+  dependsOn: string[];
+  summary: string | null;
+  updatedAt: string;
+}
 export interface AgentPanelView {
   agents: ChildAgent[];
+  tasks: WorkItemView[];
   discussions: DiscussionView[];
   /** Finished reports the master has not received yet. */
   pendingReports: number;

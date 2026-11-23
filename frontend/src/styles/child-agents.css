@@ -60,6 +60,116 @@
   background: var(--surface);
   font-size: 12px;
 }
+.agent-card-archived {
+  opacity: 0.68;
+}
+.task-board-card {
+  gap: 5px;
+}
+.task-board-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  color: var(--text-secondary);
+}
+.task-board-title {
+  color: var(--text);
+  font-weight: 600;
+}
+.task-board-progress {
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.task-board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 2px 1px 4px;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.task-row > svg {
+  flex: 0 0 auto;
+}
+.task-icon-done {
+  color: var(--success);
+}
+.task-icon-running,
+.task-icon-verifying {
+  color: var(--info);
+}
+.task-icon-blocked {
+  color: var(--danger);
+}
+.task-icon-muted {
+  color: var(--muted);
+}
+.task-code {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.task-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.task-status-completed .task-title,
+.task-status-cancelled .task-title {
+  color: var(--muted);
+}
+.task-status-cancelled .task-title {
+  text-decoration: line-through;
+}
+.task-deps {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.task-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.task-assignee {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+button.task-assignee:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.task-state-label {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .agent-card-row,
 .agent-card-branch {
   display: flex;

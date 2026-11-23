@@ -77,6 +77,8 @@ export interface Session {
   /** A child agent's working directory relative to its project's root; NULL for the root. */
   agent_directory: string | null;
   agent_isolation: 'shared' | 'worktree' | null;
+  /** 1 when a child conversation should automatically archive once its work is delivered and settled. */
+  agent_ephemeral?: 0 | 1 | null;
   /** Set on a participant of a discussion. */
   discussion_id: string | null;
   discussion_stance: string | null;

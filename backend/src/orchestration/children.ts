@@ -69,5 +69,5 @@ export async function createChild(context: Context, user: User, master: Session,
     orchestration: false, model: input.model ?? null, reasoningEffort: input.effort ?? null,
     permissionMode: childPermissionMode(master, input.engine), agentMode: 'normal', rolePreset: 'default',
   }, { parentSessionId: master.id, name: input.name, access: input.access, directory: placement.directory, isolation: placement.isolation,
-    instructions: input.instructions });
+    ephemeral: input.ephemeral, instructions: input.instructions });
 }

@@ -3,10 +3,11 @@ import { projectFor, sessionFor, type Context } from '../context.js';
 import { HttpError, type Session, type User } from '../models.js';
 import { agentEngines } from '../agent/engines.js';
 import type { AgentEngine } from '../agent/engines.js';
+import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { childDirectory, createChild, engineSlots } from './children.js';
 import {
-  aggregateRanking, agreed, critiquePrompt, debatePrompt, openingPrompt, parseRanking, recordMessage,
+  aggregateRanking, agreed, compactRecordMessage, critiquePrompt, debatePrompt, openingPrompt, parseRanking, recordMessage,
   type Contribution, type DiscussionFormat, type DiscussionRecord,
 } from './discussion-prompts.js';
 import type { ReportDelivery } from './reports.js';
@@ -141,9 +142,13 @@ export class Discussions {
     }
     this.finish(id, record.status as DiscussionRow['status'], record.detail);
     if (record.status === 'stopped') return;
+    const currentHost = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', host.id) ?? host;
+    const fullRecord = recordMessage(record);
+    const promptRecord = orchestrationModeOf(currentHost) === 'super' || fullRecord.length > 24_000
+      ? compactRecordMessage(record) : fullRecord;
     try {
-      await sendSessionMessage(this.context, user, host.id, messageInput.parse({ content: recordMessage(record), mode: 'queue' }),
-        { source: 'report', prompt: content => content });
+      await sendSessionMessage(this.context, user, host.id, messageInput.parse({ content: fullRecord, mode: 'queue' }),
+        { source: 'report', prompt: () => promptRecord });
     } catch (error) {
       this.context.events.emit(user.id, { type: 'error', sessionId: host.id,
         payload: { message: `讨论记录未能送达：${error instanceof Error ? error.message : String(error)}` } });
@@ -193,6 +198,36 @@ export class Discussions {
 
   private participants(id: string): Session[] {
     return this.context.store.all<Session>('SELECT * FROM sessions WHERE discussion_id=? ORDER BY created_at,rowid', id);
+  }
+
+  /** Full statements of a discussion hosted by this master, optionally filtered by round or participant. */
+  read(hostId: string, reference: string, round?: number, participant?: string) {
+    const discussion = reference.trim().toLowerCase() === 'latest'
+      ? this.context.store.get<DiscussionRow>('SELECT * FROM discussions WHERE host_session_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1', hostId)
+      : this.context.store.get<DiscussionRow>('SELECT * FROM discussions WHERE id=? AND host_session_id=?', reference.trim(), hostId);
+    if (!discussion) throw new HttpError(404, `本对话没有找到讨论 ${reference}`);
+    const members = new Map(this.participants(discussion.id).map(member => [member.id, member]));
+    const filterName = participant?.trim().toLowerCase();
+    const statements = this.context.store.all<{ session_id: string; round: number; status: string; content: string }>(
+      `SELECT session_id,round,status,content FROM discussion_statements WHERE discussion_id=?${round ? ' AND round=?' : ''} ORDER BY round,rowid`,
+      ...(round ? [discussion.id, round] : [discussion.id]),
+    ).filter(entry => {
+      if (!filterName) return true;
+      const name = (members.get(entry.session_id)?.agent_name ?? '').toLowerCase();
+      return name === filterName || name.replace(/^d\d+-/, '') === filterName;
+    });
+    return {
+      id: discussion.id, topic: discussion.topic, format: discussion.format, status: discussion.status,
+      round: discussion.round, rounds: discussion.rounds, detail: discussion.detail,
+      statements: statements.map(entry => {
+        const member = members.get(entry.session_id);
+        return {
+          round: entry.round, participant: member?.agent_name ?? entry.session_id,
+          engine: member?.engine ?? 'unknown', model: member?.model ?? 'default',
+          stance: member?.discussion_stance ?? null, status: entry.status, text: entry.content,
+        };
+      }),
+    };
   }
 
   /** The host's latest discussions for its agent panel. */
