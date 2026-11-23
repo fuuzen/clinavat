@@ -42,3 +42,26 @@ export async function callHubTool(services: RunServices, tool: string, args: unk
     return { text: error instanceof Error ? error.message : '编排工具调用失败', isError: true };
   }
 }
+
+/**
+ * Answers one JSON-RPC message for the Hub's MCP server, as Claude Code's in-process server and Antigravity's stdio shim
+ * both receive them. Notifications get no reply (undefined).
+ */
+export async function answerHubMcp(services: RunServices, message: { id?: unknown; method?: unknown; params?: any }, signal: AbortSignal)
+  : Promise<{ result: unknown } | { error: { code: number; message: string } } | undefined> {
+  const host = services.config.orchestration;
+  const params = message.params ?? {};
+  if (!host || !orchestrates(services.context)) return { error: { code: -32601, message: '当前对话未开启编排' } };
+  if (typeof message.method === 'string' && message.method.startsWith('notifications/')) return undefined;
+  if (message.method === 'initialize') {
+    return { result: { protocolVersion: params.protocolVersion ?? '2025-06-18', capabilities: { tools: {} },
+      serverInfo: { name: hubToolNamespace, version: '1.0.0' } } };
+  }
+  if (message.method === 'ping') return { result: {} };
+  if (message.method === 'tools/list') return { result: { tools: host.tools } };
+  if (message.method === 'tools/call') {
+    const result = await callHubTool(services, String(params.name ?? ''), params.arguments ?? {}, signal);
+    return { result: { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) } };
+  }
+  return { error: { code: -32601, message: `不支持的 MCP 方法：${String(message.method ?? '')}` } };
+}

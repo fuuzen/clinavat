@@ -148,6 +148,13 @@ export class Store {
         media_type TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS orchestration_settings (id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL);
+      -- The user's agent roster: named child agents a master can start by name.
+      CREATE TABLE IF NOT EXISTS agent_profiles (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL,
+        engine TEXT NOT NULL ${engineCheck}, slot_id TEXT, model TEXT, reasoning_effort TEXT,
+        access TEXT NOT NULL DEFAULT 'read' CHECK(access IN ('read','write')), instructions TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(user_id,name)
+      );
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         child_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, prompt TEXT NOT NULL,
@@ -227,6 +234,9 @@ export class Store {
     // A participant of a discussion, with the position or perspective it argues from in a debate.
     this.addColumn('sessions', 'discussion_id', 'TEXT REFERENCES discussions(id) ON DELETE SET NULL');
     this.addColumn('sessions', 'discussion_stance', 'TEXT');
+    // A master's roster as JSON profile IDs, NULL for the whole roster; and the role a child took from its profile.
+    this.addColumn('sessions', 'agent_profiles', 'TEXT');
+    this.addColumn('sessions', 'agent_instructions', 'TEXT');
     // A worktree project: a child agent's own checkout of its master project's repository, on a branch of its own.
     this.addColumn('projects', 'parent_project_id', 'TEXT REFERENCES projects(id) ON DELETE CASCADE');
     // worktree_conflicts lists, as JSON, the files of the last merge that stopped on conflicts.

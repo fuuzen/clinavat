@@ -1,14 +1,9 @@
 import { lazy, Suspense, useState } from "react";
-import {
-  BarChart3,
-  CircleUserRound,
-  MessageCircleQuestion,
-  Palette,
-  SlidersHorizontal,
-} from "lucide-react";
+import { BarChart3, CircleUserRound, MessageCircleQuestion, Palette, SlidersHorizontal, Users } from "lucide-react";
 import type { Overview } from "../types";
 import { Modal } from "./Dialogs";
 import AccountSettings from "./settings/AccountSettings";
+import RosterSettings from "./settings/RosterSettings";
 import ServiceStatus from "./settings/ServiceStatus";
 import QuestionSettings from "./settings/QuestionSettings";
 import AgentDefaultsSettings from "./settings/AgentDefaultsSettings";
@@ -22,7 +17,7 @@ interface Props {
 }
 
 export default function Settings({ overview, onClose }: Props) {
-  const [tab, setTab] = useState<"account" | "usage" | "conversation" | "appearance" | "system">(
+  const [tab, setTab] = useState<"account" | "usage" | "conversation" | "roster" | "appearance" | "system">(
     "account",
   );
   return (
@@ -56,6 +51,13 @@ export default function Settings({ overview, onClose }: Props) {
             对话默认值
           </button>
           <button
+            className={tab === "roster" ? "active" : ""}
+            onClick={() => setTab("roster")}
+          >
+            <Users size={16} />
+            智能体名册
+          </button>
+          <button
             className={tab === "appearance" ? "active" : ""}
             onClick={() => setTab("appearance")}
           >
@@ -86,6 +88,7 @@ export default function Settings({ overview, onClose }: Props) {
               <QuestionSettings />
             </>
           )}
+          {tab === "roster" && <RosterSettings overview={overview} />}
           {tab === "system" && <ServiceStatus />}
         </div>
       </div>

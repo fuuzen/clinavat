@@ -5,7 +5,8 @@ import { antigravityUsage } from '../../token-usage/meters.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { assertWritable, workingDirectory } from '../orchestration-tools.js';
+import { assertWritable, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { isHubToolCall, startToolBridge } from './tool-bridge.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import type { AgentPrompt, AgentRun, RunServices, TurnOutcome } from '../types.js';
 import { prepareAntigravityHome, rewrittenCommandNotice } from './setup.js';
@@ -27,11 +28,14 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   const binary = await execution.binary(scope, 'agy');
   const home = await prepareAntigravityHome(context);
   if (signal.aborted) throw new Error('会话已停止');
+  // A master's tools reach agy as a stdio MCP server, through a bridge back to the Hub.
+  const tools = orchestrates(context) ? await startToolBridge(services, home.toolShim, signal) : undefined;
   const child = await execution.spawn(binary, ['acp', '--disable-telemetry'], {
     scope, cwd: workingDirectory(context), env: agentEnvironment(execution, context, scope),
-  });
+  }).catch((error: unknown) => { tools?.close(); throw error; });
   services.control.track(child);
   const closed = observeProcessClose(child);
+  void closed.then(() => tools?.close());
   let diagnostics = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-16 * 1024); });
@@ -143,6 +147,11 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       const pick = (kind: string) => options.find(option => option.kind === kind)?.optionId;
       const requestSignal = turnAbort.signal;
       const { tool, input } = describeToolCall(params.toolCall ?? {});
+      if (tools && isHubToolCall(params.toolCall ?? {}, services.config.orchestration?.tools.map(item => item.name) ?? [])) {
+        const optionId = pick('allow_once');
+        rpc.send({ id: message.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } });
+        return;
+      }
       if (tool === 'Bash' && home.shell) await services.verifyShell();
       // Full access lets the CLI's own rules decide; agy has no mode that skips its asks, so the Hub allows them.
       const writes = ['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool);
@@ -250,7 +259,8 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     const planning = context.session.agent_mode === 'plan';
     const instructions = conversationInstructions(context, 'antigravity') + (planning
       ? '\nThe user selected Plan mode in the web UI. When the plan is complete, present the whole plan in your final response: the user cannot open files outside the project.' : '');
-    const opening = { cwd: workingDirectory(context), mcpServers: [], _meta: { antigravity: { systemPrompt: { append: instructions } } } };
+    const opening = { cwd: workingDirectory(context), mcpServers: tools ? [tools.server] : [],
+      _meta: { antigravity: { systemPrompt: { append: instructions } } } };
     const nativeId = context.session.native_session_id;
     const session = nativeId ? await rpc.request('session/resume', { ...opening, sessionId: nativeId }, 120_000)
       : await rpc.request('session/new', opening, 120_000);

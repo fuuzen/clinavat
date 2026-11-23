@@ -58,13 +58,16 @@ export async function childDirectory(project: Project, requested?: string): Prom
 /** Where a child works: its project (the master's, or its own worktree project), directory and isolation. */
 export interface Placement { project: Project; directory: string | null; isolation: 'shared' | 'worktree' }
 
-export async function createChild(context: Context, user: User, master: Session, input: z.infer<typeof toolInputs.start_agent>,
-  placement: Placement): Promise<Session> {
+/** A start_agent request whose roster profile has been applied. */
+export type ChildRequest = z.infer<typeof toolInputs.start_agent> & { engine: AgentEngine; access: 'read' | 'write'; instructions: string | null };
+
+export async function createChild(context: Context, user: User, master: Session, input: ChildRequest, placement: Placement): Promise<Session> {
   assertNewName(context, master, input.name);
   const title = `${input.name} · ${input.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
   return createSession(context, user, {
     projectId: placement.project.id, engine: input.engine, ...slotChoice(context, user, input.engine, input.slot, input.model), title,
     orchestration: false, model: input.model ?? null, reasoningEffort: input.effort ?? null,
     permissionMode: childPermissionMode(master, input.engine), agentMode: 'normal', rolePreset: 'default',
-  }, { parentSessionId: master.id, name: input.name, access: input.access, directory: placement.directory, isolation: placement.isolation });
+  }, { parentSessionId: master.id, name: input.name, access: input.access, directory: placement.directory, isolation: placement.isolation,
+    instructions: input.instructions });
 }

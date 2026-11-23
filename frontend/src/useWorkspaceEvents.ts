@@ -165,6 +165,7 @@ export function useWorkspaceEvents({
         data.type === "user-input" ||
         data.type === "question-defaults" ||
         data.type === "agent-defaults" ||
+        data.type === "agent-profiles" ||
         data.type === "project" ||
         data.type === "done" ||
         data.type === "error"

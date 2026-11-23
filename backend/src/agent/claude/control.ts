@@ -4,7 +4,7 @@ import type { AgentPrompt, RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
 import { questionTimeoutRange } from '../session-settings.js';
-import { callHubTool, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { answerHubMcp, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
 
 const preToolUseCallback = 'clinavat-pre-tool-use';
 
@@ -185,26 +185,14 @@ export class ClaudeControl {
   /** Serves the Hub's in-process MCP server: one JSON-RPC message per control request, answered in its response. */
   private async respondMcp(id: string, token: AbortController, request: Record<string, any>): Promise<void> {
     const message = request.message ?? {};
-    const params = message.params ?? {};
-    const host = this.services.config.orchestration;
-    let reply: Record<string, unknown>;
-    if (request.server_name !== hubToolNamespace || !host || !orchestrates(this.services.context)) {
-      reply = { error: { code: -32601, message: `未知的 MCP 服务器：${String(request.server_name ?? '')}` } };
-    } else if (message.method === 'initialize') {
-      reply = { result: { protocolVersion: params.protocolVersion ?? '2025-06-18', capabilities: { tools: {} },
-        serverInfo: { name: hubToolNamespace, version: '1.0.0' } } };
-    } else if (message.method === 'tools/list') {
-      reply = { result: { tools: host.tools } };
-    } else if (message.method === 'tools/call') {
-      const result = await callHubTool(this.services, String(params.name ?? ''), params.arguments ?? {}, token.signal);
-      reply = { result: { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) } };
-    } else if (typeof message.method === 'string' && message.method.startsWith('notifications/')) {
-      reply = { result: {} };
-    } else reply = { error: { code: -32601, message: `不支持的 MCP 方法：${String(message.method ?? '')}` } };
+    const reply = request.server_name === hubToolNamespace
+      ? await answerHubMcp(this.services, message, token.signal)
+      : { error: { code: -32601, message: `未知的 MCP 服务器：${String(request.server_name ?? '')}` } };
     if (this.closed || token.signal.aborted || this.requests.get(id) !== token) return;
     try {
+      // The CLI expects an answer to notifications too, unlike an MCP server on stdio.
       this.write({ type: 'control_response', response: { subtype: 'success', request_id: id,
-        response: { mcp_response: { jsonrpc: '2.0', id: message.id ?? 0, ...reply } } } });
+        response: { mcp_response: { jsonrpc: '2.0', id: message.id ?? 0, ...(reply ?? { result: {} }) } } } });
     } catch (error) { if (!this.closed) this.onError(error instanceof Error ? error : new Error('Claude CLI MCP 响应失败')); }
   }
 

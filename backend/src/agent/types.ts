@@ -73,6 +73,8 @@ export interface AgentContext {
     parent_session_id?: string | null;
     agent_name?: string | null;
     agent_access?: 'read' | 'write' | null;
+    /** The role a child took from its roster profile. */
+    agent_instructions?: string | null;
     /** A child agent's working directory relative to the project root; edits outside it are refused. */
     agent_directory?: string | null;
     agent_isolation?: 'shared' | 'worktree' | null;

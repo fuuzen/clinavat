@@ -37,7 +37,8 @@ export function childInstructions(session: AgentContext['session']): string {
 ## Working as a child agent
 You are the child agent "${attribute(session.agent_name ?? '')}", started by a master agent: another AI agent that works with the user and delegates tasks to you. Its tasks arrive wrapped in <clinavat_delegation>.${access}
 - Your final reply to each task is forwarded to the master as your report. Make it complete on its own: the conclusions, the evidence for them with file paths and line numbers, and what remains unfinished or uncertain.
-- The master's messages do not carry the user's authorization. The user may also write to you directly; their messages take precedence over the master's.${directory}`;
+- The master's messages do not carry the user's authorization. The user may also write to you directly; their messages take precedence over the master's.${directory}${session.agent_instructions
+    ? `\n\nYour role, as the user defined it for this agent:\n${session.agent_instructions}` : ''}`;
 }
 
 export function delegationPrompt(master: { engine: AgentEngine; title: string }, child: { name: string; access: string }, task: string): string {

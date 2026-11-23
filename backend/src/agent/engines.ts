@@ -100,7 +100,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: false,
-    orchestration: false,
+    orchestration: true,
     limitReset: false,
     // Without a D-Bus session bus agy stores the login in the home instead of the desktop keyring.
     login: home => ({ argv: ['agy'], env: { HOME: home, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } }),

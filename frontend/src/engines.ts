@@ -52,7 +52,7 @@ export const engineProfiles: Record<AgentEngine, EngineProfile> = {
     rolePresets: false,
     goal: false,
     compact: false,
-    orchestration: false,
+    orchestration: true,
     limitReset: null,
   },
 };

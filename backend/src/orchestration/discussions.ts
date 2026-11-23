@@ -9,10 +9,11 @@ import {
   type Contribution, type DiscussionFormat, type DiscussionRecord,
 } from './discussion-prompts.js';
 import type { ReportDelivery } from './reports.js';
+import type { AgentRoster } from './roster.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
 import { toolInputs } from './tools.js';
 
-export interface ParticipantInput { name: string; engine: AgentEngine; model?: string; effort?: string; slot?: string; stance?: string }
+export interface ParticipantInput { name: string; profile?: string; engine?: AgentEngine; model?: string; effort?: string; slot?: string; stance?: string }
 export interface DiscussionInput { topic: string; format: DiscussionFormat; participants: ParticipantInput[]; rounds?: number; directory?: string }
 
 /** What the engine needs from the orchestrator: sending a task, stopping a child, and telling the panel. */
@@ -38,7 +39,7 @@ export class Discussions {
   private running = new Map<string, AbortController>();
 
   constructor(private readonly context: Context, private readonly tasks: AgentTasks, private readonly reports: ReportDelivery,
-    private readonly agents: ChildAgents) {}
+    private readonly agents: ChildAgents, private readonly roster: AgentRoster) {}
 
   async start(user: User, host: Session, input: DiscussionInput, startedBy: 'master' | 'user'): Promise<{ id: string; participants: Session[] }> {
     const { store } = this.context;
@@ -61,10 +62,12 @@ export class Discussions {
     const participants: Session[] = [];
     try {
       for (const participant of input.participants) {
-        const child = await createChild(this.context, user, host, toolInputs.start_agent.parse({
-          name: `d${number}-${participant.name}`.slice(0, 32), engine: participant.engine, model: participant.model, effort: participant.effort,
-          slot: participant.slot, access: 'read', prompt: input.topic, notify: false,
-        }), { project, directory, isolation: 'shared' });
+        // Participants only speak, so a roster profile lends its CLI, account, model and role but never write access.
+        const request = this.roster.resolve(host, toolInputs.start_agent.parse({
+          name: `d${number}-${participant.name}`.slice(0, 32), profile: participant.profile, engine: participant.engine, model: participant.model,
+          effort: participant.effort, slot: participant.slot, prompt: input.topic, notify: false,
+        }));
+        const child = await createChild(this.context, user, host, { ...request, access: 'read' }, { project, directory, isolation: 'shared' });
         store.run('UPDATE sessions SET discussion_id=?,discussion_stance=? WHERE id=?', id, participant.stance?.trim() || null, child.id);
         participants.push(sessionFor(this.context, child.id, user.id));
       }

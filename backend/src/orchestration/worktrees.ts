@@ -37,13 +37,16 @@ export class Worktrees {
     return result.stdout;
   }
 
-  /** The repository holding the directory, with real paths; undefined when it is not in a repository with commits. */
+  /** The repository holding the directory, with real paths; undefined unless the directory is tracked in a commit there. */
   async repository(project: Project, directory: string | null) {
     const target = posix.join(project.remote_path, directory ?? '');
     const output = await this.run(project, `cd -- ${shellQuote(target)}
 root=$(cd -- ${shellQuote(project.remote_path)} && pwd -P)
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { printf none; exit 0; }
 head=$(git rev-parse --verify -q HEAD) || { printf none; exit 0; }
+# A checkout has only what HEAD tracks: a directory the repository ignores or never committed would not be there.
+inside=$(git rev-parse --show-prefix)
+if [ -n "$inside" ] && ! git cat-file -e "HEAD:$inside" 2>/dev/null; then printf none; exit 0; fi
 dirty=$(git -C "$top" status --porcelain --untracked-files=no 2>/dev/null | head -c 1 || true)
 printf 'repo\\0%s\\0%s\\0%s\\0%s\\0%s' "$root" "$(pwd -P)" "$top" "$head" "$dirty"`);
     const [kind, root, target_, repo, head, dirty] = output.split('\0');

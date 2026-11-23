@@ -4,6 +4,7 @@ import { privateSubdirectory } from '../../accounts/credential-files.js';
 import { atomicWrite } from '../../runtime/process.js';
 import { quoteShell } from '../environment.js';
 import type { AgentContext } from '../types.js';
+import { toolShimProgram } from './tool-bridge.js';
 
 /**
  * Repository files agy loads at the start of every session, even in a folder it was never asked to trust. They run
@@ -52,6 +53,8 @@ export interface AntigravityHome {
   stopLog: string;
   /** The wrapper commands are routed through; null where they run beside the CLI. */
   shell: string | null;
+  /** The stdio MCP server that carries a master agent's calls to the Hub. */
+  toolShim: string;
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -76,6 +79,7 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   const config = await privateSubdirectory(home, '.gemini/config');
   const hook = path.join(config, 'clinavat-hook.py');
   const stopLog = path.join(home, '.clinavat-agy-stop.jsonl');
+  const toolShim = path.join(config, 'clinavat-mcp.py');
   const run = (...args: string[]) => ['python3', '-I', hook, ...args].map(quoteShell).join(' ');
   const deny = (tool: string) => ({ matcher: tool, hooks: [{ type: 'command', command: run('deny',
     'Subagents are disabled in this workspace; do the work yourself.'), timeout: 30 }] });
@@ -101,5 +105,6 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   await atomicWrite(path.join(config, 'config.json'), JSON.stringify({ plugins: { swarm: { enabled: false } } }));
   await atomicWrite(path.join(cli, 'settings.json'), JSON.stringify(settings));
   await atomicWrite(stopLog, '');
-  return { stopLog, shell };
+  await atomicWrite(toolShim, toolShimProgram);
+  return { stopLog, shell, toolShim };
 }

@@ -7,6 +7,7 @@ import { toolInputs } from '../orchestration/tools.js';
 import { slotChoice } from '../orchestration/children.js';
 import { agentEngines } from '../agent/engines.js';
 import { createSession, sessionInput } from './sessions.js';
+import { profileInput } from '../orchestration/roster.js';
 
 const discussionInput = toolInputs.start_discussion.extend({
   // Synthesizes the record at the end, in a new conversation that hosts the discussion.
@@ -75,6 +76,26 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     const { id } = identifier.parse(request.params);
     z.object({}).strict().parse(request.body ?? {});
     await orchestrator.stopDiscussion(request.user, id);
+    return { ok: true };
+  });
+  // Other pages learn of a changed roster through the event and read it again with the overview.
+  const rosterChanged = (userId: string) => context.events.emit(userId, { type: 'agent-profiles', payload: {} });
+  app.get('/api/agent-profiles', async request => orchestrator.roster.list(request.user.id));
+  app.post('/api/agent-profiles', async (request, reply) => {
+    const saved = orchestrator.roster.save(request.user.id, profileInput.parse(request.body));
+    rosterChanged(request.user.id);
+    return reply.code(201).send(saved);
+  });
+  app.put('/api/agent-profiles/:id', async request => {
+    const { id } = identifier.parse(request.params);
+    const saved = orchestrator.roster.save(request.user.id, profileInput.parse(request.body), id);
+    rosterChanged(request.user.id);
+    return saved;
+  });
+  app.delete('/api/agent-profiles/:id', async request => {
+    const { id } = identifier.parse(request.params);
+    orchestrator.roster.remove(request.user.id, id);
+    rosterChanged(request.user.id);
     return { ok: true };
   });
   app.post('/api/sessions/:id/agents/deliver', async request => {

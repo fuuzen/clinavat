@@ -84,7 +84,7 @@ export const workspaceHandlers = [
   http.get("/api/overview", () => db.signedIn
     ? HttpResponse.json({ user: db.user, slots: db.slots, hosts: db.hosts, projects: db.projects, sessions: db.sessions,
       questionDefaults: { mode: db.userQuestions.mode ?? db.siteQuestions.mode, timeoutMs: db.userQuestions.timeoutMs ?? db.siteQuestions.timeoutMs },
-      agentDefaults: db.agentDefaults, deferredQuestions: [] })
+      agentDefaults: db.agentDefaults, deferredQuestions: [], agentProfiles: [] })
     : fail(401, "请先登录")),
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),

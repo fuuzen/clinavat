@@ -110,6 +110,8 @@ export interface Session {
   /** Set on a participant of a discussion; the stance is the position it argues from in a debate. */
   discussion_id?: string | null;
   discussion_stance?: string | null;
+  /** The roster profiles this master may start, as JSON IDs; null for the whole roster. */
+  agent_profiles?: string | null;
   /** 1 when the agent may start and direct child agents. */
   orchestration?: 0 | 1;
 }
@@ -294,6 +296,19 @@ export interface Overview {
   questionDefaults: QuestionPolicy;
   agentDefaults: AgentPreferences;
   deferredQuestions: { session_id: string; count: number }[];
+  agentProfiles: AgentProfile[];
+}
+
+/** A named child agent in the user's roster. */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  engine: AgentEngine;
+  slot_id: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  access: "read" | "write";
+  instructions: string | null;
 }
 
 export interface PoolEvent {

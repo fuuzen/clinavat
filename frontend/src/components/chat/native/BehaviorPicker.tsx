@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, UserRound, Workflow } from "lucide-react";
-import type { AgentBehavior, RolePreset } from "../../../types";
+import type { AgentBehavior, AgentProfile, RolePreset, Session } from "../../../types";
+import { api } from "../../../api";
 import SettingsHelp from "../SettingsHelp";
 import SettingsMenu from "../SettingsMenu";
 import { engineProfiles, type AgentEngine } from "../../../engines";
@@ -18,6 +19,8 @@ export default function BehaviorPicker(props: {
   openRequest?: number;
   /** Why orchestration cannot change for this conversation; undefined when it can. */
   orchestrationLock?: string;
+  /** The user's roster, and the conversation that may limit which of it its master starts. */
+  roster?: { profiles: AgentProfile[]; session?: Session };
   onChange: (value: AgentBehavior) => void;
 }) {
   const planning = props.value.agentMode === "plan";
@@ -81,6 +84,26 @@ export default function BehaviorPicker(props: {
           <Check size={14} className="settings-item-check" />
         </button>
       </div>
+      {orchestrating && props.roster?.profiles.length && props.roster.session ? (() => {
+        const { profiles, session } = props.roster;
+        const chosen: string[] | null = session.agent_profiles ? JSON.parse(session.agent_profiles) : null;
+        // An empty choice would hide the whole roster, so unticking the last one goes back to all of it.
+        const toggle = (id: string) => {
+          const current = chosen ?? profiles.map((profile) => profile.id);
+          const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+          void api(`/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ agentProfiles: next.length && next.length < profiles.length ? next : null }) });
+        };
+        return <>
+          <div className="settings-menu-heading"><span>可用名册</span><SettingsHelp menuItem text="主智能体可以按名字派生的名册智能体；全部勾选时使用整个名册。" /></div>
+          {profiles.map((profile) => <div className="settings-menu-entry" key={profile.id}>
+            <button className="settings-menu-item compact" role="menuitemcheckbox" aria-checked={!chosen || chosen.includes(profile.id)}
+              tabIndex={-1} type="button" onClick={() => toggle(profile.id)}>
+              <span className="settings-item-copy">{profile.name}</span>
+              <Check size={14} className="settings-item-check" />
+            </button>
+          </div>)}
+        </>;
+      })() : null}
     </div>}
   </>}</SettingsMenu>;
 }

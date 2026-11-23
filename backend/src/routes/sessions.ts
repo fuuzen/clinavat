@@ -39,6 +39,8 @@ export interface ChildAgent {
   /** Relative to the child's project root; null for the root. */
   directory: string | null;
   isolation: 'shared' | 'worktree';
+  /** The role from the child's roster profile. */
+  instructions: string | null;
 }
 
 /** Only a conversation the user started may direct others, and Codex fixes its tools when the thread starts. */
@@ -67,10 +69,10 @@ export async function createSession(context: Context, user: User, input: z.infer
     if (input.slotMode === 'manual') await validate(slot);
     slotForUser(store, slot.id, user.id, input.engine);
     store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
-      orchestration,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      orchestration,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
     permissionMode, agentMode, rolePreset, input.orchestration ? 1 : 0, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
-    child?.directory ?? null, child?.isolation ?? null);
+    child?.directory ?? null, child?.isolation ?? null, child?.instructions ?? null);
     const created = sessionFor(context, id, user.id);
     context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
     return created;
@@ -116,6 +118,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
       questionDefaults: questionDefaults.forUser(request.user.id),
       agentDefaults: context.agentDefaults.user(request.user.id),
+      agentProfiles: store.all('SELECT * FROM agent_profiles WHERE user_id=? ORDER BY name', request.user.id),
       // Conversations that wait for the user to answer a question asked while nobody was there.
       deferredQuestions: store.all<{ session_id: string; count: number }>(`SELECT deferred_questions.session_id,COUNT(*) AS count
         FROM deferred_questions JOIN sessions ON sessions.id=deferred_questions.session_id
@@ -164,6 +167,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       questionMode: z.enum(questionModes).nullable().optional(),
       questionTimeoutMs: questionTimeout.nullable().optional(),
       orchestration: z.boolean().optional(),
+      // Roster profiles this master may start; null for the whole roster.
+      agentProfiles: z.array(z.uuid()).max(100).nullable().optional(),
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
       message: '请提供要修改的对话设置',
     }).parse(request.body);
@@ -192,12 +197,17 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         }
       }
       if (changedSlot && input.slotId) slotForUser(store, input.slotId, request.user.id, current.engine);
+      if (input.agentProfiles) {
+        const owned = new Set(store.all<{ id: string }>('SELECT id FROM agent_profiles WHERE user_id=?', request.user.id).map(row => row.id));
+        if (input.agentProfiles.some(profile => !owned.has(profile))) throw new HttpError(400, '名册中没有所选的智能体');
+      }
       store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,slot_mode=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,
-        question_mode=?,question_timeout_ms=?,orchestration=?,updated_at=datetime('now') WHERE id=?`,
+        question_mode=?,question_timeout_ms=?,orchestration=?,agent_profiles=?,updated_at=datetime('now') WHERE id=?`,
         input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId, slotMode,
         changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset,
         input.questionMode === undefined ? current.question_mode : input.questionMode,
-        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, orchestration ? 1 : 0, id);
+        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, orchestration ? 1 : 0,
+        input.agentProfiles === undefined ? current.agent_profiles : input.agentProfiles && JSON.stringify(input.agentProfiles), id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
       return updated;

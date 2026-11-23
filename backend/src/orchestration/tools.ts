@@ -10,7 +10,9 @@ export const toolInputs = {
   start_agent: z.object({
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'name: letters, digits, "-" and "_", at most 32 characters')
       .describe('A short name for the child, unique in this conversation, such as "reviewer" or "impl-api".'),
-    engine: z.enum(agentEngines).describe('Which CLI the child runs.'),
+    profile: z.string().trim().min(1).max(24).optional()
+      .describe('An agent from the user\'s roster in list_agents; it sets the CLI, account, model, access and role, and fields you give override it.'),
+    engine: z.enum(agentEngines).optional().describe('Which CLI the child runs; required without a profile.'),
     model: z.string().trim().min(1).max(200).optional().describe('Model ID from list_agents; omit for the account\'s default.'),
     effort: z.string().trim().min(1).max(32).optional().describe('Reasoning effort the model offers; omit for its default.'),
     slot: z.string().trim().min(1).max(64).optional().describe('Account slot ID from list_agents; omit to let the Hub choose.'),
@@ -18,8 +20,8 @@ export const toolInputs = {
       .describe('Project-relative directory the child works in; it may change only files inside it but can read the whole project. Omit for the project root.'),
     isolation: z.enum(['worktree', 'shared']).optional()
       .describe('For writing children. "worktree" (default) gives the child its own Git worktree and branch, so parallel children never overwrite each other; you merge its branch afterwards. "shared" works directly in the project directory. Ignored for read access.'),
-    access: z.enum(['read', 'write']).default('read')
-      .describe('"read" cannot modify files; "write" can. Prefer read for research and review.'),
+    access: z.enum(['read', 'write']).optional()
+      .describe('"read" (the default, unless the profile says otherwise) cannot modify files; "write" can. Prefer read for research and review.'),
     prompt: z.string().trim().min(1).max(100_000)
       .describe('The complete, self-contained task. The child starts with no context: include goals, constraints, file paths to read, and what to report back.'),
     notify: z.boolean().default(true).describe('Deliver the child\'s report to you as a new message when it finishes. Set false if you will wait or read it yourself.'),
@@ -54,7 +56,8 @@ export const toolInputs = {
       + '"debate": participants argue from given positions over several rounds until they agree. "review": everyone reviews the same work and lists problems by severity.'),
     participants: z.array(z.object({
       name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/, 'participant name: letters, digits, "-" and "_", at most 24 characters'),
-      engine: z.enum(agentEngines),
+      profile: z.string().trim().min(1).max(24).optional().describe('An agent from the user\'s roster; participants stay read-only.'),
+      engine: z.enum(agentEngines).optional().describe('Required without a profile.'),
       model: z.string().trim().min(1).max(200).optional(),
       effort: z.string().trim().min(1).max(32).optional(),
       slot: z.string().trim().min(1).max(64).optional(),

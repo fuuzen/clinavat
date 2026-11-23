@@ -77,6 +77,14 @@ export interface Session {
   /** Set on a participant of a discussion. */
   discussion_id: string | null;
   discussion_stance: string | null;
+  /** The roster profiles a master may start, as JSON IDs; NULL for all of the user's. */
+  agent_profiles: string | null;
+  /** The role a child took from its roster profile. */
+  agent_instructions: string | null;
+}
+export interface AgentProfile {
+  id: string; user_id: string; name: string; engine: AgentEngine; slot_id: string | null; model: string | null;
+  reasoning_effort: string | null; access: 'read' | 'write'; instructions: string | null; created_at: string;
 }
 export interface PoolEvent { type: string; sessionId?: string; payload: unknown }
 export class HttpError extends Error {

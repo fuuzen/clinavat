@@ -10,6 +10,7 @@ import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
 import { ReportDelivery } from './reports.js';
 import { Discussions, type DiscussionInput } from './discussions.js';
+import { AgentRoster } from './roster.js';
 import { AgentTasks } from './tasks.js';
 import { hubTools, isToolName, toolInputs, type ToolName } from './tools.js';
 
@@ -22,11 +23,13 @@ export class Orchestrator implements OrchestrationHost {
   private readonly tasks: AgentTasks;
   private readonly reports: ReportDelivery;
   private readonly discussions: Discussions;
+  readonly roster: AgentRoster;
 
   constructor(private readonly context: Context) {
     this.tasks = new AgentTasks(context.store);
     this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId));
-    this.discussions = new Discussions(context, this.tasks, this.reports, this);
+    this.roster = new AgentRoster(context.store);
+    this.discussions = new Discussions(context, this.tasks, this.reports, this, this.roster);
   }
 
   /** A discussion the user starts from the web, hosted by the moderator conversation created for it. */
@@ -57,7 +60,7 @@ export class Orchestrator implements OrchestrationHost {
         return json(this.list(user, master));
       }
       case 'start_agent': {
-        const input = toolInputs.start_agent.parse(args);
+        const input = this.roster.resolve(master, toolInputs.start_agent.parse(args));
         if (planning && input.access === 'write') throw new HttpError(409, 'Plan 模式下只能派生只读子智能体');
         assertNewName(this.context, master, input.name);
         const main = projectFor(this.context, master.project_id, user.id);
@@ -256,6 +259,9 @@ export class Orchestrator implements OrchestrationHost {
           })) ?? 'not read yet: omit model to use the default',
         })),
       })).filter(engine => engine.slots.length),
+      // Start one with start_agent's profile; the master may still override any field.
+      roster: this.roster.available(master).map(profile => ({ name: profile.name, engine: profile.engine, model: profile.model ?? 'default',
+        effort: profile.reasoning_effort, slot: profile.slot_id, access: profile.access, role: profile.instructions?.slice(0, 300) ?? null })),
       children: this.view(master.id).agents.map(({ name, engine, model, access, status, running }) => ({ name, engine, model, access, status, running })),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };

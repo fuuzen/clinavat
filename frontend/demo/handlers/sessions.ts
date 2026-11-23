@@ -154,6 +154,8 @@ export const sessionHandlers = [
     HttpResponse.json({ resident: false, turnActive: false, queue: [], tasks: [] })),
   // The preview has no other CLIs to start, so a master conversation never gets children.
   http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], discussions: [], pendingReports: 0, reportsPaused: false })),
+  http.get("/api/agent-profiles", () => HttpResponse.json([])),
+  http.post("/api/agent-profiles", () => fail(409, "在线预览中无法保存智能体名册")),
   // The preview runs no CLIs, so there is nobody to discuss with.
   http.post("/api/projects/:id/discussions", () => fail(409, "在线预览中无法启动参与讨论的 CLI")),
   http.post("/api/discussions/:id/stop", () => fail(404, "讨论不存在")),
