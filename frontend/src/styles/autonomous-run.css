@@ -64,6 +64,9 @@
   padding: 4px 0 0 14px;
   border-left: 2px solid var(--info-line);
 }
+.autonomous-run-details[hidden] {
+  display: none;
+}
 .autonomous-run-details > .message:last-child {
   padding-bottom: 0;
 }

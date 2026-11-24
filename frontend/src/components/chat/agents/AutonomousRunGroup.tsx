@@ -39,7 +39,8 @@ export default function AutonomousRunGroup({ cycles, children }: { cycles: RunCy
         <span className="autonomous-run-meta">{toolCalls} 次工具调用 · {first === last ? first : `${first} – ${last}`}</span>
         <span className="autonomous-run-action">{open ? "收起明细" : "展开明细"}<ChevronDown size={13} className={open ? "rotate" : ""} aria-hidden="true" /></span>
       </button>
-      {open && <div className="autonomous-run-details" id={detailsId}>{children}</div>}
+      {/* Stay mounted while collapsed so conversation outline anchors keep existing. */}
+      <div className="autonomous-run-details" id={detailsId} hidden={!open}>{children}</div>
     </section>
   );
 }
