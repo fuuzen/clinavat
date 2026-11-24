@@ -9,6 +9,7 @@ import { getPermissionMode, permissionModes, type PermissionMode } from '../agen
 import { availableSlots } from '../accounts/access.js';
 import { createSession } from '../routes/sessions.js';
 import type { toolInputs } from './tools.js';
+import type { AgentTasks } from './tasks.js';
 
 /** The child's mode never grants more than the master's; an engine without that mode gets the next stricter one. */
 export function childPermissionMode(master: Pick<Session, 'permission_mode'>, engine: AgentEngine): PermissionMode {
@@ -64,6 +65,29 @@ export interface Placement { project: Project; directory: string | null; isolati
 /** A start_agent request whose roster profile has been applied. */
 export type ChildRequest = z.infer<typeof toolInputs.start_agent> & { engine: AgentEngine; access: 'read' | 'write'; instructions: string | null };
 
+/** Writers sharing a checkout must keep their directories from overlapping. */
+export function assertChildRoom(context: Context, tasks: AgentTasks, user: User, master: Session,
+  child: { access: 'read' | 'write'; isolation: 'shared' | 'worktree'; directory: string | null }): void {
+  const limits = context.orchestrationSettings.view();
+  const busy = tasks.busyChildren({ masterId: master.id });
+  if (busy.length >= limits.runningPerMaster) throw new HttpError(409, `本对话已有 ${busy.length} 个子智能体在运行，上限为 ${limits.runningPerMaster}；请等待或停止其中一个`);
+  if (tasks.busyChildren({ userId: user.id }).length >= limits.runningPerUser) throw new HttpError(409, `你的子智能体同时运行数已达上限 ${limits.runningPerUser}`);
+  if (child.access !== 'write') return;
+  const writers = busy.filter(item => item.agent_access === 'write' && (item.agent_isolation ?? 'shared') === child.isolation);
+  if (child.isolation === 'worktree') {
+    if (writers.length >= limits.worktreeWritersPerMaster) throw new HttpError(409, `已有 ${writers.length} 个使用 worktree 的可写子智能体在运行，上限为 ${limits.worktreeWritersPerMaster}`);
+    return;
+  }
+  if (writers.length >= limits.sharedWritersPerMaster) {
+    throw new HttpError(409, `共用项目目录的可写子智能体 ${writers.map(item => item.agent_name).join('、') || ''} 已达上限 ${limits.sharedWritersPerMaster}；请等待，或改用 worktree 隔离`);
+  }
+  const contains = (outer: string | null, inner: string | null) => !outer || outer === inner || !!inner?.startsWith(`${outer}/`);
+  const overlapping = writers.filter(item => contains(item.agent_directory, child.directory) || contains(child.directory, item.agent_directory));
+  if (overlapping.length) {
+    throw new HttpError(409, `可写子智能体 ${overlapping.map(item => `${item.agent_name}（${item.agent_directory ?? '项目根目录'}）`).join('、')} 正在共用目录中修改与 ${child.directory ?? '项目根目录'} 重叠的位置；请换一个不重叠的目录，或改用 worktree 隔离`);
+  }
+}
+
 export async function createChild(context: Context, user: User, master: Session, input: ChildRequest, placement: Placement): Promise<Session> {
   assertNewName(context, master, input.name);
   const title = `${input.name} · ${input.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
@@ -72,5 +96,5 @@ export async function createChild(context: Context, user: User, master: Session,
     orchestration: false, model: input.model ?? null, reasoningEffort: input.effort ?? null,
     permissionMode: childPermissionMode(master, input.engine), agentMode: 'normal', rolePreset: 'default',
   }, { parentSessionId: master.id, name: input.name, access: input.access, directory: placement.directory, isolation: placement.isolation,
-    ephemeral: input.ephemeral, instructions: input.instructions });
+    ephemeral: input.ephemeral, instructions: input.instructions, profile: input.profile });
 }

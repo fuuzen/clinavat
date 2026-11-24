@@ -6,6 +6,7 @@ import { readJsonLines } from './ndjson.js';
 import { RpcClient } from './rpc.js';
 import type { AgentConfig, AgentContext } from './types.js';
 import type { AgentEngine } from './engines.js';
+import { orchestrationModeOf } from './orchestration-tools.js';
 
 export interface AgentModel {
   id: string;
@@ -22,7 +23,9 @@ export interface AgentSelection {
 }
 
 /** The catalog depends only on the account and the slot's CLI, never on a project. */
-export type CatalogContext = Pick<AgentContext, 'user' | 'slot'> & { session: Pick<AgentContext['session'], 'engine'> };
+export type CatalogContext = Pick<AgentContext, 'user' | 'slot'> & {
+  session: Pick<AgentContext['session'], 'engine' | 'orchestration' | 'orchestration_mode' | 'parent_session_id'>;
+};
 type ProbeContext = Omit<AgentContext, 'project'>;
 
 export interface SlotModelCatalog { models: AgentModel[]; refreshedAt: string }
@@ -248,14 +251,25 @@ export function refreshModelCatalog(config: AgentConfig, context: CatalogContext
 
 export interface AgentPreference { model: string | null; reasoningEffort: string | null }
 
+const superAntigravityModels = ['gemini-4-carbon', 'gemini-4-neon', 'gemini-3.8-flash', 'claude-sonnet-5-5', 'claude-sonnet-4-6'];
+
+export function superAntigravityModel(defaultModel: string, available: string[]): string {
+  const isOrchestrator = (id: string) => id.toLowerCase().includes('orchestrator');
+  if (!isOrchestrator(defaultModel)) return defaultModel;
+  return superAntigravityModels.find(id => available.includes(id))
+    ?? available.find(id => !isOrchestrator(id)) ?? defaultModel;
+}
+
 /**
  * Checks what a conversation chose against the slot's catalog and fills what it leaves to the default with the
  * user's own default where this slot's catalog offers it; anything left over follows the CLI's default.
  */
 export async function resolveAgentSelection(config: AgentConfig, context: CatalogContext, selection: AgentSelection,
-  preference?: AgentPreference): Promise<AgentPreference> {
+  preference?: AgentPreference, runtime = false): Promise<AgentPreference> {
   const chosen = { model: selection.model ?? null, reasoningEffort: selection.reasoningEffort ?? null };
-  if (!chosen.model && !chosen.reasoningEffort && !preference?.model && !preference?.reasoningEffort) return chosen;
+  const superAgent = runtime && orchestrationModeOf(context.session) === 'super';
+  const antigravity = context.session.engine === 'antigravity';
+  if (!chosen.model && !chosen.reasoningEffort && !preference?.model && !preference?.reasoningEffort && (!superAgent || antigravity)) return chosen;
   let models: AgentModel[];
   try { models = await loadAgentModels(config, context); }
   catch (error) {
@@ -263,12 +277,18 @@ export async function resolveAgentSelection(config: AgentConfig, context: Catalo
     throw new HttpError(502, error instanceof Error ? error.message : '模型目录读取失败');
   }
   const find = (id: string | null) => id ? models.find(item => item.id === id) : models.find(item => item.isDefault);
-  if ((chosen.model || chosen.reasoningEffort) && !find(chosen.model)) throw new HttpError(400, '当前 CLI 不支持所选模型，请重新选择');
+  if ((chosen.model || chosen.reasoningEffort && !antigravity) && !find(chosen.model)) {
+    throw new HttpError(400, '当前 CLI 不支持所选模型，请重新选择');
+  }
   const model = chosen.model ?? (preference?.model && find(preference.model) ? preference.model : null);
   const supports = (effort: string) => !!find(model)?.reasoningEfforts.some(item => item.value === effort);
-  if (chosen.reasoningEffort && !supports(chosen.reasoningEffort)) throw new HttpError(400, '所选模型不支持该思考强度，请重新选择');
+  // agy reveals its default model and exact thought levels when the conversation opens.
+  if (chosen.reasoningEffort && (!antigravity || chosen.model) && !supports(chosen.reasoningEffort)) {
+    throw new HttpError(400, '所选模型不支持该思考强度，请重新选择');
+  }
   const reasoningEffort = chosen.reasoningEffort
-    ?? (preference?.reasoningEffort && supports(preference.reasoningEffort) ? preference.reasoningEffort : null);
+    ?? (superAgent && !antigravity && supports('medium') ? 'medium'
+      : preference?.reasoningEffort && supports(preference.reasoningEffort) ? preference.reasoningEffort : null);
   return { model, reasoningEffort };
 }
 

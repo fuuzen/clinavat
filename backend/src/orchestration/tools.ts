@@ -4,11 +4,13 @@ import type { HubTool } from '../agent/types.js';
 import { workItemStatuses } from './board.js';
 import { orchestrationConstants } from './limits.js';
 import { memoryKeySchema } from './memory.js';
+import { inspectInput } from './inspect.js';
 
 const agentReference = z.string().trim().min(1).max(64).describe('The child agent\'s name, or the agentId start_agent returned.');
 
 export const toolInputs = {
   list_agents: z.object({}),
+  inspect: inspectInput,
   start_agent: z.object({
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'name: letters, digits, "-" and "_", at most 32 characters')
       .describe('A short name for the child, unique in this conversation, such as "reviewer" or "impl-api".'),
@@ -34,6 +36,8 @@ export const toolInputs = {
   }),
   message_agent: z.object({
     agent: agentReference,
+    task: z.string().trim().min(1).max(64).optional()
+      .describe('Task board code for this follow-up. Omit to reuse the child’s current assignment.'),
     message: z.string().trim().min(1).max(100_000),
     mode: z.enum(['queue', 'steer', 'interrupt']).default('queue')
       .describe('While the child is replying: "queue" sends after its reply, "steer" joins the running reply, "interrupt" stops it and sends now.'),
@@ -121,6 +125,7 @@ export type ToolName = keyof typeof toolInputs;
 
 const descriptions: Record<ToolName, string> = {
   list_agents: 'Lists the CLIs, account slots and models you can start child agents with, the children of this conversation with their state, and the current limits.',
+  inspect: 'Lists a bounded tree of visible project paths or reads a permitted project text file within the current Super Agent reading mode and turn budget.',
   start_agent: 'Starts a child agent in a new conversation of this project and sends it its first task. Returns at once; when the child finishes, its report arrives as a new message unless notify is false.',
   message_agent: 'Sends another message to a child agent you started; its next report arrives like the first.',
   wait_agents: 'Waits until the given child agents finish their current tasks or the timeout passes, and returns their reports. Use only when you need the results before going on in this turn; those reports then do not arrive as a new message.',

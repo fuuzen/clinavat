@@ -4,7 +4,7 @@ import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
 import { codexPermissions, createCodexRequests } from './requests.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { callHubTool, hubToolNamespace, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { callHubTool, hubToolNamespace, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
 import { roleInstructions } from '../session-settings.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
 import { CodexSubagents } from './subagents.js';
@@ -286,6 +286,8 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       .then(result => services.config.usage?.observe(services.context.slot, 'codex-read', result,
         services.context.account_identity)).catch(() => undefined);
     const selection = services.context.session;
+    const shell = nativeReadsEnabled(services.context);
+    const tools = services.config.orchestration?.toolsFor(services.context) ?? [];
     const models = await loadAgentModels(services.config, services.context);
     const model = selection.model || models.find(item => item.isDefault)?.id;
     const effort = selection.reasoning_effort || models.find(item => item.id === model)?.defaultReasoningEffort;
@@ -294,7 +296,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       approvalsReviewer: permissions.approvalsReviewer,
       developerInstructions: conversationInstructions(services.context, 'codex', services.config.orchestration?.briefing?.(services.context)) + roleInstructions(selection.role_preset),
       ...(model ? { model } : {}),
-      config: { 'features.shell_tool': true, 'features.unified_exec': true, 'features.multi_agent': !isSuperAgent(services.context), 'features.goals': true,
+      config: { 'features.shell_tool': shell, 'features.unified_exec': shell, 'features.multi_agent': !isSuperAgent(services.context), 'features.goals': true,
         ...(effort ? { model_reasoning_effort: effort } : {}) } };
     const nativeId = services.context.session.native_session_id;
     // Each slot indexes the shared history through its own path; native resume resolves that path by ID.
@@ -304,16 +306,17 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       // A branch's first run forks its source's thread through the anchored turn.
       : forkFrom ? await rpc.request('thread/fork', { ...shared, threadId: forkFrom, ...(forkAt ? { lastTurnId: forkAt } : {}), excludeTurns: true })
         // A thread keeps the tools it started with, also when resumed; resume does not take them.
-        : await rpc.request('thread/start', { ...shared, ...(orchestrates(services.context) ? { dynamicTools: [{
+        : await rpc.request('thread/start', { ...shared, ...(tools.length ? { dynamicTools: [{
           type: 'namespace', name: hubToolNamespace, description: 'Clinavat tools for starting and directing child agents.',
-          tools: (services.config.orchestration?.tools ?? []).map(tool => ({ type: 'function', ...tool })),
+          tools: tools.map(tool => ({ type: 'function', ...tool })),
         }] } : {}) });
     if (!result?.thread?.id) throw new Error('Codex 未返回线程 ID，请确认固定版本的 app-server 协议');
     if (nativeId && result.thread.id !== nativeId) throw new Error('Codex 恢复的会话与当前对话不一致');
     threadId = String(result.thread.id);
     usageModel = typeof result.model === 'string' && result.model ? result.model : model ?? usageModel;
     if (signal.aborted) throw new Error('会话已停止');
-    await services.update({ native_session_id: threadId });
+    await services.update({ native_session_id: threadId,
+      ...(!nativeId && !forkFrom ? { native_inspect_tools: tools.some(tool => tool.name === 'inspect') ? 1 : 0 } : {}) });
     await goals.get();
     const turnSettings = {
       threadId, cwd: root,

@@ -26,6 +26,7 @@ export interface ConversationTurn {
   credential_revision: number | null;
   native_ref: string | null;
   native_session_id: string | null;
+  native_inspect_tools: 0 | 1;
   status: 'running' | 'pausing' | 'paused' | 'completed' | 'interrupted' | 'error';
   items: ActivityItem[];
 }
@@ -52,7 +53,8 @@ export class ConversationStore {
     const turn: ConversationTurn = {
       id: turnId, session_id: sessionId, user_message_id: userMessageId,
       assistant_message_id: null, started_at: new Date().toISOString(),
-      completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: 'running', items: [], native_ref: null, native_session_id: null,
+      completed_at: null, duration_ms: null, paused_at: null, paused_ms: 0, status: 'running', items: [],
+      native_ref: null, native_session_id: null, native_inspect_tools: 0,
       slot_id: authorization.slotId, credential_revision: authorization.credentialRevision,
     };
     this.store.run('INSERT INTO session_turns(id,session_id,user_message_id,started_at,slot_id,credential_revision) VALUES(?,?,?,?,?,?)',
@@ -102,10 +104,17 @@ export class ConversationStore {
   }
 
   /** Records where the running turn ends in the CLI's history, so that a branch can start there. */
-  anchor(sessionId: string, turnId: string, ref: string, nativeSessionId: string): void {
+  anchor(sessionId: string, turnId: string, ref: string, nativeSessionId: string, nativeInspectTools: 0 | 1): void {
     const pending = this.active.get(sessionId);
-    if (pending?.turn.id === turnId) Object.assign(pending.turn, { native_ref: ref, native_session_id: nativeSessionId });
-    this.store.run('UPDATE session_turns SET native_ref=?,native_session_id=? WHERE id=? AND session_id=?', ref, nativeSessionId, turnId, sessionId);
+    if (pending?.turn.id === turnId) Object.assign(pending.turn,
+      { native_ref: ref, native_session_id: nativeSessionId, native_inspect_tools: nativeInspectTools });
+    this.store.run('UPDATE session_turns SET native_ref=?,native_session_id=?,native_inspect_tools=? WHERE id=? AND session_id=?',
+      ref, nativeSessionId, nativeInspectTools, turnId, sessionId);
+  }
+
+  clearNativeSession(sessionId: string): void {
+    this.store.run(`UPDATE sessions SET native_session_id=NULL,fork_native_id=NULL,fork_native_anchor=NULL,jsonl_file_path=NULL,
+      native_inspect_tools=0,token_usage_cursor=NULL,updated_at=datetime('now') WHERE id=?`, sessionId);
   }
 
   /** Copies the messages and turns up to and including `turnId` into another conversation, under new IDs. */
@@ -127,10 +136,10 @@ export class ConversationStore {
       const userMessageId = copies.get(turn.user_message_id);
       if (!userMessageId) continue;
       this.store.run(`INSERT INTO session_turns(id,session_id,user_message_id,assistant_message_id,started_at,completed_at,duration_ms,
-        status,items,slot_id,credential_revision,paused_at,paused_ms,native_ref,native_session_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        status,items,slot_id,credential_revision,paused_at,paused_ms,native_ref,native_session_id,native_inspect_tools) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       randomUUID(), targetId, userMessageId, turn.assistant_message_id ? copies.get(turn.assistant_message_id) ?? null : null,
       turn.started_at, turn.completed_at, turn.duration_ms, turn.status, turn.items, turn.slot_id, turn.credential_revision,
-      turn.paused_at, turn.paused_ms, turn.native_ref, turn.native_session_id);
+      turn.paused_at, turn.paused_ms, turn.native_ref, turn.native_session_id, turn.native_inspect_tools);
     }
   }
 

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { getPermissionMode } from '../permissions.js';
 import type { RpcMessage } from '../rpc.js';
-import { assertWritable, isSuperAgent, workingDirectory } from '../orchestration-tools.js';
+import { assertWritable, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
 import type { RunServices } from '../types.js';
 import { unansweredNotice, type UserInputQuestion } from '../user-input.js';
 
@@ -93,6 +93,12 @@ export function createCodexRequests(
     },
     async handle(message: RpcMessage) {
       if (message.id === undefined || !message.method) return false;
+      if (!nativeReadsEnabled(services.context) && ['item/commandExecution/requestApproval', 'execCommandApproval'].includes(message.method)) {
+        if (!signal.aborted && isRunning()) {
+          send({ id: message.id, result: { decision: message.method === 'execCommandApproval' ? 'denied' : 'decline' } });
+        }
+        return true;
+      }
       if (message.method === 'item/tool/requestUserInput') {
         const key = String(message.id);
         if (pending.has(key)) return true;

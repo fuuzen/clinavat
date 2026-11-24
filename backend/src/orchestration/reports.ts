@@ -4,7 +4,7 @@ import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { RuntimeView } from '../agent/manager.js';
 import type { AgentEvent } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
-import { reportBlock } from './instructions.js';
+import { reportBlock, type ReportSource } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
 
@@ -190,20 +190,18 @@ export class ReportDelivery {
       return;
     }
     const children = new Map(this.tasks.children(masterId).map(child => [child.id, child]));
-    const promptLimit = orchestrationModeOf(master) === 'super'
-      ? orchestrationConstants.superReportCharacters : orchestrationConstants.reportCharacters;
+    const superAgent = orchestrationModeOf(master) === 'super';
     let content = '';
     let promptContent = '';
     const sent: AgentTask[] = [];
     for (const task of pending) {
       const child = children.get(task.child_session_id);
       if (!child) continue;
-      const source = { name: child.agent_name ?? child.id, engine: child.engine, model: child.model, status: task.status,
-        task: task.prompt, text: task.report ?? '' };
-      const block = reportBlock(source);
+      const source = reportSource(child, task);
+      const block = reportBlock(source, { superAgent, stored: true });
       if (content && content.length + block.length > 90_000) break;
       content += (content ? '\n\n' : '') + block;
-      promptContent += (promptContent ? '\n\n' : '') + reportBlock(source, promptLimit);
+      promptContent += (promptContent ? '\n\n' : '') + reportBlock(source, { superAgent });
       sent.push(task);
     }
     try {
@@ -218,4 +216,9 @@ export class ReportDelivery {
       this.changed(masterId);
     }
   }
+}
+
+export function reportSource(child: Session, task: AgentTask): ReportSource {
+  return { name: child.agent_name ?? child.id, engine: child.engine, model: child.model,
+    status: task.status, task: task.prompt, text: task.report ?? '' };
 }

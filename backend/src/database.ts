@@ -5,6 +5,8 @@ import { HttpError, type User } from './models.js';
 import { ensureLocalHost } from './local-host.js';
 import { agentEngines, engineCheck } from './agent/engines.js';
 
+const superReadModeColumn = "TEXT NOT NULL DEFAULT 'overview' CHECK(super_read_mode IN ('off','overview','full'))";
+
 export function databasePath(dataDirectory: string): string {
   return join(resolve(dataDirectory), 'clinavat.sqlite');
 }
@@ -67,7 +69,8 @@ export class Store {
         title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', native_session_id TEXT, jsonl_file_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         model TEXT, reasoning_effort TEXT, permission_mode TEXT NOT NULL DEFAULT 'manual', slot_id TEXT,
-        agent_mode TEXT NOT NULL DEFAULT 'normal', role_preset TEXT NOT NULL DEFAULT 'default'
+        agent_mode TEXT NOT NULL DEFAULT 'normal', role_preset TEXT NOT NULL DEFAULT 'default',
+        super_read_mode ${superReadModeColumn}
       );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -167,7 +170,7 @@ export class Store {
         id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         seq INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance TEXT,
         status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','verifying','blocked','completed','cancelled')),
-        assigned_agent TEXT, depends_on TEXT, summary TEXT,
+        assigned_agent TEXT, depends_on TEXT, summary TEXT, review_rounds INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(master_session_id,seq)
       );
@@ -220,6 +223,7 @@ export class Store {
     // Copied turns of a branch keep their source's native session, whose history up to them is the same.
     this.addColumn('session_turns', 'native_ref', 'TEXT');
     this.addColumn('session_turns', 'native_session_id', 'TEXT');
+    this.addColumn('session_turns', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools IN (0,1))');
     // A branch starts from its source's native history; fork_native_* apply only until it has its own.
     for (const column of ['forked_from_session_id', 'forked_from_turn_id', 'fork_native_id', 'fork_native_anchor']) {
       this.addColumn('sessions', column, 'TEXT');
@@ -244,6 +248,12 @@ export class Store {
     this.addColumn('sessions', 'agent_access', "TEXT CHECK(agent_access IN ('read','write'))");
     this.addColumn('sessions', 'orchestration', 'INTEGER NOT NULL DEFAULT 0 CHECK(orchestration IN (0,1))');
     this.addColumn('sessions', 'orchestration_mode', "TEXT CHECK(orchestration_mode IN ('off','hybrid','super'))");
+    this.addColumn('sessions', 'super_read_mode', superReadModeColumn);
+    // Codex stores the tool list with its native thread. Pre-existing threads never offered inspect.
+    this.addColumn('sessions', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools IN (0,1))');
+    this.addColumn('sessions', 'agent_profile', 'TEXT');
+    this.addColumn('work_items', 'review_rounds', 'INTEGER NOT NULL DEFAULT 0');
+    this.addColumn('agent_tasks', 'work_item_id', 'TEXT REFERENCES work_items(id) ON DELETE SET NULL');
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
     this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");

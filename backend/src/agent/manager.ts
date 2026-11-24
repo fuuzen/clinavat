@@ -9,6 +9,7 @@ import { RunControl } from './run-control.js';
 import { HttpError } from '../models.js';
 import { awaitApproval, shellHash } from './run-context.js';
 import { RuntimeFailovers } from './runtime-failover.js';
+import { superReadModeOf } from './orchestration-tools.js';
 import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
 import { settingsKey, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
@@ -74,7 +75,8 @@ export class AgentManager {
   accepts(sessionId: string, context: AgentContext): boolean {
     const state = this.active.get(sessionId);
     return !this.failovers.has(sessionId) && !!state?.run && !state.finishing && !state.closing && !state.context.session.command
-      && !context.session.command && state.settings === settingsKey(context);
+      && !context.session.command && state.settings === settingsKey(context)
+      && superReadModeOf(state.context.session) === superReadModeOf(context.session);
   }
 
   /** `images` are the IDs of the images attached to the first message. */

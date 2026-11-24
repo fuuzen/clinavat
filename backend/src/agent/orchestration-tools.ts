@@ -21,6 +21,14 @@ export async function assertWritable(context: AgentContext, target: string): Pro
 export const orchestrationModes = ['off', 'hybrid', 'super'] as const;
 export type OrchestrationMode = typeof orchestrationModes[number];
 
+export const superReadModes = ['off', 'overview', 'full'] as const;
+export type SuperReadMode = typeof superReadModes[number];
+
+export function superReadModeOf(session: { super_read_mode?: string | null }): SuperReadMode {
+  const mode = session.super_read_mode;
+  return mode === 'off' || mode === 'full' ? mode : 'overview';
+}
+
 export function orchestrationModeOf(session: {
   orchestration?: number | boolean | null;
   orchestration_mode?: string | null;
@@ -41,6 +49,22 @@ export function isSuperAgent(context: AgentContext): boolean {
   return orchestrationModeOf(context.session) === 'super';
 }
 
+export function canInspectProject(session: Parameters<typeof orchestrationModeOf>[0] & Parameters<typeof superReadModeOf>[0]): boolean {
+  return orchestrationModeOf(session) === 'super' && superReadModeOf(session) !== 'off';
+}
+
+export function nativeReadsEnabled(context: AgentContext): boolean {
+  return !isSuperAgent(context) || superReadModeOf(context.session) === 'full';
+}
+
+export const superNativeReadLimit = 12;
+
+export function nativeReadDenied(context: AgentContext): string {
+  return superReadModeOf(context.session) === 'off'
+    ? 'Super Agent 当前读取档位为 off，请委派 explorer 子智能体检视项目。'
+    : 'Super Agent 当前读取档位为 overview，请使用 clinavat.inspect 或委派 explorer 子智能体。';
+}
+
 /**
  * Runs a Hub tool call of the master agent. The CLIs' own approval policies do not reliably cover these tools (Codex
  * skips them entirely), so calls that make children act are approved here, by the master's mode.
@@ -48,6 +72,7 @@ export function isSuperAgent(context: AgentContext): boolean {
 export async function callHubTool(services: RunServices, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult> {
   const host = services.config.orchestration;
   if (!host || !orchestrates(services.context)) return { text: '当前对话未开启编排', isError: true };
+  if (!host.toolsFor(services.context).some(item => item.name === tool)) return { text: `当前对话未启用编排工具 ${tool}`, isError: true };
   try {
     await services.control.waitUntilRunning(signal);
     const mode = getPermissionMode(services.context.session);
@@ -77,7 +102,7 @@ export async function answerHubMcp(services: RunServices, message: { id?: unknow
       serverInfo: { name: hubToolNamespace, version: '1.0.0' } } };
   }
   if (message.method === 'ping') return { result: {} };
-  if (message.method === 'tools/list') return { result: { tools: host.tools } };
+  if (message.method === 'tools/list') return { result: { tools: host.toolsFor(services.context) } };
   if (message.method === 'tools/call') {
     const result = await callHubTool(services, String(params.name ?? ''), params.arguments ?? {}, signal);
     return { result: { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) } };

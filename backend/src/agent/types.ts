@@ -10,7 +10,7 @@ import type { ExecutionHost } from '../execution/types.js';
 import type { TokenUsageUpdate, UsageOwner } from '../token-usage/ledger.js';
 import type { SlotModelCatalogs } from './model-catalog.js';
 import type { AgentEngine } from './engines.js';
-import type { OrchestrationMode } from './orchestration-tools.js';
+import type { OrchestrationMode, SuperReadMode } from './orchestration-tools.js';
 
 export interface AgentConfig {
   dataDir: string;
@@ -35,7 +35,7 @@ export interface HubTool { name: string; description: string; inputSchema: Recor
 export interface HubToolResult { text: string; isError?: boolean }
 
 export interface OrchestrationHost {
-  tools: HubTool[];
+  toolsFor(context: AgentContext): HubTool[];
   /** Calls that make other conversations act; they follow the master's approval mode. */
   directs(tool: string): boolean;
   /** Compact live snapshot of available engines, roster profiles, children and limits for the master's prompt. */
@@ -67,7 +67,9 @@ export interface AgentContext {
     fork_native_anchor?: string | null;
     jsonl_file_path?: string | null;
     model?: string | null;
+    model_is_explicit?: boolean;
     reasoning_effort?: string | null;
+    reasoning_effort_is_explicit?: boolean;
     permission_mode?: string | null;
     agent_mode?: string | null;
     role_preset?: string | null;
@@ -76,6 +78,7 @@ export interface AgentContext {
     goal?: { action: 'create' | 'resume'; objective?: string };
     orchestration?: number | boolean | null;
     orchestration_mode?: OrchestrationMode | null;
+    super_read_mode?: SuperReadMode | null;
     parent_session_id?: string | null;
     agent_name?: string | null;
     agent_access?: 'read' | 'write' | null;
@@ -111,6 +114,7 @@ export interface AgentCallbacks {
   saveMessage(sessionId: string, role: string, content: string): void | Promise<void>;
   updateSession(sessionId: string, fields: {
     native_session_id?: string;
+    native_inspect_tools?: 0 | 1;
     status?: string;
     jsonl_file_path?: string;
   }): void | Promise<void>;

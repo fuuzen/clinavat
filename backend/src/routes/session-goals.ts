@@ -4,11 +4,12 @@ import { z } from 'zod';
 import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Session } from '../models.js';
 import { slotForUser } from '../accounts/access.js';
-import { accessCodexGoal, type CodexGoal } from '../agent/codex/goal.js';
+import { accessCodexGoal, codexInspectToolsChanged, type CodexGoal } from '../agent/codex/goal.js';
 import { resolveAgentSelection } from '../agent/model-catalog.js';
 import { validatePermissionMode } from '../agent/permissions.js';
 import { validateSessionSettings } from '../agent/session-settings.js';
 import type { AgentContext } from '../agent/types.js';
+import { resetReviewsForUserMessage } from '../orchestration/board.js';
 
 const identifier = z.object({ id: z.uuid() });
 const objective = z.string().trim().min(1).max(4000);
@@ -73,8 +74,12 @@ async function startGoal(context: Context, session: Session, action: Extract<Goa
     const existingGoal = session.native_session_id ? await accessCodexGoal(config, runtime) : null;
     if (action.action === 'resume' && !existingGoal) throw new HttpError(409, '当前对话尚未设置 Goal');
     if (action.action === 'create' && existingGoal) throw new HttpError(409, '当前目标已存在，请使用 /goal edit 修改');
+    const renewThread = codexInspectToolsChanged(session);
+    if (renewThread) runtime.session = { ...runtime.session, native_session_id: null, jsonl_file_path: null,
+      fork_native_id: null, fork_native_anchor: null,
+      ...(existingGoal ? { goal: { action: 'create', objective: existingGoal.objective } } : {}) };
     const resolved = await resolveAgentSelection(config, runtime, { model: session.model, reasoningEffort: session.reasoning_effort },
-      context.agentDefaults.forUser(session.user_id, 'codex'));
+      context.agentDefaults.forUser(session.user_id, 'codex'), true);
     runtime.session = { ...runtime.session, model: resolved.model, reasoning_effort: resolved.reasoningEffort };
     try { await workspaces.flush(project); }
     catch (error) {
@@ -87,9 +92,11 @@ async function startGoal(context: Context, session: Session, action: Extract<Goa
       "SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY rowid DESC LIMIT 1", session.id)?.id;
     if (!messageId) throw new HttpError(409, '请先开始一次对话，再恢复 Goal');
     store.transaction(() => {
+      if (renewThread) turns.clearNativeSession(session.id);
       if (action.action === 'create') store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'user',?)", messageId, session.id, action.objective);
       store.run("UPDATE sessions SET status='running',updated_at=datetime('now') WHERE id=?", session.id);
     });
+    if (action.action === 'create') resetReviewsForUserMessage(context, session);
     turns.start(session.id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision }, turnId);
     if (action.action === 'create') events.emit(session.user_id, { type: 'message', sessionId: session.id,
       payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });

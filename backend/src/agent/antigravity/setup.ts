@@ -1,11 +1,13 @@
-import { lstat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { privateSubdirectory } from '../../accounts/credential-files.js';
 import { atomicWrite } from '../../runtime/process.js';
 import { quoteShell } from '../environment.js';
-import { isSuperAgent } from '../orchestration-tools.js';
+import { isSuperAgent, nativeReadDenied, superNativeReadLimit, superReadModeOf, workingDirectory } from '../orchestration-tools.js';
 import type { AgentContext } from '../types.js';
 import { toolShimProgram } from './tool-bridge.js';
+import { hookProgram } from './hook-program.js';
 
 /**
  * Repository files agy loads at the start of every session, even in a folder it was never asked to trust. They run
@@ -15,36 +17,6 @@ const executableCustomizations = ['.agents/hooks.json', '.agents/mcp_config.json
 
 /** Project paths no agent may read or write, as for Claude Code; the last ones would let an agent plant the files above. */
 const protectedTargets = ['.bin/', '.git/', '.claude/', '.codex/', ...executableCustomizations.map(file => file.endsWith('.json') ? file : `${file}/`)];
-
-/** Answers agy's lifecycle hooks; see `hooks` below. Any failure denies, so a broken hook never runs a command in place. */
-const hookProgram = String.raw`
-import json, shlex, sys
-mode = sys.argv[1]
-try:
-    payload = json.load(sys.stdin)
-    if mode == 'stop':
-        fields = ('conversationId', 'fullyIdle', 'terminationReason')
-        with open(sys.argv[2], 'a') as log:
-            log.write(json.dumps({key: payload.get(key) for key in fields}) + '\n')
-        print('{}')
-    elif mode == 'deny':
-        print(json.dumps({'decision': 'deny', 'reason': sys.argv[2]}))
-    else:
-        shell = sys.argv[2]
-        arguments = (payload.get('toolCall') or {}).get('args') or {}
-        command = arguments.get('CommandLine')
-        if not shell:
-            print(json.dumps({'decision': 'ask'}))
-        else:
-            if not isinstance(command, str):
-                raise ValueError('missing command')
-            background = ' --background' if arguments.get('IsDaemon') is True else ''
-            directory = payload.get('cwd') or '.'
-            routed = 'cd %s && %s%s -c %s' % (shlex.quote(directory), shlex.quote(shell), background, shlex.quote(command))
-            print(json.dumps({'decision': 'ask', 'overwrite': {'CommandLine': routed}}))
-except Exception as error:
-    print(json.dumps({'decision': 'deny', 'reason': 'Clinavat hook failed: %s' % error}))
-`;
 
 /** What agy prefixes to the output of a command a hook rewrote; its absence means a command ran without routing. */
 export const rewrittenCommandNotice = 'A pre-tool hook changed the arguments of this tool call before it ran.';
@@ -61,6 +33,9 @@ export interface AntigravityHome {
   shell: string | null;
   /** The stdio MCP server that carries a master agent's calls to the Hub. */
   toolShim: string;
+  hookEnvironment: NodeJS.ProcessEnv;
+  resetReadBudget(): Promise<void>;
+  close(): Promise<void>;
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -88,20 +63,17 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   const toolShim = path.join(config, 'clinavat-mcp.py');
   const run = (...args: string[]) => ['python3', '-I', hook, ...args].map(quoteShell).join(' ');
   const superAgent = isSuperAgent(context);
-  const deny = (tool: string, reason = 'Subagents are disabled in this workspace; do the work yourself.') =>
-    ({ matcher: tool, hooks: [{ type: 'command', command: run('deny', reason), timeout: 30 }] });
-  const superDenyReason = 'You are running in Super Agent (delegate-first) mode and cannot directly edit files or run commands; delegate implementation and command execution to child agents using the clinavat tools.';
-  const readOnlyDenyReason = 'You are a read-only child agent and cannot modify files; describe the changes you need in your final reply.';
+  const readMode = superAgent ? superReadModeOf(context.session) : 'normal';
+  const counter = readMode === 'full' ? path.join(config, `clinavat-read-${randomUUID()}.count`) : undefined;
+  const preToolUse = (matcher: string, ...args: string[]) =>
+    ({ matcher, hooks: [{ type: 'command', command: run(...args), timeout: 30 }] });
   const hooks = { clinavat: {
     PreToolUse: [
-      ...(superAgent
-        ? ['run_command', 'write_file', 'edit_file', 'run_workflow'].map(tool => deny(tool, superDenyReason))
-        : [{ matcher: 'run_command', hooks: [{ type: 'command', command: run('command', shell ?? ''), timeout: 30 }] }]),
+      preToolUse('^run_command$', 'command'),
+      preToolUse('^(read_file|view_file|view_file_outline|grep_search|find_by_name|list_dir)$', 'read'),
+      preToolUse('^(write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|run_workflow)$', 'write'),
       // A subagent's permission requests never reach an ACP client, so its commands would wait and fail.
-      ...['invoke_subagent', 'define_subagent', 'manage_subagents'].map(tool => deny(tool)),
-      ...(!superAgent && context.session.agent_access === 'read'
-        ? ['write_file', 'edit_file'].map(tool => deny(tool, readOnlyDenyReason))
-        : []),
+      preToolUse('^(invoke_subagent|define_subagent|manage_subagents)$', 'deny', 'Subagents are disabled in this workspace; do the work yourself.'),
     ],
     Stop: [{ type: 'command', command: run('stop', stopLog), timeout: 10 }],
   } };
@@ -124,5 +96,11 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
     stopOffset = 0;
   }
   await atomicWrite(toolShim, toolShimProgram);
-  return { stopLog, stopOffset, shell, toolShim };
+  const hookEnvironment = { CLINAVAT_AGY_ROOT: root, CLINAVAT_AGY_CWD: workingDirectory(context),
+    CLINAVAT_AGY_ACCESS: superAgent ? 'super' : context.session.agent_access ?? 'write', CLINAVAT_AGY_MODE: readMode,
+    CLINAVAT_AGY_SHELL: shell ?? '', CLINAVAT_AGY_READ_COUNTER: counter,
+    CLINAVAT_AGY_READ_DENIAL: nativeReadDenied(context), CLINAVAT_AGY_READ_LIMIT: String(superNativeReadLimit) };
+  return { stopLog, stopOffset, shell, toolShim, hookEnvironment,
+    resetReadBudget: async () => { if (counter) await atomicWrite(counter, '0'); },
+    close: async () => { if (counter) await rm(counter, { force: true }); } };
 }
