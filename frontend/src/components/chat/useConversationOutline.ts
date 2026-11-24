@@ -98,7 +98,8 @@ export function useConversationOutline(
         const viewportTop = scroll.getBoundingClientRect().top;
         anchors = ids.flatMap((id) => {
           const element = document.getElementById(id);
-          return element && scroll.contains(element)
+          // Anchors inside collapsed (display: none) groups have no position to measure.
+          return element && scroll.contains(element) && element.getClientRects().length
             ? [{ id, top: element.getBoundingClientRect().top - viewportTop + scrollTop }]
             : [];
         });

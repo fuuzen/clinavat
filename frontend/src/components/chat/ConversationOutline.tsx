@@ -119,6 +119,11 @@ export default function ConversationOutline({ messages, turns, scrollRef, onNavi
     if (!scroll || !target || !scroll.contains(target)) return;
     onNavigate();
     close();
+    // Expand collapsed autonomous runs first; hidden targets have no layout to scroll to.
+    for (let details = target.closest<HTMLElement>(".autonomous-run-details[hidden]"); details;
+      details = details.parentElement?.closest<HTMLElement>(".autonomous-run-details[hidden]") ?? null) {
+      details.closest(".autonomous-run")?.querySelector<HTMLButtonElement>('.autonomous-run-toggle[aria-expanded="false"]')?.click();
+    }
     // Stop following new output before scrolling; animation can re-enable following near the bottom.
     window.requestAnimationFrame(() => {
       if (!target.isConnected) return;
