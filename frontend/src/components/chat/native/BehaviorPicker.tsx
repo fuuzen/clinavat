@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, RotateCw, UserRound, Workflow } from "lucide-react";
-import type { AgentBehavior, AgentProfile, OrchestrationMode, RolePreset, Session } from "../../../types";
+import { Check, ChevronDown, ClipboardList, Code2, FolderTree, LoaderCircle, RotateCw, UserRound, Workflow } from "lucide-react";
+import type { AgentBehavior, AgentProfile, OrchestrationMode, RolePreset, Session, SuperReadMode } from "../../../types";
 import { api } from "../../../api";
 import SettingsHelp from "../SettingsHelp";
 import SettingsMenu from "../SettingsMenu";
@@ -16,6 +16,12 @@ const orchestrationOptions: { value: OrchestrationMode; label: string; descripti
   { value: "off", label: "关闭", description: "普通对话，不派生子智能体。" },
   { value: "hybrid", label: "协作编排", description: "主智能体可直接读写与执行，也可派生子智能体协作。" },
   { value: "super", label: "Super Agent", description: "只读统筹模式：保留只读查验，所有代码修改与命令执行均委派子智能体实施。" },
+];
+
+const superReadOptions: { value: SuperReadMode; label: string; short: string; description: string }[] = [
+  { value: "overview", label: "目录与文档（默认）", short: "目录与文档", description: "仅可查看限深目录树、文档与根包清单，源码细节交由子智能体" },
+  { value: "off", label: "关闭自主读取", short: "关闭自主读取", description: "仅依据看板、记忆、子智能体汇报与你显式附带的 @文件 决策" },
+  { value: "full", label: "项目内只读抽检", short: "只读抽检", description: "允许按单轮配额抽检项目源码，修改与命令执行仍委派子智能体" },
 ];
 
 export interface OrchestrationLock {
@@ -40,16 +46,17 @@ export function behaviorSummary(engine: AgentEngine, value: AgentBehavior) {
   const superMode = orchestrationMode === "super";
   const role = rolePresets.find((item) => item.value === value.rolePreset) || rolePresets[0];
   const orchestrationBadge = superMode ? " · Super Agent" : orchestrating ? " · 协作编排" : "";
+  const superRead = superReadOptions.find((item) => item.value === (value.superReadMode ?? "overview")) || superReadOptions[0];
   const label = `${planning ? "Plan" : "Normal"}${roleSelectable && role.value !== "default" ? ` · ${role.label}` : ""}${orchestrationBadge}`;
   const shortTag = superMode ? "Super" : planning ? "Plan" : orchestrating ? "编排" : roleSelectable && role.value !== "default" ? role.label : null;
-  const title = `${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}${orchestrationBadge}`;
+  const title = `${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}${orchestrationBadge}${superMode ? `（${superRead.short}）` : ""}`;
   const highlighted = planning || orchestrating || (roleSelectable && role.value !== "default");
   const icon = planning ? ClipboardList : superMode ? Workflow : Code2;
-  return { planning, roleSelectable, orchestrationMode, orchestrating, superMode, role, label, shortTag, title, highlighted, icon };
+  return { planning, roleSelectable, orchestrationMode, orchestrating, superMode, superRead, role, label, shortTag, title, highlighted, icon };
 }
 
 export function BehaviorMenuBody(props: BehaviorMenuProps & { close: () => void; headingPrefix?: ReactNode }) {
-  const { roleSelectable, orchestrationMode, orchestrating, role } = behaviorSummary(props.engine, props.value);
+  const { roleSelectable, orchestrationMode, orchestrating, superMode, superRead, role } = behaviorSummary(props.engine, props.value);
   const modes = [
     { value: "normal", label: "Normal", description: "执行任务，操作遵循当前授权模式。" },
     { value: "plan", label: "Plan", description: "先分析并制定计划，确认后再切换 Normal 实施。" },
@@ -101,6 +108,21 @@ export function BehaviorMenuBody(props: BehaviorMenuProps & { close: () => void;
           <SettingsHelp text={option.description} />
         </div>;
       })}
+      {superMode && <>
+        <div className="settings-menu-heading"><span><FolderTree size={13} />项目读取范围</span>
+          <SettingsHelp menuItem text="控制 Super Agent 自主读取项目文件的范围，避免陷入代码细节；任何档位下你手动输入的 @文件 引用均正常生效。" /></div>
+        {superReadOptions.map((option) => <div className="settings-menu-entry" key={option.value}>
+          {/* Only the "all" lock applies: a "toggle" lock keeps orchestration on, so the read scope stays adjustable. */}
+          <button className="settings-menu-item compact" role="menuitemradio" aria-checked={superRead.value === option.value}
+            disabled={props.orchestrationLock?.scope === "all"} aria-description={option.description} tabIndex={-1} type="button" onClick={() => {
+            props.onChange({ ...props.value, superReadMode: option.value }); props.close();
+          }}>
+            <span className="settings-item-copy">{option.label}</span>
+            <Check size={14} className="settings-item-check" />
+          </button>
+          <SettingsHelp text={option.description} />
+        </div>)}
+      </>}
       {orchestrating && props.roster?.profiles.length && props.roster.session ? (() => {
         const { profiles, session } = props.roster;
         const chosen: string[] | null = session.agent_profiles ? JSON.parse(session.agent_profiles) : null;

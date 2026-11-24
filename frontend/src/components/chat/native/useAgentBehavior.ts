@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentBehavior, OrchestrationMode, Session } from "../../../types";
+import type { AgentBehavior, OrchestrationMode, Session, SuperReadMode } from "../../../types";
 import { engineProfiles, type AgentEngine } from "../../../engines";
 
 function orchestrationModeOf(session: Session | undefined, engine: AgentEngine): OrchestrationMode {
@@ -8,6 +8,11 @@ function orchestrationModeOf(session: Session | undefined, engine: AgentEngine):
     return session.orchestration_mode;
   }
   return session?.orchestration === 1 ? "hybrid" : "off";
+}
+
+function superReadModeOf(session: Session | undefined): SuperReadMode {
+  const mode = session?.super_read_mode;
+  return mode === "off" || mode === "full" ? mode : "overview";
 }
 
 export function useAgentBehavior(session: Session | undefined, projectId: string | undefined,
@@ -19,6 +24,7 @@ export function useAgentBehavior(session: Session | undefined, projectId: string
     rolePreset: session?.role_preset || "default",
     orchestration: initialMode !== "off",
     orchestrationMode: initialMode,
+    superReadMode: superReadModeOf(session),
   });
   const [saving, setSaving] = useState(false);
   const requestRef = useRef(0);
@@ -30,9 +36,10 @@ export function useAgentBehavior(session: Session | undefined, projectId: string
       rolePreset: engineProfiles[engine].rolePresets ? session?.role_preset || "default" : "default",
       orchestration: mode !== "off",
       orchestrationMode: mode,
+      superReadMode: superReadModeOf(session),
     });
     setSaving(false);
-  }, [session?.id, projectId, engine, session?.agent_mode, session?.role_preset, session?.orchestration, session?.orchestration_mode, session?.parent_session_id]);
+  }, [session?.id, projectId, engine, session?.agent_mode, session?.role_preset, session?.orchestration, session?.orchestration_mode, session?.super_read_mode, session?.parent_session_id]);
 
   async function changeBehavior(next: AgentBehavior) {
     if (active || saving) return false;

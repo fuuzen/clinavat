@@ -116,6 +116,10 @@ export interface Session {
   orchestration?: 0 | 1;
   /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
   orchestration_mode?: OrchestrationMode | null;
+  /** How far a Super Agent may read the project on its own. */
+  super_read_mode?: SuperReadMode;
+  /** 1 for a child agent archived on its own once its task is done. */
+  agent_ephemeral?: number;
 }
 
 /** A master conversation's children as its agent panel shows them. */
@@ -176,6 +180,7 @@ export interface WorkItemView {
   assignedAgent: string | null;
   dependsOn: string[];
   summary: string | null;
+  reviewRounds?: number;
   updatedAt: string;
 }
 export interface MemoryEntryView {
@@ -217,6 +222,8 @@ export type PermissionMode = "manual" | "accept-edits" | "auto" | "full-access" 
 export type AgentMode = "normal" | "plan";
 export type RolePreset = "default" | "reviewer" | "architect";
 export type OrchestrationMode = "off" | "hybrid" | "super";
+/** 'overview' limits a Super Agent to the directory tree and documents; 'full' allows capped source reads. */
+export type SuperReadMode = "off" | "overview" | "full";
 export interface AgentBehavior {
   agentMode: AgentMode;
   rolePreset: RolePreset;
@@ -224,6 +231,7 @@ export interface AgentBehavior {
   orchestration: boolean;
   /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
   orchestrationMode: OrchestrationMode;
+  superReadMode?: SuperReadMode;
 }
 
 export interface AgentSelection {
