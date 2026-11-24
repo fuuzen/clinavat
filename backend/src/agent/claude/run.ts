@@ -205,15 +205,14 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         services.event('activity', { id, kind: 'text', text, append: true });
       }
     }
+    if (event.type === 'assistant') tokenUsage.observeAssistant(event);
     if (event.type === 'assistant' && agent) {
-      tokenUsage.observeAssistant(event);
       for (const entry of Array.isArray(event.message?.content) ? event.message.content : []) {
         if (entry.type === 'tool_use') services.event('tool', { id: entry.id, tool: entry.name, input: entry.input, status: 'running', agent });
       }
     }
     if (event.type === 'assistant' && !agent) {
       quota.observeAssistant(event);
-      tokenUsage.observeAssistant(event);
       if (typeof event.uuid === 'string') lastAssistantUuid = event.uuid;
       const contents = Array.isArray(event.message?.content) ? event.message.content : [];
       const nativeMessageId = String(event.message?.id || messageId || randomUUID());
@@ -249,7 +248,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
       }
     }
     if (event.type === 'result') {
-      services.recordTokenUsage({ records: tokenUsage.finish(event) });
+      services.recordTokenUsage(tokenUsage.finish(event));
       if (lastAssistantUuid && nativeSessionReceived) services.event('turn-anchor', { ref: lastAssistantUuid, nativeSessionId: nativeId });
       lastAssistantUuid = '';
       if (event.is_error || (event.subtype && event.subtype !== 'success')) {

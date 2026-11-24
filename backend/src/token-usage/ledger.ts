@@ -6,7 +6,9 @@ import type { AgentEngine } from '../agent/engines.js';
 
 export interface UsageOwner { userId: string; slotId: string; sessionId: string; turnId: string | null; engine: AgentEngine }
 
-export type TokenUsageUpdate = { records: UsageRecord[] } | { codex: { model: string; tokenUsage: unknown } };
+export type TokenUsageUpdate = { records: UsageRecord[]; contextTokens?: number | null } | { codex: { model: string; tokenUsage: unknown } };
+
+const positiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
 export interface UsageRow {
   user_id: string; username: string | null; slot_id: string; slot_label: string | null;
@@ -33,9 +35,14 @@ export class TokenUsageLedger {
 
   apply(owner: UsageOwner, update: TokenUsageUpdate): void {
     this.store.transaction(() => {
-      if ('records' in update) { this.insert(owner, update.records); return; }
-      const usage = update.codex.tokenUsage as { total?: unknown; last?: unknown } | null;
+      if ('records' in update) {
+        this.insert(owner, update.records);
+        this.recordContext(owner.sessionId, update.contextTokens);
+        return;
+      }
+      const usage = update.codex.tokenUsage as { total?: unknown; last?: unknown; modelContextWindow?: unknown } | null;
       const total = codexTotals(usage?.total), last = codexTotals(usage?.last);
+      if (last) this.recordContext(owner.sessionId, last.inputTokens + last.cacheWriteInputTokens, usage?.modelContextWindow);
       const session = this.store.get<{ token_usage_cursor: string | null }>('SELECT token_usage_cursor FROM sessions WHERE id=?', owner.sessionId);
       if (!total || !last || !session) return;
       const cursor = session.token_usage_cursor ? codexTotals(JSON.parse(session.token_usage_cursor)) ?? null : null;
@@ -43,6 +50,12 @@ export class TokenUsageLedger {
       if (record) this.insert(owner, [record]);
       this.store.run('UPDATE sessions SET token_usage_cursor=? WHERE id=?', JSON.stringify(total), owner.sessionId);
     });
+  }
+
+  private recordContext(sessionId: string, tokens: number | null | undefined, window?: unknown): void {
+    if (!positiveInteger(tokens)) return;
+    this.store.run('UPDATE sessions SET last_context_tokens=?,last_context_window=COALESCE(?,last_context_window) WHERE id=?',
+      tokens, positiveInteger(window) ? window : null, sessionId);
   }
 
   /** Totals per user, slot and model since `since` (UTC, SQLite format); `userId` limits them to one user. */

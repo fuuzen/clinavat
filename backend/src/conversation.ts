@@ -114,7 +114,7 @@ export class ConversationStore {
 
   clearNativeSession(sessionId: string): void {
     this.store.run(`UPDATE sessions SET native_session_id=NULL,fork_native_id=NULL,fork_native_anchor=NULL,jsonl_file_path=NULL,
-      native_inspect_tools=0,token_usage_cursor=NULL,updated_at=datetime('now') WHERE id=?`, sessionId);
+      native_inspect_tools=0,token_usage_cursor=NULL,last_context_tokens=0,last_context_window=0,updated_at=datetime('now') WHERE id=?`, sessionId);
   }
 
   /** Copies the messages and turns up to and including `turnId` into another conversation, under new IDs. */

@@ -26,8 +26,11 @@ export const orchestrationDefaults: OrchestrationSettings = {
   discussionParticipants: 5, debateRounds: 4,
 };
 
-/** Fixed by the protocol rather than by policy. */
+const configuredRolloverTokens = Number(process.env.CLINAVAT_SUPER_AUTO_ROLLOVER_TOKENS);
+
 export const orchestrationConstants = {
+  superAutoRolloverTokens: Number.isSafeInteger(configuredRolloverTokens) && configuredRolloverTokens > 0
+    ? Math.max(32_000, configuredRolloverTokens) : 140_000,
   /** A report longer than this is cut; the master can read the rest with read_agent. */
   reportCharacters: 16 * 1024,
   /** Compact report budget injected into a Super Agent's prompt; full text stays available via read_agent. */

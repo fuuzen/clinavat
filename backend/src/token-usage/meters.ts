@@ -31,15 +31,19 @@ function priced(model: string, counts: TokenCounts, cliCost?: unknown): UsageRec
 /** Claude states every API call once, on the next result, keyed by model and with the CLI's own cost estimate. */
 export class ClaudeUsageMeter {
   private messages = new Map<string, { model: string; usage: Record<string, unknown> }>();
+  private lastContextTokens = 0;
 
   observeAssistant(event: any): void {
     const message = event?.message;
-    if (typeof message?.id === 'string' && message.usage && typeof message.usage === 'object') {
-      this.messages.set(message.id, { model: String(message.model || 'unknown'), usage: message.usage });
+    const usage = message?.usage;
+    if (!usage || typeof usage !== 'object') return;
+    if (typeof message.id === 'string') this.messages.set(message.id, { model: String(message.model || 'unknown'), usage });
+    if (!event.parent_tool_use_id && !event.agent_id) {
+      this.lastContextTokens = count(usage.input_tokens) + count(usage.cache_read_input_tokens) + count(usage.cache_creation_input_tokens);
     }
   }
 
-  finish(result: any): UsageRecord[] {
+  finish(result: any): { records: UsageRecord[]; contextTokens: number } {
     const stated = result?.model_usage_since_last_result;
     const records = stated && typeof stated === 'object'
       ? Object.entries(stated as Record<string, any>).map(([model, usage]) => priced(model, {
@@ -52,7 +56,9 @@ export class ClaudeUsageMeter {
         cacheWriteTokens: count(usage.cache_creation_input_tokens), outputTokens: count(usage.output_tokens), reasoningTokens: 0,
       }));
     this.messages.clear();
-    return records.filter(hasTokens);
+    const contextTokens = this.lastContextTokens;
+    this.lastContextTokens = 0;
+    return { records: records.filter(hasTokens), contextTokens };
   }
 }
 
@@ -84,4 +90,30 @@ export function antigravityUsage(model: string, usage: any): UsageRecord | null 
   const counts: TokenCounts = { inputTokens: count(usage?.inputTokens), cacheReadTokens: count(usage?.cachedReadTokens),
     cacheWriteTokens: count(usage?.cachedWriteTokens), outputTokens: count(usage?.outputTokens), reasoningTokens: count(usage?.thoughtTokens) };
   return hasTokens(counts) ? priced(model, counts) : null;
+}
+
+/** ACP reports aggregate input for a prompt. A batch of parallel calls belongs to one model response. */
+export class AntigravityPromptRounds {
+  private rounds = 1;
+  private phase: 'output' | 'tools' | 'results' = 'output';
+  private activeTools = new Set<string>();
+
+  observe(kind: string, callId?: string, status?: string): void {
+    const finished = status === 'completed' || status === 'failed';
+    if (kind === 'tool_call' && callId) {
+      if (this.phase === 'results') this.rounds++;
+      this.phase = 'tools';
+      if (!finished) this.activeTools.add(callId);
+    } else if (kind === 'tool_call_update' && finished && callId && this.activeTools.delete(callId) && !this.activeTools.size) {
+      this.phase = 'results';
+    } else if (this.phase !== 'output' && (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk')) {
+      this.rounds++;
+      this.phase = 'output';
+      this.activeTools.clear();
+    }
+  }
+
+  estimate(record: UsageRecord): number {
+    return Math.round((record.inputTokens + record.cacheReadTokens + record.cacheWriteTokens) / this.rounds);
+  }
 }
