@@ -1,8 +1,10 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { Message, ToolEvent, Turn } from "../../types";
 import ExecutionGroup from "./ExecutionGroup";
 import MessageView, { AgentAvatar, Markdown } from "./MessageView";
 import TurnProcess from "./TurnProcess";
+import AutonomousRunGroup, { CycleNoticeFrame } from "./agents/AutonomousRunGroup";
+import { buildConversationBlocks } from "./agents/autonomousRuns";
 import { isActive } from "../../api";
 import { engineLabel, type AgentEngine } from "../../engines";
 
@@ -37,15 +39,24 @@ export default function ConversationTurns(props: Props) {
   const forkable = new Map(props.turns.filter((turn) => turn.assistant_message_id && turn.native_ref && finished.has(turn.status))
     .map((turn) => [turn.assistant_message_id!, turn]));
   const { onFork } = props;
+  const renderMessage = (message: Message): ReactNode => (
+    <Fragment key={message.id}>
+      <MessageView message={message} username={props.username} agentName={agentName} engine={engine}
+        onFork={onFork && forkable.has(message.id) ? () => onFork(forkable.get(message.id)!) : undefined} />
+      {turnsByMessage.get(message.id)?.map(turn => <TurnProcess key={turn.id} turn={turn} />)}
+    </Fragment>
+  );
   return (
     <>
-      {props.messages.map((message) => (
-        <Fragment key={message.id}>
-          <MessageView message={message} username={props.username} agentName={agentName} engine={engine}
-            onFork={onFork && forkable.has(message.id) ? () => onFork(forkable.get(message.id)!) : undefined} />
-          {turnsByMessage.get(message.id)?.map(turn => <TurnProcess key={turn.id} turn={turn} />)}
-        </Fragment>
-      ))}
+      {buildConversationBlocks(props.messages, turnsByMessage).map((block) => {
+        const key = block.kind === "run" ? block.cycles[0].messages[0].id : block.messages[0].id;
+        if (block.kind === "run") {
+          return <AutonomousRunGroup key={key} cycles={block.cycles}>{block.cycles.flatMap((cycle) => cycle.messages).map(renderMessage)}</AutonomousRunGroup>;
+        }
+        return block.notice
+          ? <CycleNoticeFrame key={key} notice={block.notice}>{block.messages.map(renderMessage)}</CycleNoticeFrame>
+          : <Fragment key={key}>{block.messages.map(renderMessage)}</Fragment>;
+      })}
       {props.turns.filter((turn) => !messageIds.has(turn.user_message_id)).map((turn) => (
         <div key={turn.id} id={`conversation-turn-${turn.id}`} className="conversation-turn-anchor" tabIndex={-1}>
           <TurnProcess turn={turn} />
