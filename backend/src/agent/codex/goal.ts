@@ -1,8 +1,9 @@
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import { getPermissionMode } from '../permissions.js';
-import { isSuperAgent, workingDirectory } from '../orchestration-tools.js';
+import { canInspectProject, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
 import type { AgentConfig, AgentContext } from '../types.js';
+import type { Session } from '../../models.js';
 
 export interface CodexGoal {
   threadId: string;
@@ -21,9 +22,10 @@ export interface CodexGoalChange {
 }
 
 export function codexServerArguments(context: AgentContext): string[] {
+  const shell = nativeReadsEnabled(context);
   return [
     '-c', 'cli_auth_credentials_store="file"',
-    '-c', 'features.shell_tool=true', '-c', 'features.unified_exec=true', '-c', 'features.goals=true',
+    '-c', `features.shell_tool=${shell}`, '-c', `features.unified_exec=${shell}`, '-c', 'features.goals=true',
     '-c', 'features.shell_snapshot=false', '-c', `features.multi_agent=${isSuperAgent(context) ? 'false' : 'true'}`,
     // Codex's own defaults: OpenAI's cached index, which exposes less to prompt injection, and live pages with full access.
     '-c', `web_search="${getPermissionMode(context.session) === 'full-access' ? 'live' : 'cached'}"`,
@@ -31,6 +33,11 @@ export function codexServerArguments(context: AgentContext): string[] {
     ...(context.session.agent_directory ? ['-c', `projects.${JSON.stringify(workingDirectory(context))}.trust_level="untrusted"`] : []),
     'app-server',
   ];
+}
+
+/** The app-server only sets dynamic tools when a native thread is created. */
+export function codexInspectToolsChanged(session: Session): boolean {
+  return session.engine === 'codex' && !!session.native_session_id && !!session.native_inspect_tools !== canInspectProject(session);
 }
 
 export async function initializeCodexServer(rpc: RpcClient): Promise<void> {

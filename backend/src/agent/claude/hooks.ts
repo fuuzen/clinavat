@@ -3,7 +3,11 @@ import { quoteShell, workspacePath } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import type { RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
-import { assertWritable, hubToolNamespace, isSuperAgent, orchestrates } from '../orchestration-tools.js';
+import { assertWritable, hubToolNamespace, isSuperAgent, nativeReadDenied, nativeReadsEnabled, orchestrates,
+  superNativeReadLimit } from '../orchestration-tools.js';
+
+const nativeReads = new Set(['Read', 'Glob', 'Grep']);
+const readBudgets = new WeakMap<RunServices, { turnId: string | undefined; calls: number }>();
 
 function decision(allowed: boolean, reason: string, updatedInput?: Record<string, unknown>) {
   return { hookSpecificOutput: {
@@ -51,6 +55,17 @@ export async function preToolUseDecision(services: RunServices, input: Record<st
     }
     if (isSuperAgent(services.context) && ['Edit', 'Write', 'Bash', 'Agent'].includes(tool)) {
       return decision(false, '当前处于 Super Agent 只读统筹模式，不能直接修改文件、执行命令或调用原生子代理；请通过 clinavat 编排工具（start_agent / message_agent）委派子智能体实施。');
+    }
+    if (isSuperAgent(services.context) && nativeReads.has(tool)) {
+      if (!nativeReadsEnabled(services.context)) return denyHook(nativeReadDenied(services.context));
+      const turnId = services.context.session.turn_id;
+      let budget = readBudgets.get(services);
+      if (!budget || budget.turnId !== turnId) {
+        budget = { turnId, calls: 0 };
+        readBudgets.set(services, budget);
+      }
+      if (budget.calls >= superNativeReadLimit) return denyHook('本轮原生读取和搜索已达 12 次，请委派 explorer 子智能体。');
+      budget.calls++;
     }
     if (services.context.session.agent_access === 'read' && (tool === 'Edit' || tool === 'Write')) {
       return decision(false, '你是只读子智能体，不能修改文件；请在最终回复中说明需要的修改。');

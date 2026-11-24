@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Store } from '../database.js';
-import { HttpError } from '../models.js';
+import { HttpError, type Session } from '../models.js';
+import { orchestrationConstants } from './limits.js';
+import { orchestrationModeOf } from '../agent/orchestration-tools.js';
+import type { Context } from '../context.js';
 
 export const workItemStatuses = ['pending', 'in_progress', 'verifying', 'blocked', 'completed', 'cancelled'] as const;
 export type WorkItemStatus = typeof workItemStatuses[number];
@@ -16,6 +19,7 @@ export interface WorkItemRow {
   assigned_agent: string | null;
   depends_on: string | null;
   summary: string | null;
+  review_rounds: number;
   created_at: string;
   updated_at: string;
 }
@@ -30,6 +34,7 @@ export interface WorkItemView {
   assignedAgent: string | null;
   dependsOn: string[];
   summary: string | null;
+  reviewRounds: number;
   updatedAt: string;
 }
 
@@ -56,6 +61,13 @@ const normalizeCode = (reference: string): number | undefined => {
   const match = /^T?(\d+)$/i.exec(reference.trim());
   return match ? Number(match[1]) : undefined;
 };
+
+/** Called when a user-authored message is saved, so queued inputs take effect when they reach the master. */
+export function resetReviewsForUserMessage(context: Context, session: Session): void {
+  if (orchestrationModeOf(session) === 'super' && new WorkBoard(context.store).resetReviews(session.id)) {
+    context.config.orchestration?.publish?.(session.id);
+  }
+}
 
 /** Persistent task board for a master/Super Agent conversation. */
 export class WorkBoard {
@@ -129,6 +141,44 @@ export class WorkBoard {
     return this.serialize(this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE id=?', current.id)!);
   }
 
+  resolve(masterId: string, reference: string): WorkItemRow {
+    const item = this.find(masterId, reference);
+    if (!item) throw new HttpError(404, `任务看板中没有任务 ${reference}`);
+    return item;
+  }
+
+  reviewTask(masterId: string, agentName: string | null): WorkItemRow | undefined {
+    const tasks = this.rows(masterId).filter(item => agentName ? item.assigned_agent === agentName : item.status === 'verifying');
+    if (tasks.length > 1) throw new HttpError(400, '有多个相关看板任务，请用 task 指定本次审查对应的任务。');
+    return tasks[0];
+  }
+
+  beginReview(item: WorkItemRow): () => void {
+    const maxRounds = orchestrationConstants.maxSuperReviewRounds;
+    const userMessage = this.latestUserMessage(item.master_session_id);
+    const updated = this.store.run(`UPDATE work_items SET review_rounds=review_rounds+1,updated_at=datetime('now')
+      WHERE id=? AND review_rounds < ?`, item.id, maxRounds);
+    if (!updated.changes) {
+      throw new HttpError(409, `任务 ${codeOf(item.seq)} 已达到 ${maxRounds} 轮审查上限。请汇总分歧并向用户提出一个决策问题，或在仅剩非阻塞项时记录并接受。`);
+    }
+    // A failed dispatch may refund its round only while the same user message still defines the review budget.
+    return () => {
+      if (this.latestUserMessage(item.master_session_id) === userMessage) {
+        this.store.run("UPDATE work_items SET review_rounds=MAX(0,review_rounds-1),updated_at=datetime('now') WHERE id=?", item.id);
+      }
+    };
+  }
+
+  resetReviews(masterId: string): boolean {
+    return this.store.run(`UPDATE work_items SET review_rounds=0,updated_at=datetime('now')
+      WHERE master_session_id=? AND review_rounds>0 AND status NOT IN ('completed','cancelled')`, masterId).changes > 0;
+  }
+
+  private latestUserMessage(masterId: string): number | undefined {
+    return this.store.get<{ rowid: number }>(
+      "SELECT rowid FROM messages WHERE session_id=? AND role='user' AND source IS NULL ORDER BY rowid DESC LIMIT 1", masterId)?.rowid;
+  }
+
   briefingLines(masterId: string): string[] {
     const items = this.view(masterId);
     if (!items.length) return [];
@@ -141,7 +191,8 @@ export class WorkBoard {
         const who = item.assignedAgent ? `, @${item.assignedAgent}` : '';
         const deps = item.dependsOn.length ? `, depends:${item.dependsOn.join('+')}` : '';
         const note = item.summary ? ` — ${item.summary.replace(/\s+/g, ' ').slice(0, 120)}` : '';
-        return `  - \`${item.code}\` [${item.status}${who}${deps}] ${item.title}${note}`;
+        const reviews = item.reviewRounds ? `, reviews:${item.reviewRounds}/${orchestrationConstants.maxSuperReviewRounds}` : '';
+        return `  - \`${item.code}\` [${item.status}${who}${deps}${reviews}] ${item.title}${note}`;
       }),
     ];
   }
@@ -166,6 +217,7 @@ export class WorkBoard {
       assignedAgent: row.assigned_agent,
       dependsOn: row.depends_on ? JSON.parse(row.depends_on) as string[] : [],
       summary: row.summary,
+      reviewRounds: row.review_rounds,
       updatedAt: row.updated_at,
     };
   }

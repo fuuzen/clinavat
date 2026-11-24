@@ -245,11 +245,11 @@ export class WorkspaceManager {
     return { mirrorBytes: await diskUsage([project.local_path]) };
   }
 
-  private async openProjectPath(project: WorkspaceProject, path: string, directory = false): Promise<ContainedFile> {
+  private async openProjectPath(project: WorkspaceProject, path: string, directory = false, followLinks = true): Promise<ContainedFile> {
     this.validate(project);
     if (project.execution_mode === 'local') await this.checkLocalDirectory(project);
     if (path.includes('\0') || path.split(/[\\/]/).includes('.bin')) throw new Error('无法访问此工作区路径');
-    const opened = await openContained(project.local_path, path || '.', { directory, followLinks: true });
+    const opened = await openContained(project.local_path, path || '.', { directory, followLinks });
     if (relative(await realpath(project.local_path), opened.actualPath).split(sep).includes('.bin')) {
       await opened.handle.close();
       throw new Error('无法访问运行时内部文件');
@@ -273,8 +273,8 @@ export class WorkspaceManager {
     await access(actual, constants.R_OK | constants.W_OK | constants.X_OK);
   }
 
-  async files(project: WorkspaceProject, path = '') {
-    const {handle, actualPath} = await this.openProjectPath(project, path, true);
+  async files(project: WorkspaceProject, path = '', { followLinks = true } = {}) {
+    const {handle, actualPath} = await this.openProjectPath(project, path, true, followLinks);
     try {
       const entries = await readdir(descriptorPath(handle), {withFileTypes: true});
       const visible = entries.filter(entry => !entry.name.startsWith('.bin') && entry.name !== '.git' && !entry.isSymbolicLink());
@@ -299,8 +299,8 @@ export class WorkspaceManager {
   }
 
   /** The caller owns the returned handle and must close it. */
-  rawFile(project: WorkspaceProject, path: string): Promise<ContainedFile> {
-    return this.openProjectPath(project, path);
+  rawFile(project: WorkspaceProject, path: string, { followLinks = true } = {}): Promise<ContainedFile> {
+    return this.openProjectPath(project, path, false, followLinks);
   }
 
   /** The directory a written file goes into; unlike reads, writes never pass through symbolic links. The caller closes it. */

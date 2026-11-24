@@ -123,10 +123,11 @@ export async function startToolBridge(services: RunServices, shim: string, signa
 }
 
 /** A permission request for one of the Hub's tools; the Hub approves those itself when they run. */
-export function isHubToolCall(call: { name?: unknown; title?: unknown; kind?: unknown }, tools: string[]): boolean {
+export function isHubToolCall(call: { name?: unknown; title?: unknown; kind?: unknown }, services: RunServices): boolean {
+  const tools = services.config.orchestration?.toolsFor(services.context) ?? [];
   const names = [call.name, call.title].filter((value): value is string => typeof value === 'string');
   return names.some(name => {
     const match = new RegExp(`^(?:mcp[_:./]+)?${hubToolNamespace}[_:./]+([a-z_]+)$`).exec(name.trim());
-    return !!match && tools.includes(match[1]);
+    return !!match && tools.some(tool => tool.name === match[1]);
   });
 }

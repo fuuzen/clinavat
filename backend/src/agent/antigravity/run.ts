@@ -5,6 +5,7 @@ import { antigravityUsage } from '../../token-usage/meters.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
+import { superAntigravityModel } from '../model-catalog.js';
 import { assertWritable, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
 import { isHubToolCall, startToolBridge } from './tool-bridge.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
@@ -33,12 +34,12 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   if (signal.aborted) throw new Error('会话已停止');
   // A master's tools reach agy as a stdio MCP server, through a bridge back to the Hub.
   const tools = orchestrates(context) ? await startToolBridge(services, home.toolShim, signal) : undefined;
-  const child = await execution.spawn(binary, ['acp', '--disable-telemetry'], {
-    scope, cwd: workingDirectory(context), env: agentEnvironment(execution, context, scope),
-  }).catch((error: unknown) => { tools?.close(); throw error; });
+  const child = await home.resetReadBudget().then(() => execution.spawn(binary, ['acp', '--disable-telemetry'], {
+    scope, cwd: workingDirectory(context), env: { ...agentEnvironment(execution, context, scope), ...home.hookEnvironment },
+  })).catch(async (error: unknown) => { tools?.close(); await home.close().catch(() => undefined); throw error; });
   services.control.track(child);
   const closed = observeProcessClose(child);
-  void closed.then(() => tools?.close());
+  void closed.then(() => { tools?.close(); return home.close(); }).catch(() => undefined);
   let diagnostics = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-16 * 1024); });
@@ -154,15 +155,16 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       const pick = (kind: string) => options.find(option => option.kind === kind)?.optionId;
       const requestSignal = turnAbort.signal;
       const { tool, input } = describeToolCall(params.toolCall ?? {});
-      if (tools && isHubToolCall(params.toolCall ?? {}, services.config.orchestration?.tools.map(item => item.name) ?? [])) {
+      if (tools && isHubToolCall(params.toolCall ?? {}, services)) {
         const optionId = pick('allow_once');
         rpc.send({ id: message.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } });
         return;
       }
       if (tool === 'Bash' && home.shell) await services.verifyShell();
       // Full access lets the CLI's own rules decide; agy has no mode that skips its asks, so the Hub allows them.
-      const writes = ['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool);
-      const executes = params.toolCall?.kind === 'execute' || tool === 'Bash';
+      const leavingPlan = params.toolCall?.name === 'exit_plan_mode';
+      const writes = !leavingPlan && (['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool));
+      const executes = !leavingPlan && (params.toolCall?.kind === 'execute' || tool === 'Bash');
       // A child confined to a directory may change only paths agy names inside it; a change naming none is refused.
       const targets = [input.file_path, ...(Array.isArray(params.toolCall?.locations) ? params.toolCall.locations.map((location: { path?: unknown }) => location.path) : [])]
         .filter((target): target is string => typeof target === 'string');
@@ -300,13 +302,28 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     let options: ConfigOption[] = Array.isArray(session?.configOptions) ? session.configOptions : [];
     const choose = async (category: string, value: string, required: string) => {
       const option = options.find(item => item.category === category);
+      if (option?.currentValue === value) return;
       if (!option?.options?.some(item => item.value === value)) throw new Error(required);
-      if (option.currentValue === value) return;
       const changed = await rpc.request('session/set_config_option', { sessionId, configId: option.id, value }, 30_000);
       if (Array.isArray(changed?.configOptions)) options = changed.configOptions;
     };
-    if (context.session.model) await choose('model', context.session.model, `当前账号不提供模型 ${context.session.model}，请刷新模型列表后重新选择`);
-    if (context.session.reasoning_effort) await choose('thought_level', context.session.reasoning_effort, '所选模型不支持该思考强度');
+    const superAgent = isSuperAgent(context);
+    const modelOption = options.find(item => item.category === 'model');
+    const available = modelOption?.options?.flatMap(item => typeof item.value === 'string' ? [item.value] : []) ?? [];
+    const nativeModel = typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined;
+    let selectedModel = context.session.model;
+    if (superAgent && !(context.session.model_is_explicit ?? !!selectedModel)) {
+      const fallback = selectedModel && available.includes(selectedModel) ? selectedModel : nativeModel;
+      if (fallback) selectedModel = superAntigravityModel(fallback, available);
+    }
+    if (selectedModel) await choose('model', selectedModel, `当前账号不提供模型 ${selectedModel}，请刷新模型列表后重新选择`);
+    const efforts = options.find(item => item.category === 'thought_level')?.options;
+    let effort = context.session.reasoning_effort;
+    if (superAgent && !(context.session.reasoning_effort_is_explicit ?? !!effort)) {
+      effort = efforts?.some(item => item.value === 'medium') ? 'medium'
+        : efforts?.find(item => item.value === effort) ? effort : null;
+    }
+    if (effort) await choose('thought_level', effort, '所选模型不支持该思考强度');
     const mode = planning ? 'plan' : getPermissionMode(context.session) === 'accept-edits' ? 'accept-edits' : 'default';
     await choose('mode', mode, `Antigravity 不提供 ${mode} 模式`);
     model = String(options.find(item => item.category === 'model')?.currentValue ?? model);
@@ -326,6 +343,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     readUsage: () => antigravityProbe({ execution, scope, home: context.runtime_home, binary }),
     startTurn: async (input) => {
       if (closing || stopped) throw new Error('Antigravity CLI 正在退出');
+      await home.resetReadBudget();
       beginTurn();
       sendPrompt(input);
     },

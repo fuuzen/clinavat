@@ -14,7 +14,7 @@ import { sessionQuestionRoutes } from './session-questions.js';
 import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { questionTimeout } from '../question-defaults.js';
 import { agentEngines, engineProfiles } from '../agent/engines.js';
-import { orchestrationModeOf, orchestrationModes, type OrchestrationMode } from '../agent/orchestration-tools.js';
+import { orchestrationModeOf, orchestrationModes, superReadModeOf, superReadModes, type OrchestrationMode } from '../agent/orchestration-tools.js';
 import { assertAutomaticSlot } from '../accounts/selection.js';
 
 const identifier = z.object({ id: z.uuid() });
@@ -33,7 +33,7 @@ async function releaseSession(context: Context, id: string, userId: string): Pro
 export const sessionInput = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
   slotMode: z.enum(['manual', 'auto']).default('manual'),
   title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false),
-  orchestrationMode: z.enum(orchestrationModes).optional(), ...selectionFields });
+  orchestrationMode: z.enum(orchestrationModes).optional(), superReadMode: z.enum(superReadModes).optional(), ...selectionFields });
 
 /** A child conversation's place under its master. */
 export interface ChildAgent {
@@ -42,6 +42,7 @@ export interface ChildAgent {
   directory: string | null;
   isolation: 'shared' | 'worktree';
   ephemeral?: boolean;
+  profile?: string;
   /** The role from the child's roster profile. */
   instructions: string | null;
 }
@@ -73,10 +74,12 @@ export async function createSession(context: Context, user: User, input: z.infer
     if (input.slotMode === 'manual') await validate(slot);
     slotForUser(store, slot.id, user.id, input.engine);
     store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,agent_mode,role_preset,
-      orchestration,orchestration_mode,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_ephemeral,agent_instructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      orchestration,orchestration_mode,super_read_mode,parent_session_id,agent_name,agent_access,agent_directory,agent_isolation,agent_ephemeral,agent_instructions,agent_profile)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, input.projectId, user.id, input.engine, slot.id, input.slotMode, input.title, input.model ?? null, input.reasoningEffort ?? null,
-    permissionMode, agentMode, rolePreset, orchestrationMode !== 'off' ? 1 : 0, orchestrationMode, child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null,
-    child?.directory ?? null, child?.isolation ?? null, child?.ephemeral ? 1 : 0, child?.instructions ?? null);
+    permissionMode, agentMode, rolePreset, orchestrationMode !== 'off' ? 1 : 0, orchestrationMode, input.superReadMode ?? 'overview',
+    child?.parentSessionId ?? null, child?.name ?? null, child?.access ?? null, child?.directory ?? null, child?.isolation ?? null,
+    child?.ephemeral ? 1 : 0, child?.instructions ?? null, child?.profile ?? null);
     const created = sessionFor(context, id, user.id);
     context.events.emit(user.id, { type: 'session', sessionId: id, payload: created });
     return created;
@@ -148,19 +151,22 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const source = sessionFor(context, id, request.user.id);
     // The source may keep running: only finished turns, whose native history no longer changes, can be branched from.
     return withResourceLocks(context, [], async () => {
-      const turn = store.get<{ status: string; native_ref: string | null; native_session_id: string | null }>(
-        'SELECT status,native_ref,native_session_id FROM session_turns WHERE id=? AND session_id=?', turnId, id);
+      const turn = store.get<{ status: string; native_ref: string | null; native_session_id: string | null; native_inspect_tools: 0 | 1 }>(
+        'SELECT status,native_ref,native_session_id,native_inspect_tools FROM session_turns WHERE id=? AND session_id=?', turnId, id);
       if (!turn) throw new HttpError(404, '轮次不存在');
       if (!['completed', 'interrupted', 'error'].includes(turn.status)) throw new HttpError(409, '请等这一轮结束后再从这里分支');
       if (!turn.native_ref || !turn.native_session_id) throw new HttpError(409, '这一轮没有记录原生会话位置，无法从这里分支');
       const forkId = randomUUID();
+      // Codex forks inherit the saved tool list. A new branch starts as a non-orchestrating conversation.
+      const forkNative = !turn.native_inspect_tools;
       store.transaction(() => {
         store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,
           agent_mode,role_preset,question_mode,question_timeout_ms,forked_from_session_id,forked_from_turn_id,fork_native_id,fork_native_anchor)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         forkId, source.project_id, request.user.id, source.engine, source.slot_id, source.slot_mode,
         `${source.title.slice(0, 190)} · 分支`, source.model, source.reasoning_effort, source.permission_mode, source.agent_mode,
-        source.role_preset, source.question_mode, source.question_timeout_ms, id, turnId, turn.native_session_id, turn.native_ref);
+        source.role_preset, source.question_mode, source.question_timeout_ms, id, turnId,
+        forkNative ? turn.native_session_id : null, forkNative ? turn.native_ref : null);
         turns.copyHistory(id, forkId, turnId);
       });
       const created = sessionFor(context, forkId, request.user.id);
@@ -183,6 +189,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       questionTimeoutMs: questionTimeout.nullable().optional(),
       orchestration: z.boolean().optional(),
       orchestrationMode: z.enum(orchestrationModes).optional(),
+      superReadMode: z.enum(superReadModes).optional(),
       // Roster profiles this master may start; null for the whole roster.
       agentProfiles: z.array(z.uuid()).max(100).nullable().optional(),
     }).strict().refine(value => Object.values(value).some(item => item !== undefined), {
@@ -202,6 +209,8 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       const nextMode: OrchestrationMode = input.orchestrationMode
         ?? (input.orchestration !== undefined ? (input.orchestration ? (currentMode === 'super' ? 'super' : 'hybrid') : 'off') : currentMode);
       const changedOrchestration = nextMode !== currentMode;
+      const nextReadMode = input.superReadMode ?? superReadModeOf(current);
+      const changedReadMode = nextReadMode !== superReadModeOf(current);
       if (changedOrchestration) {
         const toggled = (currentMode === 'off') !== (nextMode === 'off');
         if (toggled) {
@@ -212,7 +221,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
           if (current.parent_session_id) throw new HttpError(400, '子智能体不能再派生子智能体');
         }
       }
-      if (changedSlot || changedMode || changedOrchestration || permissionMode !== current.permission_mode || agentMode !== current.agent_mode
+      if (changedSlot || changedMode || changedOrchestration || changedReadMode || permissionMode !== current.permission_mode || agentMode !== current.agent_mode
         || rolePreset !== current.role_preset) {
         await agents.reclaim(id);
         if (agents.isBusy(id) || ['running', 'waiting', 'pausing', 'paused'].includes(current.status)
@@ -226,11 +235,11 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         if (input.agentProfiles.some(profile => !owned.has(profile))) throw new HttpError(400, '名册中没有所选的智能体');
       }
       store.run(`UPDATE sessions SET title=?,permission_mode=?,slot_id=?,slot_mode=?,model=?,reasoning_effort=?,agent_mode=?,role_preset=?,
-        question_mode=?,question_timeout_ms=?,orchestration=?,orchestration_mode=?,agent_profiles=?,updated_at=datetime('now') WHERE id=?`,
+        question_mode=?,question_timeout_ms=?,orchestration=?,orchestration_mode=?,super_read_mode=?,agent_profiles=?,updated_at=datetime('now') WHERE id=?`,
         input.title ?? current.title, permissionMode, input.slotId === undefined ? current.slot_id : input.slotId, slotMode,
         changedSlot ? null : current.model, changedSlot ? null : current.reasoning_effort, agentMode, rolePreset,
         input.questionMode === undefined ? current.question_mode : input.questionMode,
-        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, nextMode !== 'off' ? 1 : 0, nextMode,
+        input.questionTimeoutMs === undefined ? current.question_timeout_ms : input.questionTimeoutMs, nextMode !== 'off' ? 1 : 0, nextMode, nextReadMode,
         input.agentProfiles === undefined ? current.agent_profiles : input.agentProfiles && JSON.stringify(input.agentProfiles), id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
@@ -278,11 +287,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       const summaryNote = note?.trim() ? `\n保留重点：${note.trim()}` : '';
       const marker = `已执行无感上下文续接：下一条消息将启动全新底层会话，自动继承持久记忆、任务看板、子智能体状态与近期对话脉络。${summaryNote}`;
       store.transaction(() => {
-        store.run(
-          `UPDATE sessions SET native_session_id=NULL,fork_native_id=NULL,fork_native_anchor=NULL,jsonl_file_path=NULL,
-           token_usage_cursor=NULL,updated_at=datetime('now') WHERE id=?`,
-          id,
-        );
+        turns.clearNativeSession(id);
         store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, id, marker);
       });
       const updated = sessionFor(context, id, request.user.id);

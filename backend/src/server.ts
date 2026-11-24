@@ -38,6 +38,7 @@ import { SiteSettingsService } from './site-settings.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 import type { AgentContext, AgentEvent, OrchestrationHost } from './agent/types.js';
 import { Orchestrator } from './orchestration/service.js';
+import { resetReviewsForUserMessage } from './orchestration/board.js';
 import { OrchestrationSettingsStore } from './orchestration/limits.js';
 import { Worktrees } from './orchestration/worktrees.js';
 import { sessionAgentRoutes } from './routes/session-agents.js';
@@ -190,7 +191,7 @@ const agents: AgentManager = new AgentManager(agentConfig, {
       }
       if (event.type === 'turn-anchor') {
         const anchor = event.payload as { turnId?: string; ref: string; nativeSessionId: string };
-        if (anchor.turnId) turns.anchor(event.sessionId, anchor.turnId, anchor.ref, anchor.nativeSessionId);
+        if (anchor.turnId) turns.anchor(event.sessionId, anchor.turnId, anchor.ref, anchor.nativeSessionId, session.native_inspect_tools ?? 0);
         return;
       }
       if (event.type === 'tool' || event.type === 'activity') {
@@ -221,7 +222,7 @@ const agents: AgentManager = new AgentManager(agentConfig, {
       });
       fields = { ...fields, jsonl_file_path: transcript };
     }
-    for (const key of ['native_session_id', 'status', 'jsonl_file_path'] as const) {
+    for (const key of ['native_session_id', 'native_inspect_tools', 'status', 'jsonl_file_path'] as const) {
       if (fields[key] !== undefined) store.run(`UPDATE sessions SET ${key}=?,updated_at=datetime('now') WHERE id=?`, fields[key]!, sessionId);
     }
     events.emit(session.user_id, { type: 'session', sessionId, payload: store.get('SELECT * FROM sessions WHERE id=?', sessionId) });
@@ -232,6 +233,7 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     const id = randomUUID();
     store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", id, sessionId, content,
       storedImages(images), source ?? null);
+    if (!source) resetReviewsForUserMessage(context, session);
     events.emit(session.user_id, { type: 'message', sessionId, payload: store.get('SELECT * FROM messages WHERE id=?', id) });
     return id;
   },

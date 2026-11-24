@@ -11,6 +11,8 @@ import { expandProjectReferences } from '../runtime/project-references.js';
 import { imageTypes, maxImagesPerMessage, messageImages, readImage, saveImage, storedImages } from '../message-images.js';
 import { engineProfiles } from '../agent/engines.js';
 import type { MessageSource } from '../agent/types.js';
+import { codexInspectToolsChanged } from '../agent/codex/goal.js';
+import { resetReviewsForUserMessage } from '../orchestration/board.js';
 
 export const selectedSlotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 export const selectionFields = {
@@ -22,6 +24,7 @@ export const selectionFields = {
 };
 
 export const messageInput = z.object({ content: z.string().trim().max(100000), slotId: selectedSlotId.optional(),
+  // z.object strips extra composer settings. Orchestration policy changes are applied through PATCH before sending.
   // IDs from the conversation's image uploads.
   images: z.array(z.uuid()).max(maxImagesPerMessage, `每条消息最多附带 ${maxImagesPerMessage} 张图片`).default([]),
   // How a message sent during a running reply is handled; ignored when the conversation is idle.
@@ -96,8 +99,8 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     if (!slotId) throw new HttpError(409, '请先为当前对话选择授权槽位');
     const slot = slotForUser(store, slotId, user.id, session.engine);
     // The conversation keeps what it chose; the run also applies the user's defaults for what it left open.
-    const resolved = await resolveAgentSelection(config, { user, slot, session: { engine: session.engine } },
-      { model, reasoningEffort }, context.agentDefaults.forUser(user.id, session.engine));
+    const resolved = await resolveAgentSelection(config, { user, slot, session },
+      { model, reasoningEffort }, context.agentDefaults.forUser(user.id, session.engine), true);
     const compact = /^\/compact(?:\s|$)/i.test(input.content);
     if (compact) input.content = input.content.replace(/^\/compact/i, '/compact');
     if (/^\/[a-z][\w-]*(?:\s|$)/i.test(input.content) && !compact) {
@@ -110,12 +113,15 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     }
     if (compact && input.images.length) throw new HttpError(400, '/compact 不能附带图片');
     const images = messageImages(store, id, input.images);
+    const renewThread = !compact && codexInspectToolsChanged(session);
     const runContext = {
       runtime_home: slot.home_dir,
       runtime_kind: 'conversation' as const,
       user, project, slot,
       session: { ...session, slot_id: slot.id, model: resolved.model, reasoning_effort: resolved.reasoningEffort, permission_mode: permissionMode,
-        agent_mode: agentMode, role_preset: rolePreset, ...(compact ? { command: 'compact' as const } : {}) },
+        model_is_explicit: !!model, reasoning_effort_is_explicit: !!reasoningEffort, agent_mode: agentMode, role_preset: rolePreset,
+        ...(renewThread ? { native_session_id: null, jsonl_file_path: null, fork_native_id: null, fork_native_anchor: null } : {}),
+        ...(compact ? { command: 'compact' as const } : {}) },
     };
     const runtime = agents.view(id);
     if (runtime.resident && (runtime.turnActive || agents.accepts(id, runContext))) {
@@ -150,17 +156,19 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       if (auto) await context.slots.ensureEligible(slot, user.id, model);
       const messageId = randomUUID();
       store.transaction(() => {
+        if (renewThread) turns.clearNativeSession(id);
         store.run(`UPDATE sessions SET slot_id=?,model=?,reasoning_effort=?,permission_mode=?,agent_mode=?,role_preset=?,status='running',updated_at=datetime('now') WHERE id=?`,
           slot.id, model, reasoningEffort, permissionMode, agentMode, rolePreset, id);
         store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", messageId, id, input.content,
           storedImages(images), delivery?.source ?? null);
       });
+      if (!delivery?.source) resetReviewsForUserMessage(context, session);
       turns.start(id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision });
       events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
       try {
         // A branch's first run forks its source's native history, which already holds the copied messages.
         // On rollover / native restart, skip raw child report dumps since synthesis replies, task board and memories already carry the state.
-        const previousMessages = !session.native_session_id && !session.fork_native_id
+        const previousMessages = !runContext.session.native_session_id && !runContext.session.fork_native_id
           ? store.all<{ role: string; content: string }>(
               `SELECT role,substr(content,1,2000) AS content FROM (
                  SELECT rowid,role,content FROM messages

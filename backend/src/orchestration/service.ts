@@ -2,16 +2,17 @@ import type { Context } from '../context.js';
 import { projectFor, sessionFor, withResourceLocks } from '../context.js';
 import { HttpError, type Project, type Session, type User } from '../models.js';
 import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
-import { orchestrationModeOf } from '../agent/orchestration-tools.js';
+import { canInspectProject, orchestrationModeOf, orchestrates } from '../agent/orchestration-tools.js';
 import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { setSessionArchived, stopSession } from '../routes/sessions.js';
-import { WorkBoard } from './board.js';
-import { assertNewName, childDirectory, createChild, engineSlots, type Placement } from './children.js';
+import { WorkBoard, type WorkItemRow } from './board.js';
+import { assertChildRoom, assertNewName, childDirectory, createChild, engineSlots, type Placement } from './children.js';
+import { ProjectInspector } from './inspect.js';
 import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
 import { ProjectMemory } from './memory.js';
-import { ReportDelivery } from './reports.js';
+import { ReportDelivery, reportSource } from './reports.js';
 import { Discussions, type DiscussionInput } from './discussions.js';
 import { AgentRoster } from './roster.js';
 import { AgentTasks } from './tasks.js';
@@ -22,7 +23,7 @@ const isActive = (status: string) => ['running', 'waiting', 'pausing', 'paused']
 
 /** Serves the clinavat tools of master agents and follows their children for the agent panel. */
 export class Orchestrator implements OrchestrationHost {
-  readonly tools = hubTools;
+  private readonly inspector: ProjectInspector;
   private readonly tasks: AgentTasks;
   private readonly reports: ReportDelivery;
   private readonly discussions: Discussions;
@@ -33,6 +34,7 @@ export class Orchestrator implements OrchestrationHost {
   constructor(private readonly context: Context) {
     this.tasks = new AgentTasks(context.store);
     this.board = new WorkBoard(context.store);
+    this.inspector = new ProjectInspector(context.workspaces);
     this.memory = new ProjectMemory(context.store);
     this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId), (user, master, delivered) => {
       for (const childId of new Set(delivered.map(task => task.child_session_id))) {
@@ -48,6 +50,11 @@ export class Orchestrator implements OrchestrationHost {
   stopDiscussion(user: User, id: string) { return this.discussions.stop(user, id); }
 
   directs(tool: string): boolean { return ['start_agent', 'message_agent', 'merge_agent', 'discard_agent', 'start_discussion'].includes(tool); }
+
+  toolsFor(agent: AgentContext) {
+    if (!orchestrates(agent)) return [];
+    return canInspectProject(agent.session) ? hubTools : hubTools.filter(tool => tool.name !== 'inspect');
+  }
 
   briefing(agent: AgentContext): string {
     const master = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', agent.session.id, agent.user.id);
@@ -90,6 +97,10 @@ export class Orchestrator implements OrchestrationHost {
     const master = sessionFor(this.context, agent.session.id, user.id);
     if (orchestrationModeOf(master) === 'off') return { text: '当前对话未开启编排', isError: true };
     try {
+      if (tool === 'inspect') {
+        if (!canInspectProject(master)) throw new HttpError(403, '当前对话未启用 inspect，请委派 explorer 子智能体检视项目。');
+        return await this.inspector.inspect(agent, projectFor(this.context, master.project_id, user.id), args, signal);
+      }
       return await this.run(tool, user, master, args, signal, agent.session.agent_mode === 'plan');
     } catch (error) {
       return { text: error instanceof Error ? error.message : String(error), isError: true };
@@ -102,7 +113,9 @@ export class Orchestrator implements OrchestrationHost {
     return agentEngines.filter(engine => engineSlots(this.context, userId, engine).length > 0);
   }
 
-  private async run(tool: ToolName, user: User, master: Session, args: unknown, signal: AbortSignal, planning: boolean): Promise<HubToolResult> {
+  private async run(tool: Exclude<ToolName, 'inspect'>, user: User, master: Session, args: unknown, signal: AbortSignal,
+    planning: boolean): Promise<HubToolResult> {
+    const superAgent = orchestrationModeOf(master) === 'super';
     switch (tool) {
       case 'list_agents': {
         toolInputs.list_agents.parse(args ?? {});
@@ -112,10 +125,12 @@ export class Orchestrator implements OrchestrationHost {
         const input = this.roster.resolve(master, toolInputs.start_agent.parse(args), this.availableEngines(user.id));
         if (planning && input.access === 'write') throw new HttpError(409, 'Plan 模式下只能派生只读子智能体');
         assertNewName(this.context, master, input.name);
+        const item = input.task ? this.board.resolve(master.id, input.task)
+          : superAgent && input.access === 'read' && input.profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined;
         const main = projectFor(this.context, master.project_id, user.id);
         const directory = await childDirectory(main, input.directory);
         const requested = input.access === 'write' ? input.isolation ?? 'worktree' : 'shared';
-        this.assertRoom(user, master, { access: input.access, isolation: requested, directory });
+        assertChildRoom(this.context, this.tasks, user, master, { access: input.access, isolation: requested, directory });
         const notes: string[] = [];
         let placement: Placement = { project: main, directory, isolation: 'shared' };
         if (requested === 'worktree') {
@@ -126,28 +141,36 @@ export class Orchestrator implements OrchestrationHost {
             if (worktree.dirty) notes.push('The repository has uncommitted changes to tracked files. The child started from the last commit and does not see them; commit them first if it needs them.');
             if (worktree.setup) notes.push(worktree.setup);
           } else {
-            this.assertRoom(user, master, { access: input.access, isolation: 'shared', directory });
+            assertChildRoom(this.context, this.tasks, user, master, { access: input.access, isolation: 'shared', directory });
             notes.push('The directory is not in a Git repository with commits, so the child works in the shared project directory.');
           }
         }
-        const child = await createChild(this.context, user, master, input, placement).catch(async (error: unknown) => {
-          if (placement.isolation === 'worktree') await this.removeProject(placement.project);
-          throw error;
+        return this.withReview(superAgent, input.access, input.profile, item, async () => {
+          const child = await createChild(this.context, user, master, input, placement).catch(async (error: unknown) => {
+            if (placement.isolation === 'worktree') await this.removeProject(placement.project);
+            throw error;
+          });
+          if (item) {
+            const linked = this.board.assign(master.id, item.id, input.name);
+            notes.push(`Linked to task ${linked.code} (${linked.title}).`);
+          }
+          return this.send(user, master, child, input.prompt, 'queue', input.notify, notes, item);
         });
-        if (input.task) {
-          const linked = this.board.assign(master.id, input.task, input.name);
-          notes.push(`Linked to task ${linked.code} (${linked.title}).`);
-        }
-        return this.send(user, master, child, input.prompt, 'queue', input.notify, notes);
       }
       case 'message_agent': {
         const input = toolInputs.message_agent.parse(args);
         const child = this.child(master, input.agent);
         if (planning && child.agent_access === 'write') throw new HttpError(409, 'Plan 模式下不能指挥可写子智能体');
         if (!this.tasks.running(child.id).length) {
-          this.assertRoom(user, master, { access: child.agent_access ?? 'write', isolation: child.agent_isolation ?? 'shared', directory: child.agent_directory });
+          assertChildRoom(this.context, this.tasks, user, master, { access: child.agent_access ?? 'write',
+            isolation: child.agent_isolation ?? 'shared', directory: child.agent_directory });
         }
-        return this.send(user, master, child, input.message, input.mode, true);
+        const reference = input.task ?? this.tasks.latestWorkItem(child.id);
+        const item = reference ? this.board.resolve(master.id, reference)
+          : superAgent && child.agent_access === 'read' ? this.board.reviewTask(master.id, child.agent_name)
+            ?? (child.agent_profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined) : undefined;
+        return this.withReview(superAgent, child.agent_access, child.agent_profile, item,
+          () => this.send(user, master, child, input.message, input.mode, true, [], item));
       }
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);
@@ -228,17 +251,15 @@ export class Orchestrator implements OrchestrationHost {
         for (const childId of new Set(reports.map(task => task.child_session_id))) {
           void this.retireEphemeralIfSettled(user, master.id, childId);
         }
-        const limit = orchestrationModeOf(master) === 'super'
-          ? orchestrationConstants.superReportCharacters : orchestrationConstants.reportCharacters;
         return json({
           finished,
-          reports: reports.map(task => reportBlock(this.reportSource(children.find(child => child.id === task.child_session_id)!, task), limit)),
+          reports: reports.map(task => reportBlock(reportSource(children.find(child => child.id === task.child_session_id)!, task), { superAgent })),
           stillRunning: children.filter(child => this.tasks.running(child.id).length).map(child => child.agent_name),
         });
       }
       case 'read_agent': {
         const input = toolInputs.read_agent.parse(args);
-        return json(this.read(this.child(master, input.agent, true), input.turns, input.includeTools));
+        return json(this.tasks.read(this.child(master, input.agent, true), input.turns, input.includeTools, superAgent));
       }
       case 'stop_agent': {
         const child = this.child(master, toolInputs.stop_agent.parse(args).agent);
@@ -285,28 +306,6 @@ export class Orchestrator implements OrchestrationHost {
     await this.tryArchiveChild(user, masterId, childId);
   }
 
-  /** Writers in their own worktree only count; writers sharing the project directory must also keep out of each other's directories. */
-  private assertRoom(user: User, master: Session, child: { access: 'read' | 'write'; isolation: 'shared' | 'worktree'; directory: string | null }): void {
-    const limits = this.context.orchestrationSettings.view();
-    const busy = this.tasks.busyChildren({ masterId: master.id });
-    if (busy.length >= limits.runningPerMaster) throw new HttpError(409, `本对话已有 ${busy.length} 个子智能体在运行，上限为 ${limits.runningPerMaster}；请等待或停止其中一个`);
-    if (this.tasks.busyChildren({ userId: user.id }).length >= limits.runningPerUser) throw new HttpError(409, `你的子智能体同时运行数已达上限 ${limits.runningPerUser}`);
-    if (child.access !== 'write') return;
-    const writers = busy.filter(item => item.agent_access === 'write' && (item.agent_isolation ?? 'shared') === child.isolation);
-    if (child.isolation === 'worktree') {
-      if (writers.length >= limits.worktreeWritersPerMaster) throw new HttpError(409, `已有 ${writers.length} 个使用 worktree 的可写子智能体在运行，上限为 ${limits.worktreeWritersPerMaster}`);
-      return;
-    }
-    if (writers.length >= limits.sharedWritersPerMaster) {
-      throw new HttpError(409, `共用项目目录的可写子智能体 ${writers.map(item => item.agent_name).join('、') || ''} 已达上限 ${limits.sharedWritersPerMaster}；请等待，或改用 worktree 隔离`);
-    }
-    const contains = (outer: string | null, inner: string | null) => !outer || outer === inner || !!inner?.startsWith(`${outer}/`);
-    const overlapping = writers.filter(item => contains(item.agent_directory, child.directory) || contains(child.directory, item.agent_directory));
-    if (overlapping.length) {
-      throw new HttpError(409, `可写子智能体 ${overlapping.map(item => `${item.agent_name}（${item.agent_directory ?? '项目根目录'}）`).join('、')} 正在共用目录中修改与 ${child.directory ?? '项目根目录'} 重叠的位置；请换一个不重叠的目录，或改用 worktree 隔离`);
-    }
-  }
-
   private worktreeChild(child: Session): Session {
     if (child.agent_isolation !== 'worktree') throw new HttpError(409, `子智能体 ${child.agent_name} 没有使用 worktree，它的修改已直接在项目中`);
     if (this.tasks.running(child.id).length || isActive(child.status)) throw new HttpError(409, `子智能体 ${child.agent_name} 仍在运行，请等它完成或先停止`);
@@ -332,7 +331,8 @@ export class Orchestrator implements OrchestrationHost {
         + `or ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch, then call merge_agent again.`;
     const text = `Merging the branch ${project.worktree_branch} of ${child.agent_name} into the project stopped on conflicts in: ${files.join(', ') || 'unknown files'}. ${resolution}`;
     await sendSessionMessage(this.context, user, master.id, messageInput.parse({ content: reportBlock({ name: child.agent_name ?? child.id,
-      engine: child.engine, model: child.model, status: 'conflict', task: '合并冲突', text }), mode: 'queue' }), { source: 'report', prompt: content => content });
+      engine: child.engine, model: child.model, status: 'conflict', task: '合并冲突', text },
+    { superAgent: orchestrationModeOf(master) === 'super' }), mode: 'queue' }), { source: 'report', prompt: content => content });
   }
 
   async discard(user: User, masterId: string, childId: string): Promise<void> {
@@ -353,8 +353,8 @@ export class Orchestrator implements OrchestrationHost {
   }
 
   /** Sends a child one task; when the send fails, the task ends at once and the error goes to the caller. */
-  async dispatch(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean) {
-    const task = this.tasks.create(master.id, child.id, text, notify);
+  async dispatch(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean, workItemId?: string) {
+    const task = this.tasks.create(master.id, child.id, text, notify, workItemId);
     this.publish(master.id);
     try {
       const sent = await sendSessionMessage(this.context, user, child.id, messageInput.parse({ content: text, mode }), {
@@ -369,9 +369,10 @@ export class Orchestrator implements OrchestrationHost {
     }
   }
 
-  private async send(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean, notes: string[] = []) {
+  private async send(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean,
+    notes: string[], item?: WorkItemRow) {
     // A failed send reaches the master as the tool's error, so its task needs no report.
-    const { status } = await this.dispatch(user, master, child, text, mode, notify);
+    const { status } = await this.dispatch(user, master, child, text, mode, notify, item?.id);
     if (child.agent_access === 'write' && child.agent_isolation !== 'worktree') {
       notes.push('This child modifies the shared project directory: do not edit the files it is working on until its report arrives.');
     }
@@ -384,6 +385,18 @@ export class Orchestrator implements OrchestrationHost {
     await stopSession(this.context, user.id, child.id);
     // A child stopped before its process started reports no turn end.
     await this.reports.complete(sessionFor(this.context, child.id, user.id), 'interrupted', '子智能体已被停止。');
+  }
+
+  private async withReview(superAgent: boolean, access: Session['agent_access'], profile: string | null | undefined,
+    item: WorkItemRow | undefined, dispatch: () => Promise<HubToolResult>): Promise<HubToolResult> {
+    const current = superAgent && access === 'read' && item ? this.board.resolve(item.master_session_id, item.id) : undefined;
+    const refund = current && (profile === 'verifier' || current.status === 'verifying') ? this.board.beginReview(current) : undefined;
+    try { return await dispatch(); }
+    catch (error) {
+      refund?.();
+      if (refund && current) this.publish(current.master_session_id);
+      throw error;
+    }
   }
 
   private list(user: User, master: Session) {
@@ -409,28 +422,6 @@ export class Orchestrator implements OrchestrationHost {
       tasks: this.board.view(master.id),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };
-  }
-
-  private read(child: Session, count: number, includeTools: boolean) {
-    const turns = this.context.store.all<{ id: string; status: string; items: string; task: string | null; answer: string | null }>(`
-      SELECT session_turns.id,session_turns.status,session_turns.items,asked.content AS task,answered.content AS answer FROM session_turns
-      LEFT JOIN messages asked ON asked.id=session_turns.user_message_id
-      LEFT JOIN messages answered ON answered.id=session_turns.assistant_message_id
-      WHERE session_turns.session_id=? ORDER BY session_turns.rowid DESC LIMIT ?`, child.id, count).reverse();
-    return {
-      agent: child.agent_name, engine: child.engine, model: child.model ?? 'default', status: child.status,
-      running: this.tasks.running(child.id).length > 0,
-      turns: turns.map(turn => ({
-        status: turn.status, message: turn.task?.slice(0, 4000) ?? null, reply: turn.answer ?? null,
-        ...(includeTools ? { tools: (JSON.parse(turn.items) as { tool?: { name: string; status?: string; input?: Record<string, unknown> } }[])
-          .flatMap(item => item.tool ? [{ name: item.tool.name, status: item.tool.status,
-            ...(typeof item.tool.input?.file_path === 'string' ? { file: item.tool.input.file_path } : {}) }] : []).slice(-80) } : {}),
-      })),
-    };
-  }
-
-  private reportSource(child: Session, task: { status: string; prompt: string; report: string | null }) {
-    return { name: child.agent_name ?? child.id, engine: child.engine, model: child.model, status: task.status, task: task.prompt, text: task.report ?? '' };
   }
 
   view(masterId: string) {
