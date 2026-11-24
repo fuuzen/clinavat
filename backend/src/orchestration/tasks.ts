@@ -7,22 +7,26 @@ export type TaskStatus = 'running' | 'completed' | 'interrupted' | 'error';
 export interface AgentTask {
   id: string; master_session_id: string; child_session_id: string; prompt: string; status: TaskStatus;
   report: string | null; notify: 0 | 1; created_at: string; finished_at: string | null; delivered_at: string | null;
-  work_item_id: string | null;
+  work_item_id: string | null; wave: string | null;
 }
 
 /** Each message a master sends a child is a task; it ends, with the child's reply as its report, when the child goes idle. */
 export class AgentTasks {
   constructor(private readonly store: Store) {}
 
-  create(masterId: string, childId: string, prompt: string, notify: boolean, workItemId?: string): AgentTask {
+  create(masterId: string, childId: string, prompt: string, notify: boolean, workItemId?: string, wave?: string): AgentTask {
     const id = randomUUID();
-    this.store.run('INSERT INTO agent_tasks(id,master_session_id,child_session_id,prompt,notify,work_item_id) VALUES(?,?,?,?,?,?)',
-      id, masterId, childId, prompt, notify ? 1 : 0, workItemId ?? null);
+    this.store.run('INSERT INTO agent_tasks(id,master_session_id,child_session_id,prompt,notify,work_item_id,wave) VALUES(?,?,?,?,?,?,?)',
+      id, masterId, childId, prompt, notify ? 1 : 0, workItemId ?? null, notify ? wave ?? null : null);
     return this.store.get<AgentTask>('SELECT * FROM agent_tasks WHERE id=?', id)!;
   }
 
   running(childId: string): AgentTask[] {
     return this.store.all<AgentTask>("SELECT * FROM agent_tasks WHERE child_session_id=? AND status='running' ORDER BY rowid", childId);
+  }
+
+  waveRunning(masterId: string, wave: string): boolean {
+    return !!this.store.get("SELECT 1 FROM agent_tasks WHERE master_session_id=? AND wave=? AND status='running' LIMIT 1", masterId, wave);
   }
 
   /** Ends the given tasks the child was working on with the same outcome, and returns those still running until now. */
@@ -99,10 +103,11 @@ export class AgentTasks {
         WHERE sessions.user_id=? AND agent_tasks.status='running'`, filter.userId);
   }
 
-  /** Report turns the master took since the user last wrote to it. */
-  reportTurnsSinceUser(masterId: string): number {
+  /** Automatic report turns after the latest user message or manual delivery. */
+  reportTurnsSinceUser(masterId: string, anchorMessageId?: string): number {
     return this.store.get<{ count: number }>(`SELECT COUNT(*) AS count FROM messages WHERE session_id=?1 AND source='report'
-      AND rowid > COALESCE((SELECT MAX(rowid) FROM messages WHERE session_id=?1 AND role='user' AND source IS NULL),0)`, masterId)!.count;
+      AND rowid > MAX(COALESCE((SELECT MAX(rowid) FROM messages WHERE session_id=?1 AND role='user' AND source IS NULL),0),
+        COALESCE((SELECT rowid FROM messages WHERE session_id=?1 AND id=?2),0))`, masterId, anchorMessageId ?? null)!.count;
   }
 }
 

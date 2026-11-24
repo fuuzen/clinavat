@@ -16,11 +16,32 @@ READ_PATH_FIELDS = {
 }
 PROTECTED = {'.bin', '.git', '.claude', '.codex', '.gemini', '.clinavat', '.system_generated'}
 
-def validate_path(root, cwd, value):
+def path_targets(cwd, value):
     if not isinstance(value, str) or not value or '\0' in value:
         raise ValueError('工具缺少有效的项目路径')
     candidate = os.path.join(cwd, os.path.expanduser(value))
-    for target in (os.path.abspath(candidate), os.path.realpath(candidate)):
+    return (os.path.abspath(candidate), os.path.realpath(candidate))
+
+def in_brain(targets):
+    brain = os.environ.get('CLINAVAT_AGY_BRAIN_ROOT')
+    if not brain:
+        return (False, False)
+    # A symlink in the configured root must never grant access to its destination.
+    root = os.path.realpath(brain)
+    lexical = os.path.abspath(brain)
+    if root != lexical:
+        return (os.path.commonpath((lexical, targets[0])) == lexical, False)
+    return tuple(os.path.commonpath((root, target)) == root for target in targets)
+
+def validate_path(root, cwd, value, allow_brain=False):
+    targets = path_targets(cwd, value)
+    brain = in_brain(targets)
+    if any(brain):
+        if not allow_brain or not all(brain) or os.environ['CLINAVAT_AGY_ACCESS'] == 'super':
+            raise ValueError('不能跨越 brain 目录边界或在 Super 模式下读取该目录')
+        if os.path.commonpath((root, *targets)) != root:
+            return
+    for target in targets:
         if os.path.commonpath((root, target)) != root:
             raise ValueError('只允许读取项目内的路径')
         if PROTECTED.intersection(os.path.relpath(target, root).split(os.sep)):
@@ -39,7 +60,7 @@ def validate_read(payload, tool, arguments):
     if not paths:
         raise ValueError('工具缺少有效的项目路径')
     for value in paths:
-        validate_path(root, cwd, value)
+        validate_path(root, cwd, value, allow_brain=True)
     if arguments.get('FollowSymlinks') or arguments.get('FollowLinks'):
         raise ValueError('搜索不能跟随符号链接')
     for key in ('Pattern', 'Includes', 'Excludes'):
@@ -77,6 +98,13 @@ def tool_decision(payload, mode):
     if mode == 'write':
         if access == 'read':
             raise ValueError('你是只读子智能体，请在最终回复中说明需要的修改。')
+        cwd = os.path.join(os.environ['CLINAVAT_AGY_ROOT'], payload.get('cwd') or os.environ['CLINAVAT_AGY_CWD'])
+        paths = [value for key, value in arguments.items() if key.lower().replace('_', '') in
+                 ('path', 'absolutepath', 'file', 'filepath', 'targetfile', 'targetpath', 'targetfilepath')]
+        if not paths and call.get('name') != 'run_workflow':
+            raise ValueError('写入工具缺少有效的目标路径')
+        if any(any(in_brain(path_targets(cwd, value))) for value in paths):
+            raise ValueError('brain 目录仅允许读取')
         return {'decision': 'allow'}
     shell = os.environ.get('CLINAVAT_AGY_SHELL')
     if not shell:

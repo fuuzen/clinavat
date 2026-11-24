@@ -97,6 +97,7 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   }
   await atomicWrite(toolShim, toolShimProgram);
   const hookEnvironment = { CLINAVAT_AGY_ROOT: root, CLINAVAT_AGY_CWD: workingDirectory(context),
+    CLINAVAT_AGY_BRAIN_ROOT: path.join(cli, 'brain'),
     CLINAVAT_AGY_ACCESS: superAgent ? 'super' : context.session.agent_access ?? 'write', CLINAVAT_AGY_MODE: readMode,
     CLINAVAT_AGY_SHELL: shell ?? '', CLINAVAT_AGY_READ_COUNTER: counter,
     CLINAVAT_AGY_READ_DENIAL: nativeReadDenied(context), CLINAVAT_AGY_READ_LIMIT: String(superNativeReadLimit) };

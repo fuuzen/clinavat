@@ -90,6 +90,13 @@ export class Orchestrator implements OrchestrationHost {
 
   observe(event: AgentEvent): void { this.reports.observe(event); }
 
+  clearInspectCache(id: string): void { this.inspector.clearSession(id); }
+
+  sessionDeleted(id: string, masterId: string | null): void {
+    this.clearInspectCache(id);
+    this.reports.sessionDeleted(id, masterId);
+  }
+
   async call(agent: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult> {
     if (!isToolName(tool)) return { text: `未知的编排工具：${tool}`, isError: true };
     const user = this.context.store.get<User>('SELECT * FROM users WHERE id=?', agent.user.id);
@@ -154,7 +161,7 @@ export class Orchestrator implements OrchestrationHost {
             const linked = this.board.assign(master.id, item.id, input.name);
             notes.push(`Linked to task ${linked.code} (${linked.title}).`);
           }
-          return this.send(user, master, child, input.prompt, 'queue', input.notify, notes, item);
+          return this.send(user, master, child, input.prompt, 'queue', input.notify, notes, item, input.wave);
         });
       }
       case 'message_agent': {
@@ -170,7 +177,7 @@ export class Orchestrator implements OrchestrationHost {
           : superAgent && child.agent_access === 'read' ? this.board.reviewTask(master.id, child.agent_name)
             ?? (child.agent_profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined) : undefined;
         return this.withReview(superAgent, child.agent_access, child.agent_profile, item,
-          () => this.send(user, master, child, input.message, input.mode, true, [], item));
+          () => this.send(user, master, child, input.message, input.mode, true, [], item, input.wave));
       }
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);
@@ -353,8 +360,9 @@ export class Orchestrator implements OrchestrationHost {
   }
 
   /** Sends a child one task; when the send fails, the task ends at once and the error goes to the caller. */
-  async dispatch(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean, workItemId?: string) {
-    const task = this.tasks.create(master.id, child.id, text, notify, workItemId);
+  async dispatch(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt',
+    notify: boolean, workItemId?: string, wave?: string) {
+    const task = this.tasks.create(master.id, child.id, text, notify, workItemId, wave);
     this.publish(master.id);
     try {
       const sent = await sendSessionMessage(this.context, user, child.id, messageInput.parse({ content: text, mode }), {
@@ -364,15 +372,16 @@ export class Orchestrator implements OrchestrationHost {
       return { task, status: sent.status };
     } catch (error) {
       this.tasks.discard(task.id, `任务未能发送：${error instanceof Error ? error.message : String(error)}`);
+      if (task.wave) this.reports.schedule(master.id);
       this.publish(master.id);
       throw error;
     }
   }
 
   private async send(user: User, master: Session, child: Session, text: string, mode: 'queue' | 'steer' | 'interrupt', notify: boolean,
-    notes: string[], item?: WorkItemRow) {
+    notes: string[], item?: WorkItemRow, wave?: string) {
     // A failed send reaches the master as the tool's error, so its task needs no report.
-    const { status } = await this.dispatch(user, master, child, text, mode, notify, item?.id);
+    const { status } = await this.dispatch(user, master, child, text, mode, notify, item?.id, wave);
     if (child.agent_access === 'write' && child.agent_isolation !== 'worktree') {
       notes.push('This child modifies the shared project directory: do not edit the files it is working on until its report arrives.');
     }
@@ -444,7 +453,7 @@ export class Orchestrator implements OrchestrationHost {
       memories: master ? this.memory.view(master.project_id) : [],
       discussions: this.discussions.view(masterId),
       pendingReports: pending.length,
-      reportsPaused: pending.length > 0 && this.tasks.reportTurnsSinceUser(masterId) >= this.context.orchestrationSettings.view().reportTurnsPerMessage,
+      reportsPaused: pending.length > 0 && this.reports.atQuota(masterId),
     };
   }
 

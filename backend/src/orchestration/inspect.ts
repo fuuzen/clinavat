@@ -8,6 +8,7 @@ import type { WorkspaceManager } from '../runtime/workspace.js';
 
 export const inspectInput = z.object({
   action: z.enum(['tree', 'read']),
+  force: z.boolean().default(false).describe('Re-read the file even if unchanged since the last read in this session (e.g. after context compaction).'),
   path: z.string().trim().max(1024).optional().describe('A project-relative path. Omit for the project root with tree.'),
   maxDepth: z.number().int().min(1).max(3).default(2).describe('Tree depth measured from the requested directory.'),
 });
@@ -43,6 +44,8 @@ export class ProjectInspector {
 
   constructor(private readonly workspaces: WorkspaceManager) {}
 
+  clearSession(sessionId: string): void { this.cache.delete(sessionId); }
+
   async inspect(agent: AgentContext, project: Project, args: unknown, signal: AbortSignal): Promise<HubToolResult> {
     const mode = superReadModeOf(agent.session);
     if (mode === 'off') throw new HttpError(403, '当前读取档位为 off，请委派 explorer 子智能体检视项目。');
@@ -71,7 +74,7 @@ export class ProjectInspector {
     if (mode === 'overview' && !overviewDocument(path)) {
       throw new HttpError(403, 'overview 仅可读取项目文档和根目录工程清单，请委派 explorer 子智能体查看此文件。');
     }
-    return this.read(agent, project, path, budget, limit.bytes, assertCurrent);
+    return this.read(agent, project, path, budget, limit.bytes, input.force, assertCurrent);
   }
 
   private visible(project: Project, path: string): boolean {
@@ -95,14 +98,14 @@ export class ProjectInspector {
     return { text: JSON.stringify({ path, entries, truncated: false }) };
   }
 
-  private async read(agent: AgentContext, project: Project, path: string, budget: TurnBudget, byteLimit: number,
+  private async read(agent: AgentContext, project: Project, path: string, budget: TurnBudget, byteLimit: number, force: boolean,
     assertCurrent: () => void): Promise<HubToolResult> {
     const files = this.filesFor(agent);
     const { handle } = await this.workspaces.rawFile(project, path, { followLinks: false });
     try {
       const version = await handle.stat();
       assertCurrent();
-      if (sameVersion(files?.get(path), version)) return { text: unchanged };
+      if (!force && sameVersion(files?.get(path), version)) return { text: unchanged };
       const length = Math.min(version.size, fileLimit);
       if (budget.bytes + length > byteLimit) throw new HttpError(429, budgetError);
       const buffer = Buffer.alloc(length);
@@ -110,7 +113,7 @@ export class ProjectInspector {
       const after = await handle.stat();
       assertCurrent();
       if (!sameVersion(version, after) || bytesRead !== length) throw new HttpError(409, '文件在读取时发生变化，请重试。');
-      if (sameVersion(files?.get(path), version)) return { text: unchanged };
+      if (!force && sameVersion(files?.get(path), version)) return { text: unchanged };
       if (budget.bytes + bytesRead > byteLimit) throw new HttpError(429, budgetError);
       const truncated = version.size > length;
       let content: string;

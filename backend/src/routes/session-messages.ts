@@ -124,6 +124,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
         ...(compact ? { command: 'compact' as const } : {}) },
     };
     const runtime = agents.view(id);
+    const messageId = randomUUID();
     if (runtime.resident && (runtime.turnActive || agents.accepts(id, runContext))) {
       // The resident process keeps the settings it started with; the composer locks them while a reply runs.
       if (compact) throw new HttpError(409, '请等待当前回复结束后再压缩上下文');
@@ -135,7 +136,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       }
       const expanded = await expandProjectReferences(workspaces, project, input.content);
       const prompt = delivery ? delivery.prompt(expanded) : expanded;
-      return { sessionId: id, status: await agents.send(id, input.mode, input.content, prompt, images, delivery?.source) };
+      return { sessionId: id, messageId, status: await agents.send(id, input.mode, input.content, prompt, images, delivery?.source, messageId) };
     }
     // Different settings or a command need a new process; an idle one exits first.
     await agents.reclaim(id);
@@ -154,7 +155,6 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       const expanded = compact ? input.content : await expandProjectReferences(workspaces, project, input.content);
       const expandedContent = delivery ? delivery.prompt(expanded) : expanded;
       if (auto) await context.slots.ensureEligible(slot, user.id, model);
-      const messageId = randomUUID();
       store.transaction(() => {
         if (renewThread) turns.clearNativeSession(id);
         store.run(`UPDATE sessions SET slot_id=?,model=?,reasoning_effort=?,permission_mode=?,agent_mode=?,role_preset=?,status='running',updated_at=datetime('now') WHERE id=?`,
@@ -182,7 +182,7 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
           ? `The native session was restarted. The following is saved conversation history for context; file paths may refer to the former workspace location. Use the current project working directory.\n<previous_conversation>\n${JSON.stringify(previousMessages)}\n</previous_conversation>\n\nCurrent user request:\n${expandedContent}`
           : expandedContent;
         await agents.start({ ...runContext, session: { ...runContext.session, turn_id: messageId } }, prompt, undefined, images);
-        return { sessionId: id, status: 'running' };
+        return { sessionId: id, messageId, status: 'running' };
       } catch (error) {
         turns.finish(id, 'error');
         store.run("UPDATE sessions SET status='error',updated_at=datetime('now') WHERE id=?", id);

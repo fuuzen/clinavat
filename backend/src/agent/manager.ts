@@ -91,6 +91,7 @@ export class AgentManager {
     // Turn IDs change on this copy as the process moves from turn to turn.
     context = { ...context, project: { ...context.project }, session: { ...context.session } };
     const sessionId = context.session.id;
+    if (!context.session.native_session_id || context.session.command === 'compact') this.config.orchestration?.clearInspectCache(sessionId);
     const state: ActiveRun = { userId: context.user.id, projectId: context.project.id, slotId: context.slot.id, context,
       settings: settingsKey(context), abort: new AbortController(), startup, control: new RunControl(),
       turnActive: true, queue: continuation?.queue ?? this.failovers.takeQueue(sessionId),
@@ -238,15 +239,15 @@ export class AgentManager {
    * the running turn, `queue` waits for it to end, and `interrupt` ends it and runs next.
    */
   async send(sessionId: string, mode: InputMode, content: string, prompt: string, images: string[] = [],
-    source?: MessageSource): Promise<'started' | 'steered' | 'queued'> {
+    source?: MessageSource, messageId: string = randomUUID()): Promise<'started' | 'steered' | 'queued'> {
     const state = this.residentRun(sessionId);
     const run = state.run!;
     if (!state.turnActive) {
       this.beginTurn(state, this.callbacks.beginTurn(sessionId,
-        { messageId: this.callbacks.saveUserMessage(sessionId, content, images, source) }, this.authorization(state)), prompt, images);
+        { messageId: this.callbacks.saveUserMessage(sessionId, content, images, source, messageId) }, this.authorization(state)), prompt, images);
       return 'started';
     }
-    const input: QueuedInput = { id: randomUUID(), content, prompt, queuedAt: new Date().toISOString(),
+    const input: QueuedInput = { id: messageId, content, prompt, queuedAt: new Date().toISOString(),
       ...(images.length ? { images } : {}), ...(source ? { source } : {}) };
     if (mode === 'queue') {
       if (state.queue.length >= 20) throw new HttpError(409, '排队消息已达上限，请等待当前回复结束');
@@ -262,7 +263,7 @@ export class AgentManager {
       return 'queued';
     }
     const promptImages = this.callbacks.loadImages(sessionId, images);
-    const messageId = this.callbacks.saveUserMessage(sessionId, content, images, source);
+    this.callbacks.saveUserMessage(sessionId, content, images, source, messageId);
     if (await run.steer({ text: prompt, images: promptImages }, messageId)) return 'steered';
     // The turn ended while steering; the saved message becomes the next turn.
     if (state.turnActive) {
@@ -297,6 +298,7 @@ export class AgentManager {
     if (!state?.run || state.turnActive || state.queue.length || !state.run.isIdle()) return;
     this.closeRuntime(state);
     await state.completion?.catch(() => undefined);
+    this.config.orchestration?.clearInspectCache(sessionId);
   }
 
   async reclaimWhere(filter: { projectId?: string; slotId?: string; userId?: string }): Promise<void> {
@@ -364,7 +366,7 @@ export class AgentManager {
     const next = !state.closing && !state.abort.signal.aborted && !this.closing ? state.queue.shift() : undefined;
     if (next && !state.closing) {
       try {
-        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content, next.images ?? [], next.source);
+        next.messageId ??= this.callbacks.saveUserMessage(sessionId, next.content, next.images ?? [], next.source, next.id);
         this.beginTurn(state, this.callbacks.beginTurn(sessionId, { messageId: next.messageId }, this.authorization(state)),
           next.prompt, next.images ?? []);
       } catch (error) {

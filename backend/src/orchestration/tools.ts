@@ -7,11 +7,14 @@ import { memoryKeySchema } from './memory.js';
 import { inspectInput } from './inspect.js';
 
 const agentReference = z.string().trim().min(1).max(64).describe('The child agent\'s name, or the agentId start_agent returned.');
+const wave = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'wave: letters, digits, "-" and "_", at most 32 characters').optional()
+  .describe('Optional batch barrier ID (e.g. "p1-impl"). Normal completed reports in the same wave wait until all running tasks of that wave finish and arrive together in one message; errors and interruptions penetrate immediately.');
 
 export const toolInputs = {
   list_agents: z.object({}),
   inspect: inspectInput,
   start_agent: z.object({
+    wave,
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'name: letters, digits, "-" and "_", at most 32 characters')
       .describe('A short name for the child, unique in this conversation, such as "reviewer" or "impl-api".'),
     profile: z.string().trim().min(1).max(24).optional()
@@ -35,6 +38,7 @@ export const toolInputs = {
     notify: z.boolean().default(true).describe('Deliver the child\'s report to you as a new message when it finishes. Set false if you will wait or read it yourself.'),
   }),
   message_agent: z.object({
+    wave,
     agent: agentReference,
     task: z.string().trim().min(1).max(64).optional()
       .describe('Task board code for this follow-up. Omit to reuse the child’s current assignment.'),

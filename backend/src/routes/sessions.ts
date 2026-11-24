@@ -252,6 +252,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
       await releaseSession(context, id, request.user.id);
       store.run('DELETE FROM sessions WHERE id=?', id);
+      context.config.orchestration?.sessionDeleted(id, session.parent_session_id);
       // A child agent's worktree project serves only its conversation.
       const project = store.get<Project>('SELECT * FROM projects WHERE id=?', session.project_id);
       if (project?.parent_project_id && !store.get('SELECT id FROM sessions WHERE project_id=?', project.id)) {
@@ -259,7 +260,6 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         store.run('DELETE FROM projects WHERE id=?', project.id);
         events.emit(request.user.id, { type: 'project', payload: { id: project.id, deleted: true } });
       }
-      if (session.parent_session_id) context.config.orchestration?.publish?.(session.parent_session_id);
       return { ok: true };
     });
   });
@@ -290,6 +290,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
         turns.clearNativeSession(id);
         store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, id, marker);
       });
+      context.config.orchestration?.clearInspectCache(id);
       const updated = sessionFor(context, id, request.user.id);
       events.emit(request.user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
       events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
