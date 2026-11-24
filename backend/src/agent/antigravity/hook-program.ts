@@ -98,13 +98,6 @@ def tool_decision(payload, mode):
     if mode == 'write':
         if access == 'read':
             raise ValueError('你是只读子智能体，请在最终回复中说明需要的修改。')
-        cwd = os.path.join(os.environ['CLINAVAT_AGY_ROOT'], payload.get('cwd') or os.environ['CLINAVAT_AGY_CWD'])
-        paths = [value for key, value in arguments.items() if key.lower().replace('_', '') in
-                 ('path', 'absolutepath', 'file', 'filepath', 'targetfile', 'targetpath', 'targetfilepath')]
-        if not paths and call.get('name') != 'run_workflow':
-            raise ValueError('写入工具缺少有效的目标路径')
-        if any(any(in_brain(path_targets(cwd, value))) for value in paths):
-            raise ValueError('brain 目录仅允许读取')
         return {'decision': 'allow'}
     shell = os.environ.get('CLINAVAT_AGY_SHELL')
     if not shell:
