@@ -42,6 +42,8 @@ export interface OrchestrationHost {
   briefing?(context: AgentContext): string;
   /** Refreshes a master conversation's agent panel when a child conversation changes state externally. */
   publish?(masterId: string): void;
+  clearInspectCache(sessionId: string): void;
+  sessionDeleted(sessionId: string, masterId: string | null): void;
   call(context: AgentContext, tool: string, args: unknown, signal: AbortSignal): Promise<HubToolResult>;
 }
 
@@ -121,7 +123,7 @@ export interface AgentCallbacks {
   approval(request: ApprovalRequest): Promise<ApprovalDecision>;
   flushWorkspace(sessionId: string): Promise<void>;
   /** Persists a user message with the IDs of its attached images, and returns its ID. */
-  saveUserMessage(sessionId: string, content: string, images: string[], source?: MessageSource): string;
+  saveUserMessage(sessionId: string, content: string, images: string[], source?: MessageSource, id?: string): string;
   /** Reads uploaded images for the CLI; throws when one no longer exists. */
   loadImages(sessionId: string, ids: string[]): PromptImage[];
   /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */

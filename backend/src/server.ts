@@ -227,10 +227,9 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     }
     events.emit(session.user_id, { type: 'session', sessionId, payload: store.get('SELECT * FROM sessions WHERE id=?', sessionId) });
   },
-  saveUserMessage(sessionId, content, images, source) {
+  saveUserMessage(sessionId, content, images, source, id = randomUUID()) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', sessionId);
     if (!session) throw new Error('会话不存在');
-    const id = randomUUID();
     store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", id, sessionId, content,
       storedImages(images), source ?? null);
     if (!source) resetReviewsForUserMessage(context, session);

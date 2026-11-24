@@ -18,6 +18,26 @@ const fallbackReports: Record<string, string> = {
 /** A child whose turn ended while its CLI still ran work of its own; `idle` says whether that work has ended since. */
 interface DeferredReport { turnId?: string; idle: boolean; timer: NodeJS.Timeout }
 
+const messageLimit = 90_000;
+
+/** Keep each released wave in one message, sharing space among its reports when the full blocks would overflow. */
+function formatBatch(sources: ReportSource[], superAgent: boolean): { count: number; content: string; prompt: string } {
+  const render = (stored: boolean, textLimit?: number) => sources.map(source => reportBlock(source, { superAgent, stored, textLimit })).join('\n\n');
+  let textLimit: number | undefined;
+  let content = render(true);
+  if (content.length > messageLimit) {
+    const overhead = sources.reduce((sum, source) => sum + reportBlock({ ...source, text: '' }, { superAgent }).length + 2, 0);
+    // Reserve room for the head/tail omission notice and the archived-report reference in each block.
+    textLimit = Math.max(0, Math.floor((messageLimit - overhead) / sources.length) - 256);
+    content = render(true, textLimit);
+    if (content.length > messageLimit) {
+      // Even the individual report envelopes need more than one message.
+      return formatBatch(sources.slice(0, Math.ceil(sources.length / 2)), superAgent);
+    }
+  }
+  return { count: sources.length, content, prompt: superAgent ? render(false, textLimit) : content };
+}
+
 /**
  * Ends a child's tasks when it goes idle, and hands their reports to the master: as one new message after a short
  * delay, or to a wait_agents call that is waiting for them.
@@ -30,6 +50,7 @@ export class ReportDelivery {
   private deliverable = new Set<string>();
   private timers = new Map<string, NodeJS.Timeout>();
   private paused = new Set<string>();
+  private quotaAnchor = new Map<string, string>();
   private deferred = new Map<string, DeferredReport>();
 
   constructor(
@@ -171,20 +192,40 @@ export class ReportDelivery {
     this.timers.set(masterId, timer);
   }
 
+  sessionDeleted(id: string, masterId: string | null): void {
+    this.clearDeferred(id);
+    this.errors.delete(id);
+    this.paused.delete(id);
+    this.quotaAnchor.delete(id);
+    if (masterId) {
+      // The foreign-key cascade may have removed the last running task in a wave.
+      for (const wake of this.waiters.get(id) ?? []) wake();
+      this.changed(masterId);
+      this.schedule(masterId);
+    }
+  }
+
+  atQuota(masterId: string): boolean {
+    const anchor = this.quotaAnchor.get(masterId);
+    // A queued manual report uses its queue ID as its message ID when its turn starts.
+    if (anchor && this.context.agents.view(masterId).queue.some(input => input.id === anchor)) return false;
+    return this.tasks.reportTurnsSinceUser(masterId, anchor) >= this.context.orchestrationSettings.view().reportTurnsPerMessage;
+  }
+
   /** `manual` is the user delivering from the agent panel: it includes reports from before a restart and ignores the turn limit. */
   async deliver(masterId: string, manual: boolean): Promise<void> {
     const { store, events } = this.context;
     const master = store.get<Session>('SELECT * FROM sessions WHERE id=?', masterId);
     const user = master && store.get<User>('SELECT * FROM users WHERE id=?', master.user_id);
     if (!master || !user) return;
-    const pending = this.tasks.pending(masterId).filter(task => manual || (this.deliverable.has(task.id) && !this.awaited.has(task.child_session_id)));
+    const pending = this.tasks.pending(masterId).filter(task => manual || (this.deliverable.has(task.id)
+      && !this.awaited.has(task.child_session_id) && (!task.wave || task.status !== 'completed' || !this.tasks.waveRunning(masterId, task.wave))));
     if (!pending.length) return;
-    const { reportTurnsPerMessage } = this.context.orchestrationSettings.view();
-    if (!manual && this.tasks.reportTurnsSinceUser(masterId) >= reportTurnsPerMessage) {
+    if (!manual && this.atQuota(masterId)) {
       if (!this.paused.has(masterId)) {
         this.paused.add(masterId);
         events.emit(user.id, { type: 'notice', sessionId: masterId, payload: {
-          message: `主智能体在你上一条消息之后已自动汇总 ${reportTurnsPerMessage} 次，后续子智能体汇报已暂停，可在子智能体面板中手动投递。` } });
+          message: `自动汇总已达 ${this.context.orchestrationSettings.view().reportTurnsPerMessage} 次，后续子智能体汇报已暂停，可在子智能体面板中手动投递。` } });
         this.changed(masterId);
       }
       return;
@@ -194,22 +235,32 @@ export class ReportDelivery {
     let content = '';
     let promptContent = '';
     const sent: AgentTask[] = [];
+    const batches = new Map<string, AgentTask[]>();
     for (const task of pending) {
-      const child = children.get(task.child_session_id);
-      if (!child) continue;
-      const source = reportSource(child, task);
-      const block = reportBlock(source, { superAgent, stored: true });
-      if (content && content.length + block.length > 90_000) break;
-      content += (content ? '\n\n' : '') + block;
-      promptContent += (promptContent ? '\n\n' : '') + reportBlock(source, { superAgent });
-      sent.push(task);
+      if (!children.has(task.child_session_id)) continue;
+      const key = !manual && task.wave && task.status === 'completed' ? `wave:${task.wave}` : task.id;
+      const batch = batches.get(key);
+      if (batch) batch.push(task); else batches.set(key, [task]);
+    }
+    for (const batch of batches.values()) {
+      const block = formatBatch(batch.map(task => reportSource(children.get(task.child_session_id)!, task)), superAgent);
+      if (content && content.length + 2 + block.content.length > messageLimit) break;
+      content += (content ? '\n\n' : '') + block.content;
+      promptContent += (promptContent ? '\n\n' : '') + block.prompt;
+      sent.push(...batch.slice(0, block.count));
+      if (block.count < batch.length) break;
     }
     try {
-      await sendSessionMessage(this.context, user, masterId, messageInput.parse({ content, mode: 'queue' }), { source: 'report', prompt: () => promptContent });
+      const { messageId } = await sendSessionMessage(this.context, user, masterId, messageInput.parse({ content, mode: 'queue' }),
+        { source: 'report', prompt: () => promptContent });
+      if (manual) this.quotaAnchor.set(masterId, messageId);
       this.paused.delete(masterId);
       this.received(sent);
       this.deliveredTasks?.(user, master, sent);
-      if (sent.length < pending.length) this.schedule(masterId);
+      if (sent.length < pending.length) {
+        if (manual) await this.deliver(masterId, true);
+        else this.schedule(masterId);
+      }
     } catch (error) {
       events.emit(user.id, { type: 'error', sessionId: masterId,
         payload: { message: `子智能体汇报未能送达主智能体，已保留在子智能体面板中：${error instanceof Error ? error.message : String(error)}` } });

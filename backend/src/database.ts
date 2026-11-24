@@ -162,7 +162,7 @@ export class Store {
         id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         child_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, prompt TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','interrupted','error')),
-        report TEXT, notify INTEGER NOT NULL DEFAULT 1 CHECK(notify IN (0,1)),
+        report TEXT, notify INTEGER NOT NULL DEFAULT 1 CHECK(notify IN (0,1)), wave TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT, delivered_at TEXT
       );
       CREATE INDEX IF NOT EXISTS agent_tasks_master ON agent_tasks(master_session_id,status);
@@ -254,6 +254,7 @@ export class Store {
     this.addColumn('sessions', 'agent_profile', 'TEXT');
     this.addColumn('work_items', 'review_rounds', 'INTEGER NOT NULL DEFAULT 0');
     this.addColumn('agent_tasks', 'work_item_id', 'TEXT REFERENCES work_items(id) ON DELETE SET NULL');
+    this.addColumn('agent_tasks', 'wave', 'TEXT');
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
     this.addColumn('sessions', 'agent_isolation', "TEXT CHECK(agent_isolation IN ('shared','worktree'))");
