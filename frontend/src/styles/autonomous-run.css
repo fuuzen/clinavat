@@ -1,0 +1,113 @@
+.autonomous-run {
+  margin: 0 0 24px;
+  min-width: 0;
+}
+.autonomous-run-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--info-line);
+  border-radius: 6px;
+  background: var(--info-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+}
+.autonomous-run-toggle:hover {
+  color: var(--text);
+}
+.autonomous-run-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.autonomous-run-toggle > svg {
+  flex: 0 0 auto;
+  color: var(--info);
+}
+.autonomous-run-toggle strong {
+  font-weight: 500;
+  color: var(--text);
+}
+.autonomous-run-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.autonomous-run-agent {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--info);
+  font-size: 11px;
+  line-height: 18px;
+}
+.autonomous-run-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+.autonomous-run-action {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  color: var(--muted);
+}
+.autonomous-run-action > svg {
+  transition: transform 0.2s;
+}
+.autonomous-run-details {
+  margin: 10px 0 0 6px;
+  padding: 4px 0 0 14px;
+  border-left: 2px solid var(--info-line);
+}
+.autonomous-run-details > .message:last-child {
+  padding-bottom: 0;
+}
+
+.cycle-notice {
+  position: relative;
+  margin: 0 0 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-strong);
+}
+.cycle-notice-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+.cycle-notice-decision {
+  border-left-color: var(--warning-line);
+}
+.cycle-notice-decision .cycle-notice-badge {
+  border-color: var(--warning-line);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.cycle-notice-escalation {
+  border-left-color: var(--danger-line);
+}
+.cycle-notice-escalation .cycle-notice-badge {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.cycle-notice-milestone {
+  border-left-color: var(--success-line);
+}
+.cycle-notice-milestone .cycle-notice-badge {
+  border-color: var(--success-line);
+  background: var(--success-bg);
+  color: var(--success);
+}

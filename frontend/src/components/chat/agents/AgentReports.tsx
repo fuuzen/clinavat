@@ -7,7 +7,7 @@ interface Report { agent: string; engine: string; model: string; status: string;
 const statusNames: Record<string, string> = { completed: "已完成", interrupted: "已中断", error: "出错", conflict: "合并冲突" };
 
 /** Reads the report blocks the Hub writes into a report message; anything else in it is shown as it is. */
-function parseReports(content: string): { reports: Report[]; rest: string } {
+export function parseReports(content: string): { reports: Report[]; rest: string } {
   const reports: Report[] = [];
   const rest = content.replace(/<clinavat_agent_report([^>]*)>\n?([\s\S]*?)\n?<\/clinavat_agent_report>/g, (_match, attributes: string, text: string) => {
     const values = Object.fromEntries([...attributes.matchAll(/(\w+)="([^"]*)"/g)].map((match) => [match[1], match[2]]));

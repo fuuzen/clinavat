@@ -21,4 +21,5 @@
 @import "./styles/responsive.css";
 @import "./styles/composer-controls.css";
 @import "./styles/child-agents.css";
+@import "./styles/autonomous-run.css";
 @import "./styles/admin.css";
