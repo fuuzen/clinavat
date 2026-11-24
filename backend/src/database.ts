@@ -67,6 +67,7 @@ export class Store {
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         user_id TEXT NOT NULL REFERENCES users(id), engine TEXT NOT NULL ${engineCheck},
         title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', native_session_id TEXT, jsonl_file_path TEXT,
+        last_context_tokens INTEGER NOT NULL DEFAULT 0, last_context_window INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         model TEXT, reasoning_effort TEXT, permission_mode TEXT NOT NULL DEFAULT 'manual', slot_id TEXT,
         agent_mode TEXT NOT NULL DEFAULT 'normal', role_preset TEXT NOT NULL DEFAULT 'default',
@@ -211,6 +212,8 @@ export class Store {
     this.addColumn('sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
     // The Codex thread total a conversation last counted, so repeated totals are not counted twice.
     this.addColumn('sessions', 'token_usage_cursor', 'TEXT');
+    this.addColumn('sessions', 'last_context_tokens', 'INTEGER NOT NULL DEFAULT 0');
+    this.addColumn('sessions', 'last_context_window', 'INTEGER NOT NULL DEFAULT 0');
     this.addColumn('sessions', 'archived_at', 'TEXT');
     // A suspended user keeps every record but can neither sign in nor hold slots, sync or machines.
     this.addColumn('users', 'suspended_at', 'TEXT');

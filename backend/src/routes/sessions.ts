@@ -30,6 +30,56 @@ async function releaseSession(context: Context, id: string, userId: string): Pro
   if (context.config.credentials.isSessionBusy(id)) throw new HttpError(409, '会话状态尚未回收，请先停止会话后重试');
 }
 
+interface RolloverOptions {
+  note?: string;
+  automatic?: boolean;
+  contextTokens?: number;
+  canRollover?: (current: Session) => boolean;
+}
+
+export async function rolloverSession(context: Context, userId: string, id: string, options: RolloverOptions = {}): Promise<Session | null> {
+  const { store, turns, events } = context;
+  const eligible = (current: Session) => !current.archived_at && !!current.native_session_id && !!options.canRollover?.(current);
+  try {
+    return await withResourceLocks(context, [`session:${id}`], async () => {
+      let current = sessionFor(context, id, userId);
+      if (options.automatic) {
+        if (!eligible(current)) return null;
+      } else {
+        if (current.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再操作');
+        if (!current.native_session_id && !store.get('SELECT id FROM messages WHERE session_id=? LIMIT 1', id)) {
+          throw new HttpError(409, '当前对话尚未开始，无需续接上下文');
+        }
+      }
+      await releaseSession(context, id, userId);
+      if (options.automatic) {
+        // Releasing the resident process can take long enough for a child report to arrive.
+        current = sessionFor(context, id, userId);
+        if (!eligible(current)) return null;
+      }
+      const tokens = current.last_context_tokens || options.contextTokens || 0;
+      const note = !options.automatic && options.note?.trim();
+      const introduction = options.automatic
+        ? `已自动执行无感上下文续接（单次请求上下文约 ${Math.round(tokens / 1000)}k tokens）：下一条消息或子智能体汇报`
+        : '已执行无感上下文续接：下一条消息';
+      const marker = `${introduction}将启动全新底层会话，自动继承持久记忆、任务看板、子智能体状态与近期对话脉络。${note ? `\n保留重点：${note}` : ''}`;
+      const messageId = randomUUID();
+      store.transaction(() => {
+        turns.clearNativeSession(id);
+        store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, id, marker);
+      });
+      context.config.orchestration?.clearInspectCache(id);
+      const updated = sessionFor(context, id, userId);
+      events.emit(userId, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
+      events.emit(userId, { type: 'session', sessionId: id, payload: updated });
+      return updated;
+    });
+  } catch (error) {
+    if (options.automatic && error instanceof HttpError && (error.statusCode === 404 || error.statusCode === 409)) return null;
+    throw error;
+  }
+}
+
 export const sessionInput = z.object({ projectId: z.uuid(), engine: z.enum(agentEngines), slotId: selectedSlotId.optional(),
   slotMode: z.enum(['manual', 'auto']).default('manual'),
   title: z.string().trim().min(1).max(200).default('新对话'), orchestration: z.boolean().default(false),
@@ -276,26 +326,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     const { note } = z.object({ note: z.string().trim().max(2000).optional() }).strict().parse(request.body ?? {});
     sessionFor(context, id, request.user.id);
-    return withResourceLocks(context, [`session:${id}`], async () => {
-      const current = sessionFor(context, id, request.user.id);
-      if (current.archived_at) throw new HttpError(409, '对话已归档，请先恢复后再操作');
-      const hasHistory = !!current.native_session_id
-        || !!store.get<{ id: string }>('SELECT id FROM messages WHERE session_id=? LIMIT 1', id);
-      if (!hasHistory) throw new HttpError(409, '当前对话尚未开始，无需续接上下文');
-      await releaseSession(context, id, request.user.id);
-      const messageId = randomUUID();
-      const summaryNote = note?.trim() ? `\n保留重点：${note.trim()}` : '';
-      const marker = `已执行无感上下文续接：下一条消息将启动全新底层会话，自动继承持久记忆、任务看板、子智能体状态与近期对话脉络。${summaryNote}`;
-      store.transaction(() => {
-        turns.clearNativeSession(id);
-        store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", messageId, id, marker);
-      });
-      context.config.orchestration?.clearInspectCache(id);
-      const updated = sessionFor(context, id, request.user.id);
-      events.emit(request.user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
-      events.emit(request.user.id, { type: 'session', sessionId: id, payload: updated });
-      return updated;
-    });
+    return rolloverSession(context, request.user.id, id, { note });
   });
   app.get('/api/sessions/:id/messages', async request => {
     const { id } = identifier.parse(request.params);

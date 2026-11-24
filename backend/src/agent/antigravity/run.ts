@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { openContained } from '../../runtime/contained-files.js';
 import { antigravityProbe } from '../../accounts/usage-probes.js';
-import { antigravityUsage } from '../../token-usage/meters.js';
+import { AntigravityPromptRounds, antigravityUsage } from '../../token-usage/meters.js';
 import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
@@ -49,6 +49,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   let turnActive = true;
   // Prompts still awaiting their response: a prompt sent while a turn runs steers it and takes over its response.
   let prompts = 0;
+  let latestPrompt: AntigravityPromptRounds | undefined;
   let interruptRequested = false;
   let failure = '';
   // The turn began without a prompt, when agy resumed after a background command; its end comes from the Stop hook.
@@ -132,6 +133,7 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
 
   const onUpdate = (update: Record<string, any>) => {
     const kind = update?.sessionUpdate;
+    latestPrompt?.observe(kind, update.toolCallId, update.status);
     const content = ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(kind);
     if (content && !turnActive && !closing && !stopped) {
       beginTurn();
@@ -193,10 +195,12 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     else if (message.method === 'session/update' && message.params?.sessionId === sessionId) onUpdate(message.params.update ?? {});
   }, fail, services.control, { name: 'Antigravity', connection: 'Antigravity ACP', jsonrpc: true });
 
-  const promptEnded = (result: any, error?: Error) => {
+  const promptEnded = (rounds: AntigravityPromptRounds, result: any, error?: Error) => {
     prompts--;
     const record = result?.usage ? antigravityUsage(model, result.usage) : null;
-    if (record) services.recordTokenUsage({ records: [record] });
+    // A steer takes over the stream. A late reply from the previous prompt still contributes its billing record.
+    if (record) services.recordTokenUsage({ records: [record], contextTokens: rounds === latestPrompt ? rounds.estimate(record) : null });
+    if (rounds === latestPrompt) latestPrompt = undefined;
     if (prompts > 0 || !turnActive) return;
     const reason = result?.stopReason;
     if (error) endTurn('error', error.message);
@@ -211,10 +215,12 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   };
   const sendPrompt = (input: AgentPrompt) => {
     prompts++;
+    const rounds = new AntigravityPromptRounds();
+    latestPrompt = rounds;
     const blocks = [...input.images.map(image => ({ type: 'image', mimeType: image.mediaType, data: image.data })),
       ...(input.text ? [{ type: 'text', text: input.text }] : [])];
     void rpc.request('session/prompt', { sessionId, prompt: blocks }, PROMPT_TIMEOUT_MS)
-      .then(result => promptEnded(result), (error: unknown) => promptEnded(undefined, error instanceof Error ? error : new Error(String(error))));
+      .then(result => promptEnded(rounds, result), (error: unknown) => promptEnded(rounds, undefined, error instanceof Error ? error : new Error(String(error))));
   };
 
   // The Stop hook marks every end of agy's loop; it is the only sign that a turn agy began by itself is over.

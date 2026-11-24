@@ -52,6 +52,7 @@ export interface Session {
   id: string; project_id: string; user_id: string; engine: AgentEngine; slot_id: string | null;
   slot_mode: 'manual' | 'auto';
   title: string; status: string; native_session_id: string | null;
+  last_context_tokens: number; last_context_window: number;
   jsonl_file_path: string | null; created_at: string; updated_at: string;
   model: string | null; reasoning_effort: string | null;
   permission_mode: PermissionMode;

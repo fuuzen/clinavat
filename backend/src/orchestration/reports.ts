@@ -1,9 +1,11 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Context } from '../context.js';
 import type { Session, User } from '../models.js';
 import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { RuntimeView } from '../agent/manager.js';
 import type { AgentEvent } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
+import { rolloverSession } from '../routes/sessions.js';
 import { reportBlock, type ReportSource } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
@@ -19,6 +21,13 @@ const fallbackReports: Record<string, string> = {
 interface DeferredReport { turnId?: string; idle: boolean; timer: NodeJS.Timeout }
 
 const messageLimit = 90_000;
+
+function needsRollover(session: Session): boolean {
+  const limit = orchestrationConstants.superAutoRolloverTokens;
+  const threshold = session.last_context_window > 0 ? Math.min(limit, Math.floor(session.last_context_window * 0.7)) : limit;
+  return orchestrationModeOf(session) === 'super' && !!session.native_session_id
+    && session.last_context_tokens > 0 && session.last_context_tokens >= threshold;
+}
 
 /** Keep each released wave in one message, sharing space among its reports when the full blocks would overflow. */
 function formatBatch(sources: ReportSource[], superAgent: boolean): { count: number; content: string; prompt: string } {
@@ -48,7 +57,8 @@ export class ReportDelivery {
   private awaited = new Map<string, number>();
   /** Tasks that finished while this process ran; earlier ones wait for the user to deliver them. */
   private deliverable = new Set<string>();
-  private timers = new Map<string, NodeJS.Timeout>();
+  private timers = new Map<string, Promise<void>>();
+  private rollovers = new Map<string, Promise<Session | null>>();
   private paused = new Set<string>();
   private quotaAnchor = new Map<string, string>();
   private deferred = new Map<string, DeferredReport>();
@@ -67,7 +77,12 @@ export class ReportDelivery {
     if (event.type !== 'turn-state' || !finishedStatuses.has(payload?.status ?? '')) return;
     const session = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', event.sessionId);
     if (!session) return;
-    if (session.orchestration) this.schedule(session.id);
+    if (payload?.status === 'completed' && needsRollover(session)) {
+      void this.schedule(session.id).then(() => this.maybeAutoRollover(session)).catch((error: unknown) => {
+        this.context.events.emit(session.user_id, { type: 'notice', sessionId: session.id,
+          payload: { message: `自动续接上下文失败：${error instanceof Error ? error.message : String(error)}` } });
+      });
+    } else if (session.orchestration) this.schedule(session.id);
     if (session.parent_session_id) this.childTurnEnded(session, payload!.status as 'completed' | 'interrupted' | 'error', payload!.turnId);
   }
 
@@ -182,14 +197,34 @@ export class ReportDelivery {
     if (tasks.length) this.changed(tasks[0].master_session_id);
   }
 
-  schedule(masterId: string): void {
-    if (this.timers.has(masterId)) return;
-    const timer = setTimeout(() => {
+  schedule(masterId: string): Promise<void> {
+    const scheduled = this.timers.get(masterId);
+    if (scheduled) return scheduled;
+    const delivery = delay(orchestrationConstants.deliveryDelayMs, undefined, { ref: false }).then(() => {
       this.timers.delete(masterId);
-      void this.deliver(masterId, false);
-    }, orchestrationConstants.deliveryDelayMs);
-    timer.unref();
-    this.timers.set(masterId, timer);
+      return this.deliver(masterId, false);
+    });
+    this.timers.set(masterId, delivery);
+    return delivery;
+  }
+
+  private async maybeAutoRollover(session: Session): Promise<void> {
+    const { id } = session;
+    if (this.rollovers.has(id)) return;
+    const { agents, store } = this.context;
+    const rollover = rolloverSession(this.context, session.user_id, id, {
+      automatic: true, contextTokens: session.last_context_tokens,
+      canRollover: current => {
+        const runtime = agents.view(id);
+        return current.status === 'completed' && current.native_session_id === session.native_session_id && needsRollover(current)
+          && !runtime.turnActive && !runtime.switching && !runtime.queue.length && !agents.hasBackgroundWork(id)
+          && !agents.questions.list(id).length && !store.get('SELECT 1 FROM deferred_questions WHERE session_id=? LIMIT 1', id)
+          && !store.get("SELECT 1 FROM approvals WHERE session_id=? AND status='pending' LIMIT 1", id)
+          && !this.timers.has(id) && (!this.automaticReports(id).length || this.atQuota(id));
+      },
+    });
+    this.rollovers.set(id, rollover);
+    try { await rollover; } finally { this.rollovers.delete(id); }
   }
 
   sessionDeleted(id: string, masterId: string | null): void {
@@ -214,12 +249,14 @@ export class ReportDelivery {
 
   /** `manual` is the user delivering from the agent panel: it includes reports from before a restart and ignores the turn limit. */
   async deliver(masterId: string, manual: boolean): Promise<void> {
+    // A child can finish while the resident process is closing under the master's session lock.
+    const rollover = this.rollovers.get(masterId);
+    if (rollover) await rollover.catch(() => undefined);
     const { store, events } = this.context;
     const master = store.get<Session>('SELECT * FROM sessions WHERE id=?', masterId);
     const user = master && store.get<User>('SELECT * FROM users WHERE id=?', master.user_id);
     if (!master || !user) return;
-    const pending = this.tasks.pending(masterId).filter(task => manual || (this.deliverable.has(task.id)
-      && !this.awaited.has(task.child_session_id) && (!task.wave || task.status !== 'completed' || !this.tasks.waveRunning(masterId, task.wave))));
+    const pending = manual ? this.tasks.pending(masterId) : this.automaticReports(masterId);
     if (!pending.length) return;
     if (!manual && this.atQuota(masterId)) {
       if (!this.paused.has(masterId)) {
@@ -266,6 +303,11 @@ export class ReportDelivery {
         payload: { message: `子智能体汇报未能送达主智能体，已保留在子智能体面板中：${error instanceof Error ? error.message : String(error)}` } });
       this.changed(masterId);
     }
+  }
+
+  private automaticReports(masterId: string): AgentTask[] {
+    return this.tasks.pending(masterId).filter(task => this.deliverable.has(task.id) && !this.awaited.has(task.child_session_id)
+      && (!task.wave || task.status !== 'completed' || !this.tasks.waveRunning(masterId, task.wave)));
   }
 }
 
