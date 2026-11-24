@@ -106,6 +106,17 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     await orchestrator.deliver(id);
     return orchestrator.view(id);
   });
+  app.get('/api/projects/:id/memories', async request => {
+    const { id } = identifier.parse(request.params);
+    const project = projectFor(context, id, request.user.id);
+    return orchestrator.memory.view(project.id);
+  });
+  app.delete('/api/projects/:id/memories/:key', async request => {
+    const { id, key } = z.object({ id: z.uuid(), key: memoryKeySchema }).parse(request.params);
+    const project = projectFor(context, id, request.user.id);
+    orchestrator.memory.remove(project.id, key);
+    return orchestrator.memory.view(project.id);
+  });
   app.delete('/api/sessions/:id/agents/memories/:key', async request => {
     const { id, key } = z.object({ id: z.uuid(), key: memoryKeySchema }).parse(request.params);
     const master = sessionFor(context, id, request.user.id);

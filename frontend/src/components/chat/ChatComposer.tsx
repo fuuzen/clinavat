@@ -239,7 +239,7 @@ export default function ChatComposer(props: Props) {
                 setMinimized(true);
               }}
             >
-              <Minus size={15} aria-hidden="true" />
+              <Minus size={14} aria-hidden="true" />
             </button>
             {props.images.length > 0 && (
               <div className="composer-images">
@@ -284,21 +284,25 @@ export default function ChatComposer(props: Props) {
               aria-activedescendant={completion.activeDescendant}
             />
             <div className="composer-toolbar">
-              <button className="composer-attach" type="button" disabled={!canAttach} onClick={() => fileRef.current?.click()}
-                title="添加图片" aria-label="添加图片">
-                <ImagePlus size={16} aria-hidden="true" />
-              </button>
-              <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => {
-                const files = [...(event.target.files ?? [])];
-                event.target.value = "";
-                if (files.length) props.onAddImages(files);
-              }} />
-              {props.children}
-              {props.active ? <>{hasDraft && runningSend}{pauseButton}{stopButton}</> : (
-                <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title="发送消息" aria-label="发送消息">
-                  <span className="send-button-symbol"><ArrowUp size={18} aria-hidden="true" /></span>
+              <div className="composer-toolbar-controls">
+                <button className="composer-attach" type="button" disabled={!canAttach} onClick={() => fileRef.current?.click()}
+                  title="添加图片" aria-label="添加图片">
+                  <ImagePlus size={15} aria-hidden="true" />
                 </button>
-              )}
+                <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => {
+                  const files = [...(event.target.files ?? [])];
+                  event.target.value = "";
+                  if (files.length) props.onAddImages(files);
+                }} />
+                {props.children}
+              </div>
+              <div className="composer-toolbar-actions">
+                {props.active ? <>{hasDraft && runningSend}{pauseButton}{stopButton}</> : (
+                  <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title="发送消息" aria-label="发送消息">
+                    <span className="send-button-symbol"><ArrowUp size={17} aria-hidden="true" /></span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

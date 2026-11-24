@@ -15,12 +15,14 @@
 }
 .settings-trigger.permission-trigger {
   color: var(--permission-color);
-  background: color-mix(in srgb, var(--permission-color) 9%, transparent);
+  background: color-mix(in srgb, var(--permission-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--permission-color) 24%, transparent);
 }
 .settings-trigger.permission-trigger:hover:not(:disabled),
 .settings-trigger.permission-trigger[aria-expanded="true"] {
   color: var(--permission-color);
-  background: color-mix(in srgb, var(--permission-color) 16%, transparent);
+  background: color-mix(in srgb, var(--permission-color) 17%, transparent);
+  border-color: color-mix(in srgb, var(--permission-color) 40%, transparent);
 }
 .permission-mode-symbol {
   display: inline-flex;

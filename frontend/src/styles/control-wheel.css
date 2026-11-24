@@ -1,0 +1,254 @@
+.settings-trigger.control-hub-trigger {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 8px 0 4px;
+  gap: 6px;
+  border: 0;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.settings-trigger.control-hub-trigger:hover:not(:disabled) {
+  background: var(--hover);
+}
+.settings-trigger.control-hub-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--permission-color) 13%, var(--surface));
+}
+.control-hub-symbol {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--permission-color) 13%, transparent);
+  transition: background 0.15s;
+}
+.settings-trigger.control-hub-trigger:hover:not(:disabled) .control-hub-symbol,
+.settings-trigger.control-hub-trigger[aria-expanded="true"] .control-hub-symbol {
+  background: color-mix(in srgb, var(--permission-color) 20%, transparent);
+}
+.control-hub-symbol > svg {
+  width: 15px;
+  height: 15px;
+}
+.control-hub-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.settings-menu-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.control-panel-back {
+  width: 24px;
+  height: 24px;
+  margin-left: -4px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.control-panel-back:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.control-wheel-popover {
+  outline: none;
+  pointer-events: auto;
+  animation: radial-wheel-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center bottom;
+}
+@keyframes radial-wheel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.radial-wheel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  outline: none;
+  user-select: none;
+  filter: drop-shadow(0 16px 38px var(--shadow));
+}
+.radial-wheel-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.radial-bezel {
+  fill: color-mix(in srgb, var(--panel) 93%, transparent);
+  stroke: color-mix(in srgb, var(--line-strong) 72%, var(--line));
+  stroke-width: 1;
+}
+.radial-ticks line {
+  stroke: color-mix(in srgb, var(--muted) 45%, transparent);
+  stroke-width: 1;
+  stroke-linecap: round;
+}
+.radial-sector-group {
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.radial-sector-group.is-disabled {
+  cursor: not-allowed;
+}
+.radial-sector-shape {
+  fill: color-mix(in srgb, var(--surface) 94%, var(--panel));
+  stroke: color-mix(in srgb, var(--line-strong) 65%, var(--line));
+  stroke-width: 1;
+  transition: fill 0.16s, stroke 0.16s;
+}
+.radial-sector-group.is-active:not(.is-disabled) .radial-sector-shape {
+  fill: color-mix(in srgb, var(--sector-accent) 16%, var(--surface));
+  stroke: color-mix(in srgb, var(--sector-accent) 65%, var(--line-strong));
+}
+.radial-sector-group.is-disabled .radial-sector-shape {
+  fill: color-mix(in srgb, var(--panel) 88%, var(--bg));
+  stroke: color-mix(in srgb, var(--line) 80%, transparent);
+  opacity: 0.65;
+}
+.radial-sector-rim {
+  fill: none;
+  stroke: var(--sector-accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  opacity: 0.25;
+  transition: opacity 0.16s, stroke-width 0.16s;
+}
+.radial-sector-group.is-active:not(.is-disabled) .radial-sector-rim {
+  opacity: 0.95;
+  stroke-width: 3;
+}
+.radial-sector-group.is-disabled .radial-sector-rim {
+  opacity: 0.08;
+}
+.radial-pointer polygon {
+  fill: var(--sector-accent);
+}
+.radial-sector-label {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 92px;
+  text-align: center;
+  pointer-events: none;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.16s;
+}
+.radial-sector-label.is-disabled {
+  opacity: 0.5;
+}
+.radial-sector-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--sector-accent);
+  background: color-mix(in srgb, var(--sector-accent) 12%, transparent);
+  margin-bottom: 1px;
+  transition: background 0.16s, transform 0.16s;
+}
+.radial-sector-label.is-active:not(.is-disabled) .radial-sector-icon {
+  background: color-mix(in srgb, var(--sector-accent) 22%, transparent);
+  transform: scale(1.06);
+}
+.radial-sector-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: nowrap;
+}
+.radial-sector-value {
+  max-width: 100%;
+  padding: 0 2px 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.radial-sector-label.is-active:not(.is-disabled) .radial-sector-value {
+  color: var(--sector-accent);
+}
+.radial-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 80%, var(--line));
+  background: radial-gradient(circle at 35% 30%, var(--surface), var(--panel));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent),
+    0 4px 14px var(--shadow);
+  color: var(--text-secondary);
+  transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+.radial-hub:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.radial-hub-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sector-accent);
+}
+.radial-hub-idle {
+  color: var(--text-secondary);
+}
+.radial-hub-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+.radial-hub:hover .radial-hub-idle {
+  display: none;
+}
+.radial-hub:hover .radial-hub-close {
+  display: inline-flex;
+}
+.radial-hub-caption {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.radial-hub:hover .radial-hub-caption {
+  color: var(--text-secondary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .control-wheel-popover,
+  .radial-sector-group,
+  .radial-sector-label {
+    animation: none;
+    transition: none;
+  }
+}

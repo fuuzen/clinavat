@@ -1,7 +1,47 @@
-.composer-toolbar > .slot-trigger,
-.composer-toolbar > .permission-trigger,
-.composer-toolbar > .behavior-trigger {
-  min-height: 36px;
+.composer-toolbar-controls > .slot-trigger,
+.composer-toolbar-controls .model-trigger {
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 13px;
+  gap: 6px;
+}
+.composer-toolbar-controls > .slot-trigger {
+  flex: 0 1 auto;
+  padding-left: 4px;
+  max-width: 240px;
+}
+.composer-toolbar-controls > .slot-trigger:hover:not(:disabled),
+.composer-toolbar-controls > .slot-trigger[aria-expanded="true"],
+.composer-toolbar-controls .model-trigger:hover:not(:disabled),
+.composer-toolbar-controls .model-trigger[aria-expanded="true"] {
+  background: var(--hover);
+}
+.composer-toolbar-controls .model-trigger {
+  max-width: 320px;
+}
+.composer-toolbar-controls .slot-usage-ring {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+.composer-toolbar-controls .slot-usage-ring .engine-symbol {
+  width: 14px;
+  height: 14px;
+}
+.composer-toolbar-controls .slot-usage-ring .engine-logo {
+  width: 13px;
+  height: 13px;
+}
+.composer-toolbar-controls .slot-usage-ring-three .engine-logo {
+  width: 11px;
+  height: 11px;
+}
+.composer-toolbar-controls .slot-usage-ring > .slot-usage-ring-limited {
+  width: 10px;
+  height: 10px;
 }
 .behavior-mode-symbol,
 .question-policy-symbol {
@@ -13,8 +53,8 @@
 }
 .behavior-mode-symbol > svg,
 .question-policy-symbol > svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
 }
 .pause-button {
   color: var(--text-secondary);
@@ -22,78 +62,120 @@
 .pause-button .send-button-symbol {
   background: var(--surface);
   border-color: var(--line-strong);
+  box-shadow: none;
 }
 .pause-button:hover:not(:disabled) .send-button-symbol {
   background: var(--hover);
+  box-shadow: none;
 }
 @media (max-width: 700px) {
   .composer-area {
-    padding-inline: 6px;
+    padding-inline: 8px;
   }
   .composer-toolbar {
-    gap: 3px;
-    padding-inline: 4px;
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding: 4px 8px 8px;
   }
-  .composer-toolbar > .slot-trigger,
-  .composer-toolbar > .permission-trigger,
-  .composer-toolbar > .behavior-trigger,
-  .composer-toolbar > .send-button {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    max-width: 44px;
-    height: 44px;
+  .composer-toolbar-controls {
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+  .composer-toolbar-controls > .composer-attach,
+  .composer-toolbar-controls > .settings-trigger.slot-trigger,
+  .composer-toolbar-controls > .settings-trigger.control-hub-trigger {
+    flex: 0 0 40px;
+    width: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    height: 40px;
     padding: 0;
     gap: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
   }
-  .composer-toolbar > .settings-trigger .settings-trigger-label,
-  .composer-toolbar > .settings-trigger .settings-trigger-chevron {
+  .composer-toolbar-controls > .settings-trigger.slot-trigger:hover:not(:disabled),
+  .composer-toolbar-controls > .settings-trigger.control-hub-trigger:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .composer-toolbar-controls > .composer-attach > svg {
+    width: 18px;
+    height: 18px;
+  }
+  .composer-toolbar-controls > .slot-trigger .settings-trigger-label,
+  .composer-toolbar-controls > .slot-trigger .settings-trigger-chevron,
+  .composer-toolbar-controls > .control-hub-trigger .settings-trigger-label,
+  .composer-toolbar-controls > .control-hub-trigger .control-hub-badge,
+  .composer-toolbar-controls > .control-hub-trigger .settings-trigger-chevron {
     display: none;
   }
-  .composer-toolbar > .agent-settings {
+  .composer-toolbar-controls > .control-hub-trigger.control-hub-accented {
+    position: relative;
+  }
+  .composer-toolbar-controls > .control-hub-trigger.control-hub-accented::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel);
+  }
+  .composer-toolbar-controls .slot-usage-ring {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+  }
+  .composer-toolbar-controls .slot-usage-ring .engine-symbol {
+    width: 16px;
+    height: 16px;
+  }
+  .composer-toolbar-controls .slot-usage-ring .engine-logo {
+    width: 16px;
+    height: 16px;
+  }
+  .composer-toolbar-controls .slot-usage-ring-three .engine-logo {
+    width: 13px;
+    height: 13px;
+  }
+  .composer-toolbar-controls .control-hub-symbol {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+  .composer-toolbar-controls .control-hub-symbol > svg {
+    width: 17px;
+    height: 17px;
+  }
+  .composer-toolbar-controls > .agent-settings {
     min-width: 0;
+    flex: 1 1 auto;
   }
-  .composer-toolbar .model-trigger {
-    min-height: 44px;
+  .composer-toolbar-controls .model-trigger {
+    height: 40px;
+    max-width: 100%;
+    padding: 0 7px;
   }
-  .composer-toolbar .permission-mode-symbol,
-  .composer-toolbar .behavior-mode-symbol,
-  .composer-toolbar .question-policy-symbol {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
+  .composer-toolbar-actions > .send-button {
+    width: 40px;
+    height: 40px;
   }
-  .composer-toolbar .permission-mode-symbol > svg,
-  .composer-toolbar .behavior-mode-symbol > svg,
-  .composer-toolbar .question-policy-symbol > svg {
-    width: 20px;
-    height: 20px;
-  }
-  .composer-toolbar .permission-trigger {
-    background: transparent;
-  }
-  .composer-toolbar .permission-mode-symbol {
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--permission-color) 11%, transparent);
-  }
-  .composer-toolbar > .send-button .send-button-symbol {
-    width: 32px;
-    height: 32px;
+  .composer-toolbar-actions > .send-button .send-button-symbol {
+    width: 34px;
+    height: 34px;
   }
   .composer-body > textarea {
-    min-height: 60px;
-    padding-right: 52px;
+    min-height: 54px;
+    padding: 10px 44px 6px 14px;
   }
   .composer-minimize {
-    top: 1px;
-    right: 1px;
-    width: 44px;
-    height: 44px;
-    border: 0;
-    border-radius: 12px;
-    background: transparent;
+    top: 6px;
+    right: 6px;
+    width: 32px;
+    height: 32px;
   }
 }
 .runtime-strip {

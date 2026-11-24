@@ -19,7 +19,7 @@
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
-  line-height: 1;
+  line-height: 1.45;
   white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
@@ -47,12 +47,15 @@
   transform: rotate(180deg);
 }
 .settings-trigger-label {
+  display: block;
+  line-height: 1.45;
+  padding: 1px 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .slot-trigger {
-  min-width: 56px;
-  max-width: 160px;
+  min-width: 0;
+  max-width: 260px;
   flex: 0 1 auto;
 }
 .slot-menu-engine {
@@ -73,6 +76,8 @@
 .slot-menu-label {
   flex: 1;
   min-width: 0;
+  line-height: 1.45;
+  padding: 1px 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -155,7 +160,7 @@
   pointer-events: none;
 }
 .model-trigger {
-  max-width: 230px;
+  max-width: 340px;
   flex: 0 1 auto;
 }
 .settings-trigger-error > svg:last-child {
@@ -163,7 +168,6 @@
 }
 .permission-trigger {
   flex: 0 0 auto;
-  max-width: 140px;
   color: var(--text-secondary);
 }
 /* Dividers between the menu title and its sections, and between sections. */
@@ -213,14 +217,22 @@
 }
 .settings-menu {
   padding: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 70%, var(--line));
   border-radius: 12px;
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 12px 40px var(--shadow), 0 2px 8px var(--shadow);
+  box-shadow: 0 14px 42px var(--shadow), 0 2px 8px var(--shadow);
   overscroll-behavior: contain;
   scrollbar-width: thin;
   outline: none;
+  animation: settings-menu-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes settings-menu-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-menu { animation: none; }
 }
 .settings-menu-heading {
   display: flex;

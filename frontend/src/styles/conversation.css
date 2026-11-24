@@ -1,7 +1,7 @@
 .conversation {
-  max-width: 840px;
+  max-width: 860px;
   width: 100%;
-  padding: 30px 35px;
+  padding: 28px 28px;
   margin: 0 auto;
 }
 .project-welcome {
@@ -57,19 +57,23 @@
   gap: 16px;
   position: relative;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: linear-gradient(145deg, var(--surface), var(--panel));
-  padding: 16px 12px;
+  padding: 16px 14px;
   font-size: 12px;
   text-align: left;
   color: var(--text-secondary);
   transition:
-    background 0.15s,
-    border-color 0.15s;
+    background 0.16s,
+    border-color 0.16s,
+    transform 0.16s,
+    box-shadow 0.16s;
 }
 .prompt-suggestions button:hover {
   background: var(--accent-dim);
-  border-color: var(--line-strong);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-strong));
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow) 65%, transparent);
 }
 .prompt-suggestions button > svg:first-child {
   color: var(--muted);
@@ -206,9 +210,15 @@
   color: var(--text);
   overflow-wrap: anywhere;
 }
+.message-user:not(.message-delegation):not(.message-report) .message-plain {
+  background: color-mix(in srgb, var(--surface) 78%, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 15px;
+}
 .message-plain {
   font-size: 14px;
-  line-height: 1.95;
+  line-height: 1.85;
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -37,8 +37,18 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 22px 21px;
+  margin: 0 14px 16px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
   color: var(--muted);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.sidebar-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: var(--surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .sidebar-search input {
   padding: 0;
@@ -48,6 +58,9 @@
   background: none;
   width: 100%;
   color: var(--text);
+}
+.sidebar-search input:focus {
+  box-shadow: none;
 }
 .sidebar-search input::placeholder {
   color: var(--muted);
@@ -98,7 +111,8 @@
   display: flex;
   align-items: center;
   position: relative;
-  border-radius: 5px;
+  border-radius: 7px;
+  transition: background 0.14s;
 }
 .host-row:hover,
 .project-row:hover,
@@ -165,8 +179,7 @@
 }
 .session-row.selected {
   background: var(--accent-dim);
-  border: 1px solid var(--line);
-  margin-left: -1px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
 }
 .session-row.selected .tree-row {
   color: var(--accent);

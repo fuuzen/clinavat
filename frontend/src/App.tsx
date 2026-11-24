@@ -20,6 +20,7 @@ import { usePendingSends } from "./components/chat/usePendingSends";
 import { createMessageSender } from "./components/chat/send-message";
 import HostDialog from "./components/hosts/HostDialog";
 import ProjectDialog from "./components/projects/ProjectDialog";
+import ProjectMemoryDialog from "./components/projects/ProjectMemoryDialog";
 import { useSyncProgress } from "./components/projects/useSyncProgress";
 import { hostConnectionMessage, type HostConnection } from "./components/hosts/host-connection";
 import Auth from "./components/Auth";
@@ -46,6 +47,7 @@ type Dialog =
     }
   | { type: "rename"; session: Session }
   | { type: "discussion"; project: Project }
+  | { type: "memory"; project: Project }
   | { type: "settings" }
   | null;
 
@@ -363,6 +365,7 @@ export default function App() {
         }
         onArchive={(selected, archived) => void archive(selected, archived)}
         onDiscuss={(target) => setDialog({ type: "discussion", project: target })}
+        onMemory={(target) => setDialog({ type: "memory", project: target })}
         onSettings={() => setDialog({ type: "settings" })}
         adminOpen={showAdmin}
         onAdmin={() => {
@@ -492,6 +495,7 @@ export default function App() {
       {dialog?.type === "settings" && <Settings overview={overview} onClose={closeDialog} />}
       {dialog?.type === "discussion" && <DiscussionDialog overview={overview} project={dialog.project} onClose={closeDialog}
         onCreated={(sessionId) => { setDialog(null); void refresh().then(() => changeSelection(dialog.project.id, sessionId)); }} />}
+      {dialog?.type === "memory" && <ProjectMemoryDialog project={dialog.project} onClose={closeDialog} onNotice={notify} />}
       <AppNotices notices={notices} onDismiss={(id) => setNotices((current) => current.filter((notice) => notice.id !== id))} />
     </div>
   );

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Check, ChevronDown, ClipboardList, Code2, LoaderCircle, RotateCw, UserRound, Workflow } from "lucide-react";
 import type { AgentBehavior, AgentProfile, OrchestrationMode, RolePreset, Session } from "../../../types";
 import { api } from "../../../api";
@@ -22,50 +23,46 @@ export interface OrchestrationLock {
   reason: string;
 }
 
-export default function BehaviorPicker(props: {
+export interface BehaviorMenuProps {
   engine: AgentEngine;
   value: AgentBehavior;
-  disabled: boolean;
-  saving: boolean;
-  openRequest?: number;
-  /** Why orchestration cannot change for this conversation; undefined when it can. */
   orchestrationLock?: OrchestrationLock;
-  /** The user's roster, and the conversation that may limit which of it its master starts. */
   roster?: { profiles: AgentProfile[]; session?: Session };
   onRollover?: () => void;
   onChange: (value: AgentBehavior) => void;
-}) {
-  const planning = props.value.agentMode === "plan";
-  const roleSelectable = engineProfiles[props.engine].rolePresets;
-  const orchestrationMode = engineProfiles[props.engine].orchestration ? props.value.orchestrationMode : "off";
+}
+
+export function behaviorSummary(engine: AgentEngine, value: AgentBehavior) {
+  const planning = value.agentMode === "plan";
+  const roleSelectable = engineProfiles[engine].rolePresets;
+  const orchestrationMode = engineProfiles[engine].orchestration ? value.orchestrationMode : "off";
   const orchestrating = orchestrationMode !== "off";
   const superMode = orchestrationMode === "super";
+  const role = rolePresets.find((item) => item.value === value.rolePreset) || rolePresets[0];
   const orchestrationBadge = superMode ? " · Super Agent" : orchestrating ? " · 协作编排" : "";
+  const label = `${planning ? "Plan" : "Normal"}${roleSelectable && role.value !== "default" ? ` · ${role.label}` : ""}${orchestrationBadge}`;
+  const shortTag = superMode ? "Super" : planning ? "Plan" : orchestrating ? "编排" : roleSelectable && role.value !== "default" ? role.label : null;
+  const title = `${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}${orchestrationBadge}`;
+  const highlighted = planning || orchestrating || (roleSelectable && role.value !== "default");
+  const icon = planning ? ClipboardList : superMode ? Workflow : Code2;
+  return { planning, roleSelectable, orchestrationMode, orchestrating, superMode, role, label, shortTag, title, highlighted, icon };
+}
+
+export function BehaviorMenuBody(props: BehaviorMenuProps & { close: () => void; headingPrefix?: ReactNode }) {
+  const { roleSelectable, orchestrationMode, orchestrating, role } = behaviorSummary(props.engine, props.value);
   const modes = [
     { value: "normal", label: "Normal", description: "执行任务，操作遵循当前授权模式。" },
     { value: "plan", label: "Plan", description: "先分析并制定计划，确认后再切换 Normal 实施。" },
   ] as const;
-  const role = rolePresets.find((item) => item.value === props.value.rolePreset) || rolePresets[0];
-  return <SettingsMenu
-    label="工作模式与角色"
-    width={224}
-    className="behavior-trigger"
-    title={`${planning ? "Plan · 先规划" : "Normal · 执行任务"}${roleSelectable ? ` · ${role.label}` : ""}${orchestrationBadge}`}
-    openRequest={props.openRequest}
-    disabled={props.disabled || props.saving}
-    trigger={<>
-      <span className="behavior-mode-symbol" aria-hidden="true">
-        {props.saving ? <LoaderCircle className="spin" size={18} /> : planning ? <ClipboardList size={18} /> : superMode ? <Workflow size={18} /> : <Code2 size={18} />}
-      </span>
-      <span className="settings-trigger-label">{planning ? "Plan" : "Normal"}{roleSelectable && role.value !== "default" ? ` · ${role.label}` : ""}{orchestrationBadge}</span>
-      <ChevronDown className="settings-trigger-chevron" size={12} aria-hidden="true" />
-    </>}
-  >{(close) => <>
-    <div className="settings-menu-heading"><span>工作模式</span><SettingsHelp menuItem text="保存到当前对话，下次发送生效。Shift + Tab 切换工作模式。" /></div>
+  return <>
+    <div className="settings-menu-heading">
+      <span className="settings-menu-title">{props.headingPrefix}<span>工作模式</span></span>
+      <SettingsHelp menuItem text="保存到当前对话，下次发送生效。Shift + Tab 切换工作模式。" />
+    </div>
     {modes.map((mode) => <div className="settings-menu-entry" key={mode.value}>
       <button className="settings-menu-item compact" role="menuitemradio" aria-checked={props.value.agentMode === mode.value}
         aria-description={mode.description} tabIndex={-1} type="button" onClick={() => {
-        props.onChange({ ...props.value, agentMode: mode.value }); close();
+        props.onChange({ ...props.value, agentMode: mode.value }); props.close();
       }}>
         <span className="settings-item-copy">{mode.label}</span>
         <Check size={14} className="settings-item-check" />
@@ -77,7 +74,7 @@ export default function BehaviorPicker(props: {
       {rolePresets.map((preset) => <div className="settings-menu-entry" key={preset.value}>
         <button className="settings-menu-item compact" role="menuitemradio" aria-checked={role.value === preset.value}
           aria-description={preset.description} tabIndex={-1} type="button" onClick={() => {
-          props.onChange({ ...props.value, rolePreset: preset.value }); close();
+          props.onChange({ ...props.value, rolePreset: preset.value }); props.close();
         }}>
           <span className="settings-item-copy">{preset.label}</span>
           <Check size={14} className="settings-item-check" />
@@ -96,7 +93,7 @@ export default function BehaviorPicker(props: {
         return <div className="settings-menu-entry" key={option.value}>
           <button className="settings-menu-item compact" role="menuitemradio" aria-checked={orchestrationMode === option.value}
             disabled={optionDisabled} aria-description={option.description} tabIndex={-1} type="button" onClick={() => {
-            props.onChange({ ...props.value, orchestration: option.value !== "off", orchestrationMode: option.value }); close();
+            props.onChange({ ...props.value, orchestration: option.value !== "off", orchestrationMode: option.value }); props.close();
           }}>
             <span className="settings-item-copy">{option.label}</span>
             <Check size={14} className="settings-item-check" />
@@ -130,11 +127,35 @@ export default function BehaviorPicker(props: {
         <SettingsHelp menuItem text="保持当前网页对话不中断，重置底层 CLI 上下文并自动继承持久记忆、任务看板、子智能体与近期摘要（也可输入 /rollover 备注）。" /></div>
       <div className="settings-menu-entry">
         <button className="settings-menu-item compact" role="menuitem" tabIndex={-1} type="button" onClick={() => {
-          props.onRollover?.(); close();
+          props.onRollover?.(); props.close();
         }}>
           <span className="settings-item-copy">无感续接新上下文</span>
         </button>
       </div>
     </div>}
-  </>}</SettingsMenu>;
+  </>;
+}
+
+export default function BehaviorPicker(props: BehaviorMenuProps & {
+  disabled: boolean;
+  saving: boolean;
+  openRequest?: number;
+}) {
+  const summary = behaviorSummary(props.engine, props.value);
+  const Icon = summary.icon;
+  return <SettingsMenu
+    label="工作模式与角色"
+    width={224}
+    className={`behavior-trigger${summary.highlighted ? " behavior-trigger-active" : ""}`}
+    title={summary.title}
+    openRequest={props.openRequest}
+    disabled={props.disabled || props.saving}
+    trigger={<>
+      <span className="behavior-mode-symbol" aria-hidden="true">
+        {props.saving ? <LoaderCircle className="spin" size={18} /> : <Icon size={18} />}
+      </span>
+      <span className="settings-trigger-label">{summary.label}</span>
+      <ChevronDown className="settings-trigger-chevron" size={12} aria-hidden="true" />
+    </>}
+  >{(close) => <BehaviorMenuBody {...props} close={close} />}</SettingsMenu>;
 }

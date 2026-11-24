@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { Session, Slot, SlotMode } from "../../src/types";
+import type { AgentPanelView, OrchestrationMode, Session, Slot, SlotMode } from "../../src/types";
 import type { CodexGoal } from "../../src/components/chat/native/useCodexGoal";
 import { answerQuestion, asPayload, controlRun, decideApproval, isRunning, startRun } from "../agent";
 import { emit } from "../events";
@@ -17,6 +17,8 @@ interface SessionInput {
   agentMode?: Session["agent_mode"];
   rolePreset?: Session["role_preset"];
   orchestration?: boolean;
+  orchestrationMode?: OrchestrationMode;
+  agentProfiles?: string[] | null;
   questionMode?: Session["question_mode"];
   questionTimeoutMs?: Session["question_timeout_ms"];
   title?: string;
@@ -55,6 +57,18 @@ function goalAction(sessionId: string, action: string, objective?: string): Code
   return goal;
 }
 
+function agentPanelOf(sessionId: string): AgentPanelView {
+  const panel = db.agentPanels[sessionId];
+  if (!panel) return { agents: [], tasks: [], memories: [], discussions: [], pendingReports: 0, reportsPaused: false };
+  return {
+    ...panel,
+    agents: panel.agents.map((agent) => {
+      const child = findSession(agent.sessionId);
+      return child ? { ...agent, archived: Boolean(child.archived_at), status: child.status } : agent;
+    }),
+  };
+}
+
 export const sessionHandlers = [
   http.post("/api/sessions", async ({ request }) => {
     const input = await readBody<SessionInput>(request);
@@ -65,12 +79,14 @@ export const sessionHandlers = [
     if (slotMode === "auto" && input.slotId !== undefined) return fail(400, "自动选择时无需指定账号");
     const slot = chooseSlot(engine, slotMode, input.slotId);
     if (!slot) return fail(409, "当前没有可用的授权账号");
+    const orchestrationMode: OrchestrationMode = input.orchestrationMode ?? (input.orchestration ? "hybrid" : "off");
     const session: Session = {
       id: crypto.randomUUID(), project_id: input.projectId!, engine, slot_mode: slotMode, slot_id: slot.id,
       title: input.title || "新对话", status: "idle", updated_at: timestamp(), model: input.model ?? null,
       reasoning_effort: input.reasoningEffort ?? null, permission_mode: input.permissionMode ?? db.agentDefaults[engine].permissionMode ?? "auto",
       agent_mode: input.agentMode ?? "normal", role_preset: input.rolePreset ?? "default",
-      orchestration: input.orchestration && engine !== "antigravity" ? 1 : 0,
+      orchestration: orchestrationMode !== "off" ? 1 : 0,
+      orchestration_mode: orchestrationMode,
     };
     db.sessions.unshift(session);
     return HttpResponse.json(session, { status: 201 });
@@ -88,11 +104,15 @@ export const sessionHandlers = [
     if (slotMode === "manual" && (input.slotId !== undefined || input.slotMode !== undefined)
       && !chooseSlot(current.engine, slotMode, input.slotId ?? current.slot_id)) return fail(409, "所选授权账号不可用");
     const changedSlot = input.slotId !== undefined && input.slotId !== current.slot_id;
+    const nextOrchMode: OrchestrationMode | undefined = input.orchestrationMode
+      ?? (input.orchestration === undefined ? undefined : input.orchestration ? "hybrid" : "off");
     const session = touchSession(id, Object.fromEntries(Object.entries({
       title: input.title, permission_mode: input.permissionMode, agent_mode: input.agentMode,
       role_preset: input.rolePreset, slot_id: input.slotId, slot_mode: slotMode,
       question_mode: input.questionMode, question_timeout_ms: input.questionTimeoutMs,
-      orchestration: input.orchestration === undefined || current.engine === "antigravity" ? undefined : input.orchestration ? 1 : 0,
+      orchestration: nextOrchMode === undefined ? undefined : nextOrchMode !== "off" ? 1 : 0,
+      orchestration_mode: nextOrchMode,
+      agent_profiles: input.agentProfiles === undefined ? undefined : input.agentProfiles ? JSON.stringify(input.agentProfiles) : null,
       ...(changedSlot ? { model: null, reasoning_effort: null } : {}),
     }).filter(([, value]) => value !== undefined)));
     emit({ type: "session", sessionId: id, payload: asPayload(session!) });
@@ -108,6 +128,9 @@ export const sessionHandlers = [
     if (!session) return fail(404, "对话不存在");
     if (action === "archive" && isRunning(session.id)) return fail(409, "请等待会话结束，或先停止会话");
     session.archived_at = action === "archive" ? session.archived_at ?? timestamp() : null;
+    if (session.parent_session_id) {
+      emit({ type: "agents", sessionId: session.parent_session_id, payload: asPayload(agentPanelOf(session.parent_session_id)) });
+    }
     return HttpResponse.json(session);
   })),
   // Mirrors the Hub: a branch copies the messages and turns through the chosen turn under new IDs.
@@ -152,16 +175,45 @@ export const sessionHandlers = [
     HttpResponse.json(db.messages.filter((message) => message.session_id === params.id))),
   http.get("/api/sessions/:id/runtime", () =>
     HttpResponse.json({ resident: false, turnActive: false, queue: [], tasks: [] })),
-  // The preview has no other CLIs to start, so a master conversation never gets children.
-  http.get("/api/sessions/:id/agents", () => HttpResponse.json({ agents: [], discussions: [], pendingReports: 0, reportsPaused: false })),
-  http.get("/api/agent-profiles", () => HttpResponse.json([])),
+  http.get("/api/sessions/:id/agents", ({ params }) => HttpResponse.json(agentPanelOf(String(params.id)))),
+  http.delete("/api/sessions/:id/agents/memories/:key", ({ params }) => {
+    const id = String(params.id);
+    const key = decodeURIComponent(String(params.key));
+    const panel = db.agentPanels[id];
+    if (panel) panel.memories = panel.memories.filter((entry) => entry.key !== key);
+    const next = agentPanelOf(id);
+    emit({ type: "agents", sessionId: id, payload: asPayload(next) });
+    return HttpResponse.json(next);
+  }),
+  http.get("/api/agent-profiles", () => HttpResponse.json(db.agentProfiles)),
   http.post("/api/agent-profiles", () => fail(409, "在线预览中无法保存智能体名册")),
   // The preview runs no CLIs, so there is nobody to discuss with.
   http.post("/api/projects/:id/discussions", () => fail(409, "在线预览中无法启动参与讨论的 CLI")),
   http.post("/api/discussions/:id/stop", () => fail(404, "讨论不存在")),
+  http.post("/api/sessions/:id/rollover", () => HttpResponse.json({ ok: true })),
   http.post("/api/sessions/:id/agents/stop", () => HttpResponse.json({ ok: true })),
-  http.post("/api/sessions/:id/agents/deliver", () => HttpResponse.json({ agents: [], discussions: [], pendingReports: 0, reportsPaused: false })),
-  http.post("/api/sessions/:id/agents/:childId/:action", () => fail(404, "子智能体不存在")),
+  http.post("/api/sessions/:id/agents/deliver", ({ params }) => HttpResponse.json(agentPanelOf(String(params.id)))),
+  http.post("/api/sessions/:id/agents/:childId/:action", ({ params }) => {
+    const id = String(params.id);
+    const childId = String(params.childId);
+    const action = String(params.action);
+    const panel = db.agentPanels[id];
+    const agent = panel?.agents.find((item) => item.sessionId === childId);
+    if (!panel || !agent) return fail(404, "子智能体不存在");
+    if (action === "merge") {
+      if (agent.worktree) agent.worktree = { ...agent.worktree, state: "clean", conflicts: [] };
+      const next = agentPanelOf(id);
+      emit({ type: "agents", sessionId: id, payload: asPayload(next) });
+      return HttpResponse.json({ status: "merged", detail: `已合并 ${agent.name} 的演示分支`, files: [] });
+    }
+    if (action === "discard") {
+      if (agent.worktree) agent.worktree = { ...agent.worktree, state: "clean", conflicts: [] };
+      const next = agentPanelOf(id);
+      emit({ type: "agents", sessionId: id, payload: asPayload(next) });
+      return HttpResponse.json(next);
+    }
+    return HttpResponse.json(agentPanelOf(id));
+  }),
   http.get("/api/sessions/:id/turns", ({ params }) =>
     HttpResponse.json(db.turns.filter((turn) => turn.session_id === params.id))),
   http.post("/api/sessions/:id/messages", async ({ params, request }) => {

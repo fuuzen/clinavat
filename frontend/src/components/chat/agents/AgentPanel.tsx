@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { Archive, GitBranch, Inbox, Square, Workflow } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, Inbox, ListTodo, MessagesSquare, Search, Square, Workflow, X } from "lucide-react";
 import { isActive } from "../../../api";
-import type { Approval, ChildAgent, Session } from "../../../types";
+import type { Approval, Session } from "../../../types";
 import { useSessionAgents } from "./useSessionAgents";
+import AgentListPanel from "./AgentListPanel";
 import DiscussionCard from "./DiscussionCard";
-import MemoryCard from "./MemoryCard";
 import TaskBoardCard from "./TaskBoardCard";
+
+type DockTab = "tasks" | "agents" | "discussions";
 
 interface Props {
   session?: Session;
@@ -16,126 +18,211 @@ interface Props {
   onNotice: (message: string) => void;
 }
 
-function stateOf(agent: ChildAgent, approvals: number): { label: string; tone: string } {
-  if (approvals) return { label: "等待审批", tone: "waiting" };
-  if (agent.running || isActive(agent.status)) return { label: "运行中", tone: "running" };
-  if (agent.lastTask?.status === "error") return { label: "出错", tone: "error" };
-  if (agent.lastTask?.status === "interrupted") return { label: "已停止", tone: "idle" };
-  if (agent.lastTask?.status === "completed") return { label: "已完成", tone: "done" };
-  return { label: "空闲", tone: "idle" };
-}
-
-/** A master conversation's child agents above its composer: their state, their approvals and their reports. */
+/** Compact collapsible dock above the composer for tasks, sub-agents and discussions. */
 export default function AgentPanel({ session, sessions, approvals, connected, onOpen, onNotice }: Props) {
-  // A master, or a conversation that hosts a discussion the user started.
-  const [showArchived, setShowArchived] = useState(false);
+  const [activeTab, setActiveTab] = useState<DockTab | null>(null);
+  const [discussionQuery, setDiscussionQuery] = useState("");
   const superMode = session?.orchestration_mode === "super";
-  const enabled = !!session && !session.archived_at && (session.orchestration === 1 || superMode || session.orchestration_mode === "hybrid" || sessions.some((item) => item.parent_session_id === session.id));
-  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, archiveChild, deleteMemory, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
-  // Running discussions, or else the latest one.
-  const discussions = view?.discussions.some((item) => item.status === "running")
-    ? view.discussions.filter((item) => item.status === "running") : view?.discussions.slice(0, 1) ?? [];
+  const enabled = !!session && !session.archived_at && (
+    session.orchestration === 1
+    || superMode
+    || session.orchestration_mode === "hybrid"
+    || sessions.some((item) => item.parent_session_id === session.id)
+  );
+  const { view, pending, stopAll, stop, deliver, merge, discard, handoff, archiveChild, stopDiscussion } = useSessionAgents(session?.id, enabled && connected, onNotice);
+
+  useEffect(() => {
+    setActiveTab(null);
+    setDiscussionQuery("");
+  }, [session?.id]);
+
   const tasks = view?.tasks ?? [];
-  const memories = view?.memories ?? [];
-  const activeAgents = view?.agents.filter((agent) => !agent.archived) ?? [];
-  const archivedAgents = view?.agents.filter((agent) => agent.archived) ?? [];
-  const visibleAgents = showArchived ? view?.agents ?? [] : activeAgents;
-  if (!enabled || !view || (!activeAgents.length && !archivedAgents.length && !tasks.length && !memories.length && !view.pendingReports && !discussions.length)) return null;
+  const discussions = view?.discussions ?? [];
+  const agents = view?.agents ?? [];
+  const activeAgents = agents.filter((agent) => !agent.archived);
+  const archivedAgents = agents.filter((agent) => agent.archived);
+
+  if (!enabled || !view || (!agents.length && !tasks.length && !discussions.length && !view.pendingReports)) return null;
+
   const waiting = (id: string) => approvals.filter((approval) => approval.session_id === id && ["pending", "PENDING"].includes(approval.status)).length;
-  const busy = activeAgents.some((agent) => agent.running || isActive(agent.status));
-  const open = (id: string) => {
+  const totalApprovals = activeAgents.reduce((sum, agent) => sum + waiting(agent.sessionId), 0);
+  const runningAgents = activeAgents.filter((agent) => agent.running || isActive(agent.status)).length;
+  const pendingBranches = activeAgents.filter((agent) => agent.worktree && ["changes", "resolving"].includes(agent.worktree.state)).length;
+  const conflictBranches = activeAgents.filter((agent) => agent.worktree?.state === "conflict").length;
+  const busy = runningAgents > 0;
+
+  const completedTasks = tasks.filter((item) => item.status === "completed").length;
+  const verifyingTasks = tasks.filter((item) => item.status === "verifying").length;
+  const blockedTasks = tasks.filter((item) => item.status === "blocked").length;
+  const runningDiscussions = discussions.filter((item) => item.status === "running").length;
+
+  const currentTab: DockTab | null =
+    (activeTab === "tasks" && tasks.length > 0) ||
+    (activeTab === "agents" && agents.length > 0) ||
+    (activeTab === "discussions" && discussions.length > 0)
+      ? activeTab : null;
+
+  const toggle = (tab: DockTab) => setActiveTab((previous) => (previous === tab ? null : tab));
+  const openChild = (id: string) => {
     const child = sessions.find((item) => item.id === id);
     if (child) onOpen(child);
   };
+
+  const filteredDiscussions = discussionQuery.trim()
+    ? discussions.filter((item) => {
+        const keyword = discussionQuery.trim().toLowerCase();
+        return item.topic.toLowerCase().includes(keyword)
+          || item.participants.some((p) => p.name.toLowerCase().includes(keyword));
+      })
+    : discussions;
+
   return (
-    <div className="agent-panel" aria-label="子智能体">
-      <div className="agent-panel-header">
-        <Workflow size={13} aria-hidden="true" />
-        <span className="agent-panel-title">
-          {superMode && <span className="super-agent-badge">Super Agent</span>}
-          {activeAgents.length ? `子智能体 ${activeAgents.length}` : tasks.length ? "任务编排" : discussions.length ? "讨论" : archivedAgents.length ? `已归档子智能体 ${archivedAgents.length}` : "工作记忆"}
-        </span>
-        {archivedAgents.length > 0 && (
-          <button type="button" className="agent-panel-action" onClick={() => setShowArchived(!showArchived)}
-            title={showArchived ? "隐藏已归档的子智能体" : "显示已归档的子智能体"}>
-            <Archive size={11} aria-hidden="true" />
-            {showArchived ? "隐藏已归档" : `已归档 ${archivedAgents.length}`}
-          </button>
-        )}
-        {view.pendingReports > 0 && (
-          <button type="button" className="agent-panel-action" disabled={pending} onClick={() => void deliver()}
-            title={view.reportsPaused ? "自动汇总已达上限，点击后把汇报交给主智能体" : "把尚未送达的汇报交给主智能体"}>
-            <Inbox size={12} aria-hidden="true" />
-            {view.reportsPaused ? "已暂停自动汇总 · " : ""}投递 {view.pendingReports} 条汇报
-          </button>
-        )}
-        {busy && (
-          <button type="button" className="agent-panel-action danger-text" disabled={pending} onClick={() => void stopAll()} title="停止主智能体和所有正在运行的子智能体">
-            <Square size={10} fill="currentColor" aria-hidden="true" />
-            全部停止
-          </button>
-        )}
+    <div className={`agent-panel agent-dock${currentTab ? " is-expanded" : ""}`} aria-label="编排协作面板">
+      <div className="agent-dock-bar">
+        <div className="agent-dock-tabs" role="tablist" aria-label="编排模块">
+          {tasks.length > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={currentTab === "tasks"}
+              className={`agent-dock-pill${currentTab === "tasks" ? " active" : ""}`}
+              onClick={() => toggle("tasks")}
+            >
+              <ListTodo size={13} aria-hidden="true" />
+              <span>任务 {completedTasks}/{tasks.length}</span>
+              {verifyingTasks > 0 && <span className="agent-dock-badge badge-info">待验收 {verifyingTasks}</span>}
+              {blockedTasks > 0 && <span className="agent-dock-badge badge-danger">受阻 {blockedTasks}</span>}
+            </button>
+          )}
+          {agents.length > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={currentTab === "agents"}
+              className={`agent-dock-pill${currentTab === "agents" ? " active" : ""}`}
+              onClick={() => toggle("agents")}
+            >
+              <Workflow size={13} aria-hidden="true" />
+              <span>{activeAgents.length > 0 ? `子智能体 ${activeAgents.length}` : `已归档 ${archivedAgents.length}`}</span>
+              {runningAgents > 0 && <span className="agent-dock-badge badge-info">运行 {runningAgents}</span>}
+              {totalApprovals > 0 && <span className="agent-dock-badge badge-warning">待审批 {totalApprovals}</span>}
+              {conflictBranches > 0 && <span className="agent-dock-badge badge-danger">冲突 {conflictBranches}</span>}
+              {conflictBranches === 0 && pendingBranches > 0 && <span className="agent-dock-badge badge-accent">待合并 {pendingBranches}</span>}
+            </button>
+          )}
+          {discussions.length > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={currentTab === "discussions"}
+              className={`agent-dock-pill${currentTab === "discussions" ? " active" : ""}`}
+              onClick={() => toggle("discussions")}
+            >
+              <MessagesSquare size={13} aria-hidden="true" />
+              <span>讨论 {discussions.length}</span>
+              {runningDiscussions > 0 && <span className="agent-dock-badge badge-info">进行中</span>}
+            </button>
+          )}
+        </div>
+        <div className="agent-dock-actions">
+          {view.pendingReports > 0 && (
+            <button
+              type="button"
+              className="agent-panel-action"
+              disabled={pending}
+              onClick={() => void deliver()}
+              title={view.reportsPaused ? "自动汇总已达上限，点击后把汇报交给主智能体" : "把尚未送达的汇报交给主智能体"}
+            >
+              <Inbox size={12} aria-hidden="true" />
+              <span>{view.reportsPaused ? "投递" : "汇报"} {view.pendingReports}</span>
+            </button>
+          )}
+          {busy && (
+            <button
+              type="button"
+              className="agent-panel-action danger-text"
+              disabled={pending}
+              onClick={() => void stopAll()}
+              title="停止主智能体和所有正在运行的子智能体"
+            >
+              <Square size={10} fill="currentColor" aria-hidden="true" />
+              <span>全部停止</span>
+            </button>
+          )}
+          {currentTab && (
+            <button
+              type="button"
+              className="icon-button agent-dock-collapse"
+              onClick={() => setActiveTab(null)}
+              title="折叠面板"
+              aria-label="折叠面板"
+            >
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
-      <TaskBoardCard tasks={tasks} agents={view.agents} sessions={sessions} onOpen={onOpen} />
-      <MemoryCard memories={memories} pending={pending} onDelete={(key) => void deleteMemory(key)} />
-      {discussions.map((discussion) => (
-        <DiscussionCard key={discussion.id} discussion={discussion} sessions={sessions} pending={pending} onOpen={onOpen}
-          onStop={(id) => void stopDiscussion(id)} />
-      ))}
-      {visibleAgents.map((agent) => {
-        const approvalCount = waiting(agent.sessionId);
-        const state = agent.archived ? { label: "已归档", tone: "idle" } : stateOf(agent, approvalCount);
-        const meta = [agent.model || "默认模型", agent.access === "read" ? "只读" : agent.isolation === "worktree" ? "独立 worktree" : "可写",
-          agent.ephemeral ? "自动回收" : null, agent.directory].filter(Boolean).join(" · ");
-        const branch = agent.worktree && ["changes", "conflict", "resolving"].includes(agent.worktree.state) ? agent.worktree : null;
-        const canArchive = !agent.archived && !agent.running && !isActive(agent.status) && !branch && !agent.pendingReports;
-        return (
-          <div key={agent.sessionId} className={`agent-card${agent.archived ? " agent-card-archived" : ""}`}>
-            <div className="agent-card-row">
-              <span className={`engine-logo engine-logo-${agent.engine}`} aria-hidden="true" />
-              <button type="button" className="agent-card-name" onClick={() => open(agent.sessionId)} title="打开子对话">{agent.name}</button>
-              <span className="agent-card-meta" title={meta}>{meta}</span>
-              <span className={`agent-card-state agent-state-${state.tone}`}>{state.label}</span>
-              {approvalCount > 0 && (
-                <button type="button" className="agent-card-approve" onClick={() => open(agent.sessionId)}>去审批 {approvalCount}</button>
+
+      {currentTab && (
+        <div className="agent-dock-tray" role="tabpanel">
+          {currentTab === "tasks" && (
+            <TaskBoardCard tasks={tasks} agents={agents} sessions={sessions} onOpen={onOpen} />
+          )}
+          {currentTab === "agents" && (
+            <AgentListPanel
+              agents={agents}
+              superMode={superMode}
+              pending={pending}
+              waitingCount={waiting}
+              onOpen={openChild}
+              onStop={(id) => void stop(id)}
+              onArchive={(id) => void archiveChild(id)}
+              onMerge={(id, onConflict) => void merge(id, onConflict)}
+              onDiscard={(id) => void discard(id)}
+              onHandoff={(id) => void handoff(id)}
+            />
+          )}
+          {currentTab === "discussions" && (
+            <div className="agent-tray-section">
+              {discussions.length > 1 && (
+                <div className="agent-tray-toolbar">
+                  <div className="agent-tray-search">
+                    <Search size={12} aria-hidden="true" />
+                    <input
+                      type="search"
+                      value={discussionQuery}
+                      placeholder="检索讨论主题或参与者…"
+                      aria-label="检索讨论"
+                      onChange={(event) => setDiscussionQuery(event.target.value)}
+                    />
+                    {discussionQuery && (
+                      <button type="button" className="icon-button" onClick={() => setDiscussionQuery("")} aria-label="清除检索">
+                        <X size={11} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
-              {canArchive && (
-                <button type="button" className="agent-card-stop" disabled={pending} onClick={() => void archiveChild(agent.sessionId)}
-                  title={`归档 ${agent.name}`} aria-label={`归档子智能体 ${agent.name}`}>
-                  <Archive size={12} aria-hidden="true" />
-                </button>
-              )}
-              {(agent.running || isActive(agent.status)) && (
-                <button type="button" className="agent-card-stop" disabled={pending} onClick={() => void stop(agent.sessionId)}
-                  title={`停止 ${agent.name}`} aria-label={`停止子智能体 ${agent.name}`}>
-                  <Square size={10} fill="currentColor" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-            {branch && !agent.running && (
-              <div className="agent-card-branch">
-                <GitBranch size={12} aria-hidden="true" />
-                <span className="agent-card-branch-name" title={branch.branch ?? ""}>
-                  {branch.state === "changes" ? "待合并" : branch.state === "conflict" ? `合并冲突：${branch.conflicts.join("、")}` : "冲突已留在主目录，解决并提交后清理"}
-                </span>
-                {branch.state === "changes" && <>
-                  <button type="button" disabled={pending} onClick={() => void merge(agent.sessionId, "abort")}>合并</button>
-                  <button type="button" className="danger-text" disabled={pending} onClick={() => void discard(agent.sessionId)}>丢弃</button>
-                </>}
-                {branch.state === "conflict" && <>
-                  <button type="button" disabled={pending} onClick={() => void merge(agent.sessionId, "leave")}
-                    title="在主目录中重新合并并保留冲突标记，由你解决后提交">我来处理</button>
-                  <button type="button" disabled={pending} onClick={() => void handoff(agent.sessionId)} title={superMode ? "交给 Super Agent 协调子智能体解决冲突" : "把冲突交给主智能体处理"}>交给主智能体</button>
-                  <button type="button" className="danger-text" disabled={pending} onClick={() => void discard(agent.sessionId)}>丢弃</button>
-                </>}
-                {branch.state === "resolving" && (
-                  <button type="button" disabled={pending} onClick={() => void discard(agent.sessionId)} title="删除子智能体的 worktree 和分支">清理分支</button>
+              <div className="agent-tray-scroll">
+                {filteredDiscussions.length === 0 ? (
+                  <div className="agent-tray-empty">没有符合条件的讨论</div>
+                ) : (
+                  filteredDiscussions.map((discussion) => (
+                    <DiscussionCard
+                      key={discussion.id}
+                      discussion={discussion}
+                      sessions={sessions}
+                      pending={pending}
+                      onOpen={onOpen}
+                      onStop={(id) => void stopDiscussion(id)}
+                    />
+                  ))
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

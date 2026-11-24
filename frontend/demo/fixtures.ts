@@ -1,4 +1,5 @@
 import type { DevHost, Project, Session, Slot, Turn, User } from "../src/types";
+import { createOrchestrationFixtures } from "./orchestration-fixtures";
 import type { DemoMessage } from "./store";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -101,5 +102,18 @@ export function createFixtures() {
       { id: "t-4", kind: "tool", tool: { id: "t-4", name: "shell", input: { command: "rg -n \"catch\" src/routes src/services" }, output: "src/routes/orders.ts:42:  } catch {\nsrc/services/payment.ts:88:  } catch (error) {", status: "completed" } },
     ]),
   ];
-  return { user, users, slots, hosts, projects, sessions, messages, turns };
+  const orchestration = createOrchestrationFixtures({ ago, ids });
+  return {
+    user,
+    users,
+    slots,
+    hosts,
+    projects,
+    sessions: [...orchestration.sessions, ...sessions],
+    messages: [...orchestration.messages, ...messages],
+    turns: [...orchestration.turns, ...turns],
+    agentPanels: orchestration.agentPanels,
+    projectMemories: orchestration.projectMemories,
+    agentProfiles: orchestration.agentProfiles,
+  };
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  BookMarked,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -50,6 +51,8 @@ interface Props {
   onArchive: (session: Session, archived: boolean) => void;
   /** Starts a discussion among CLIs in the project. */
   onDiscuss: (project: Project) => void;
+  /** Opens persistent project memories in a browsable modal. */
+  onMemory: (project: Project) => void;
   onSettings: () => void;
   adminOpen: boolean;
   onAdmin: () => void;
@@ -276,6 +279,10 @@ export default function Sidebar(props: Props) {
                                   <button onClick={() => { props.onDiscuss(project); setMenu(""); }}>
                                     <MessagesSquare size={14} />
                                     发起讨论
+                                  </button>
+                                  <button onClick={() => { props.onMemory(project); setMenu(""); }}>
+                                    <BookMarked size={14} />
+                                    项目记忆
                                   </button>
                                   <button
                                     className="danger-text"

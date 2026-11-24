@@ -15,17 +15,16 @@ import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
 import { useConversationSlot } from "./chat/useConversationSlot";
-import PermissionPicker, { defaultPermissionMode, defaultPermissionModeFor } from "./chat/PermissionPicker";
+import { defaultPermissionMode, defaultPermissionModeFor } from "./chat/PermissionPicker";
 import WorkspaceHeader from "./chat/WorkspaceHeader";
 import ChatComposer, { type ComposerHandle } from "./chat/ChatComposer";
+import ControlHub from "./chat/composer/ControlHub";
 import RuntimeStrip from "./chat/RuntimeStrip";
 import { useSessionRuntime } from "./chat/useSessionRuntime";
 import { clearComposerDraft } from "./chat/composer/draftStorage";
 import { useComposerDraft } from "./chat/composer/useComposerDraft";
 import { maxComposerImages, prepareImage, type ComposerImage } from "./chat/composer/imageAttachments";
 import ConversationOutline from "./chat/ConversationOutline";
-import BehaviorPicker from "./chat/native/BehaviorPicker";
-import QuestionPolicyPicker from "./chat/native/QuestionPolicyPicker";
 import GoalPanel from "./chat/native/GoalPanel";
 import ArchivedNotice from "./chat/ArchivedNotice";
 import ForkOrigin from "./chat/ForkOrigin";
@@ -461,16 +460,19 @@ export default function Chat(props: Props) {
             saving={slotSaving}
             onChange={(value) => void changeSlot(value)}
           />
-          <PermissionPicker
-            openRequest={commands.permissionRequest}
+          <ControlHub
             key={`${project.id}:${session?.id || "new"}`}
             engine={currentEngine}
-            value={permissionMode}
-            disabled={active || slotSaving || behaviorSaving || !slotAvailable}
-            saving={permissionSaving}
-            onChange={(mode) => void changePermission(mode)}
-          />
-          <BehaviorPicker engine={currentEngine} value={behavior} disabled={active || slotSaving || permissionSaving || !slotAvailable} saving={behaviorSaving} onChange={(value) => void changeBehavior(value)} openRequest={commands.behaviorRequest}
+            session={session}
+            permissionMode={permissionMode}
+            permissionDisabled={active || slotSaving || behaviorSaving || !slotAvailable}
+            permissionSaving={permissionSaving}
+            permissionOpenRequest={commands.permissionRequest}
+            onPermissionChange={(mode) => void changePermission(mode)}
+            behavior={behavior}
+            behaviorDisabled={active || slotSaving || permissionSaving || !slotAvailable}
+            behaviorSaving={behaviorSaving}
+            behaviorOpenRequest={commands.behaviorRequest}
             orchestrationLock={session?.parent_session_id
               ? { scope: "all", reason: "子智能体不能再派生子智能体。" }
               : currentEngine === "codex" && session?.native_session_id
@@ -479,9 +481,11 @@ export default function Chat(props: Props) {
                   : { scope: "toggle", reason: "Codex 对话在发送第一条消息后不能关闭编排，但可在协作编排与 Super Agent 之间切换。" }
                 : undefined}
             roster={{ profiles: overview.agentProfiles ?? [], session }}
-            onRollover={session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined} />
-          <QuestionPolicyPicker key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`} session={session}
-            defaults={overview.questionDefaults} onChange={props.onQuestionsChange} />
+            onRollover={session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined}
+            onBehaviorChange={(value) => void changeBehavior(value)}
+            questionDefaults={overview.questionDefaults}
+            onQuestionsChange={props.onQuestionsChange}
+          />
           <ModelPicker
             openRequest={commands.modelRequest}
             engine={currentEngine}

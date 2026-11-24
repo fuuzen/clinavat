@@ -1,7 +1,7 @@
 .composer-area {
   flex-shrink: 0;
-  padding: 12px 35px 20px;
-  max-width: 840px;
+  padding: 10px 28px 18px;
+  max-width: 860px;
   width: 100%;
   margin: 0 auto;
   position: relative;
@@ -9,9 +9,14 @@
 .composer {
   background: var(--panel);
   border: 1px solid var(--line);
-  box-shadow: 0 5px 22px var(--shadow);
-  border-radius: 15px;
+  box-shadow:
+    0 8px 28px color-mix(in srgb, var(--shadow) 80%, transparent),
+    0 1px 2px color-mix(in srgb, var(--shadow) 45%, transparent);
+  border-radius: 16px;
   transition: border-color 0.2s, box-shadow 0.2s;
+}
+.composer.composer-active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
 }
 .composer-body {
   position: relative;
@@ -37,23 +42,23 @@
   animation: composer-expand 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 .composer:focus-within {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--line));
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent),
-    0 5px 22px var(--shadow);
+    0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent),
+    0 10px 30px color-mix(in srgb, var(--shadow) 85%, transparent);
 }
 .composer-body > textarea {
   display: block;
   border: 0;
-  border-radius: 15px;
+  border-radius: 16px 16px 0 0;
   background: none;
   resize: none;
-  padding: 16px 48px 5px 17px;
+  padding: 15px 46px 6px 16px;
   outline: none;
   width: 100%;
   font-size: 14px;
-  line-height: 1.9;
-  min-height: 80px;
+  line-height: 1.8;
+  min-height: 76px;
   max-height: min(200px, 30dvh);
   box-shadow: none;
   color: var(--text);
@@ -73,43 +78,60 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--line);
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   border-radius: 50%;
   color: var(--muted);
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-  transition: background 0.15s, color 0.15s;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .composer-minimize:hover {
   color: var(--text);
   background: var(--hover);
+  border-color: var(--line-strong);
 }
 .composer-minimize:focus-visible,
 .composer-restore:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 .composer-toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   flex-wrap: nowrap;
-  gap: 8px;
-  padding: 3px 10px 9px;
+  gap: 6px;
+  padding: 4px 8px 9px;
 }
-.composer-toolbar > .agent-settings {
-  flex: 1 1 auto;
+.composer-toolbar-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 5px;
+}
+.composer-toolbar-controls > .agent-settings {
+  margin-left: auto;
   justify-content: flex-end;
 }
-.composer-toolbar > .send-button {
+.composer-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.composer-toolbar-actions > .send-button {
   margin-left: 0;
 }
 .send-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   color: var(--on-accent);
   margin-left: auto;
@@ -125,9 +147,13 @@
   border-radius: 50%;
   background: var(--accent);
   border: 1px solid var(--accent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 26%, transparent);
+  transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 .send-button:hover:not(:disabled) .send-button-symbol {
   background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 .send-button:disabled {
   opacity: 1;
@@ -136,6 +162,7 @@
 .send-button:disabled .send-button-symbol {
   background: var(--surface);
   border-color: var(--line);
+  box-shadow: none;
 }
 .composer-area-minimized {
   position: absolute;
@@ -295,7 +322,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 48px 0 17px;
+  padding: 12px 46px 0 16px;
 }
 .composer-image {
   position: relative;
@@ -339,10 +366,12 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   color: var(--muted);
   transition: background 0.15s, color 0.15s;
 }

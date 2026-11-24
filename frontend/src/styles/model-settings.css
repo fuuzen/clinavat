@@ -1,15 +1,18 @@
 .model-trigger {
-  border-radius: 20px;
+  border-radius: 8px;
 }
 .model-trigger-effort {
   flex: 0 0 auto;
-  max-width: 65px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
   color: var(--accent);
 }
 .settings-trigger.model-trigger > svg:last-child {
-  margin-left: 2px;
+  margin-left: 0;
 }
 .settings-menu.model-settings-popover {
   padding: 20px 18px 12px;
@@ -130,20 +133,12 @@
   text-align: center;
 }
 @media (max-width: 480px) {
-  .composer-toolbar > .slot-trigger {
-    flex-basis: 75px;
-    min-width: 44px;
-    max-width: 75px;
-    padding-inline: 3px;
-  }
-  .composer-toolbar .model-trigger {
+  .composer-toolbar-controls .model-trigger {
     gap: 4px;
     padding-inline: 5px;
   }
-  .composer-toolbar .permission-trigger {
-    padding-inline: 3px;
-  }
   .model-trigger-effort {
-    max-width: 42px;
+    padding: 1px 6px;
+    font-size: 10.5px;
   }
 }

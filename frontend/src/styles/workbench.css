@@ -8,14 +8,16 @@
     radial-gradient(ellipse at 50% 25%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 70%), var(--bg);
 }
 .workspace-header {
-  height: 58px;
+  height: 56px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
-  padding: 0 23px;
+  padding: 0 22px;
   gap: 13px;
-  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .workspace-context {
   display: flex;

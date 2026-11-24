@@ -1,5 +1,5 @@
 import { defaultSiteSettings, type SiteSettings } from "../src/site/settings";
-import type { AgentPreferences, Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, UsageSettings, User } from "../src/types";
+import type { AgentPanelView, AgentPreferences, AgentProfile, Approval, DevHost, Message, Project, QuestionPolicy, QuestionPreference, Session, Slot, Turn, UsageSettings, User } from "../src/types";
 import { createFixtures } from "./fixtures";
 
 export interface DemoMessage extends Message {
@@ -25,6 +25,9 @@ export interface DemoState {
   sessions: Session[];
   messages: DemoMessage[];
   turns: Turn[];
+  agentPanels: Record<string, AgentPanelView>;
+  projectMemories: Record<string, AgentPanelView["memories"]>;
+  agentProfiles: AgentProfile[];
   approvals: Approval[];
   questions: DemoQuestion[];
   siteSettings: SiteSettings;

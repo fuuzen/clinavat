@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, LoaderCircle, MessageCircleQuestion } from "lucide-react";
 import type { QuestionPolicy, QuestionPreference, Session } from "../../../types";
 import SettingsMenu from "../SettingsMenu";
@@ -12,14 +12,40 @@ interface Props {
   onChange: (sessionId: string, value: QuestionPreference) => Promise<void>;
 }
 
-const preferenceOf = (session?: Session): QuestionPreference =>
+export const questionPreferenceOf = (session?: Session): QuestionPreference =>
   ({ mode: session?.question_mode ?? null, timeoutMs: session?.question_timeout_ms ?? null });
+
+export function QuestionPolicyMenuBody({ session, defaults, onChange, onSavingChange, close, headingPrefix }: Props & {
+  onSavingChange?: (saving: boolean) => void;
+  close: () => void;
+  headingPrefix?: ReactNode;
+}) {
+  const [draft, setDraft] = useState<QuestionPreference>(questionPreferenceOf(session));
+  return (
+    <form className="question-policy-menu" onSubmit={(event) => {
+      event.preventDefault();
+      if (!session) return;
+      onSavingChange?.(true);
+      close();
+      void onChange(session.id, draft).catch(() => setDraft(questionPreferenceOf(session))).finally(() => onSavingChange?.(false));
+    }}>
+      <div className="settings-menu-heading">
+        <span className="settings-menu-title">{headingPrefix}<span>提问的等待方式</span></span>
+        <span>仅当前对话</span>
+      </div>
+      <QuestionPolicyFields key={session?.id} value={draft} inherited={defaults} onChange={setDraft} />
+      <div className="question-policy-actions">
+        <button type="button" className="button button-small" onClick={() => { setDraft(questionPreferenceOf(session)); close(); }}>取消</button>
+        <button type="submit" className="button button-primary button-small">保存</button>
+      </div>
+    </form>
+  );
+}
 
 /** Unlike other conversation settings, this one applies to the next question even while a reply runs. */
 export default function QuestionPolicyPicker({ session, defaults, onChange }: Props) {
-  const [draft, setDraft] = useState<QuestionPreference>(preferenceOf(session));
   const [saving, setSaving] = useState(false);
-  const effective = resolvePolicy(preferenceOf(session), defaults);
+  const effective = resolvePolicy(questionPreferenceOf(session), defaults);
   const title = session ? `提问：${policySummary(effective)}` : `提问：新对话使用默认设置（${policySummary(defaults)}），发送第一条消息后可单独调整`;
   return (
     <SettingsMenu
@@ -40,20 +66,14 @@ export default function QuestionPolicyPicker({ session, defaults, onChange }: Pr
       )}
     >
       {(close) => (
-        <form className="question-policy-menu" onSubmit={(event) => {
-          event.preventDefault();
-          if (!session) return;
-          setSaving(true);
-          close();
-          void onChange(session.id, draft).catch(() => setDraft(preferenceOf(session))).finally(() => setSaving(false));
-        }}>
-          <div className="settings-menu-heading"><span>提问的等待方式</span><span>仅当前对话</span></div>
-          <QuestionPolicyFields key={session?.id} value={draft} inherited={defaults} onChange={setDraft} />
-          <div className="question-policy-actions">
-            <button type="button" className="button button-small" onClick={() => { setDraft(preferenceOf(session)); close(); }}>取消</button>
-            <button type="submit" className="button button-primary button-small">保存</button>
-          </div>
-        </form>
+        <QuestionPolicyMenuBody
+          key={`${session?.id}:${session?.question_mode}:${session?.question_timeout_ms}`}
+          session={session}
+          defaults={defaults}
+          onChange={onChange}
+          onSavingChange={setSaving}
+          close={close}
+        />
       )}
     </SettingsMenu>
   );

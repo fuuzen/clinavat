@@ -84,7 +84,7 @@ export const workspaceHandlers = [
   http.get("/api/overview", () => db.signedIn
     ? HttpResponse.json({ user: db.user, slots: db.slots, hosts: db.hosts, projects: db.projects, sessions: db.sessions,
       questionDefaults: { mode: db.userQuestions.mode ?? db.siteQuestions.mode, timeoutMs: db.userQuestions.timeoutMs ?? db.siteQuestions.timeoutMs },
-      agentDefaults: db.agentDefaults, deferredQuestions: [], agentProfiles: [] })
+      agentDefaults: db.agentDefaults, deferredQuestions: [], agentProfiles: db.agentProfiles })
     : fail(401, "请先登录")),
   http.get("/api/slots", () => HttpResponse.json(db.slots)),
   http.get("/api/slots/usage", () => HttpResponse.json(Object.fromEntries(db.slots.map((slot) => [slot.id, usage(slot.id)])))),
@@ -232,6 +232,16 @@ export const workspaceHandlers = [
     return HttpResponse.json(project);
   }),
   http.get("/api/projects/:id/usage", () => HttpResponse.json({ mirrorBytes: 2_404_200 })),
+  http.get("/api/projects/:id/memories", ({ params }) =>
+    HttpResponse.json(db.projectMemories[String(params.id)] ?? [])),
+  http.delete("/api/projects/:id/memories/:key", ({ params }) => {
+    const projectId = String(params.id);
+    const key = decodeURIComponent(String(params.key));
+    const current = db.projectMemories[projectId] ?? [];
+    const next = current.filter((entry) => entry.key !== key);
+    db.projectMemories[projectId] = next;
+    return HttpResponse.json(next);
+  }),
   http.get("/api/projects/:id/files", ({ request }) =>
     HttpResponse.json({ entries: listFiles(new URL(request.url).searchParams.get("path") || "") })),
   http.get("/api/projects/:id/file", ({ request }) => {
