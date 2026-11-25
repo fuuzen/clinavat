@@ -279,7 +279,7 @@ export default function Chat(props: Props) {
   }
   const composerWarning = maintenance
     ? active
-      ? "系统维护中，当前为只读模式：暂不支持发送消息，仍可停止当前任务或处理待确认审批与提问。"
+      ? "系统维护中，当前为只读模式：暂不支持发送消息，仍可暂停、继续或停止当前任务，以及处理待确认审批与提问。"
       : "系统维护中，当前为只读模式，暂不支持发送消息或发起新对话。"
     : !slotAvailable
     ? accountSelection.slotMode === "auto"

@@ -62,6 +62,14 @@ import { MachinePlan } from './execution/machine-plan.js';
 import { HostCommands } from './execution/host-commands.js';
 import { MachineResourceSettingsStore, parseSize } from './execution/machine-resources.js';
 
+let shuttingDown = false;
+// Register SIGUSR2 before any async startup work so Node's default handler cannot terminate the Hub during startup.
+let handleIdleReclaimSignal: () => void = () => undefined;
+process.on('SIGUSR2', () => {
+  if (shuttingDown) return;
+  handleIdleReclaimSignal();
+});
+
 const app = Fastify({
   logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
   bodyLimit: 1024 * 1024, requestTimeout: 120000, trustProxy: false,
@@ -307,6 +315,10 @@ const agents: AgentManager = new AgentManager(agentConfig, {
 });
 credentials.reclaimIdle = slotId => agents.reclaimWhere({ slotId });
 usage.readResident = slot => agents.readUsage(slot);
+handleIdleReclaimSignal = () => {
+  const reclaimed = agents.reclaimIdle();
+  app.log.info({ reclaimed }, 'SIGUSR2 触发空闲常驻 CLI 回收');
+};
 const maintenanceService = new MaintenanceService(store, agents, credentials, events);
 maintenance = maintenanceService;
 
@@ -355,7 +367,14 @@ gatewayRoutes(app, gateway, context);
 app.get('/api/health', async () => {
   const { kind, ...runtime } = await execution.health();
   const { enabled, message } = maintenanceService.getState();
-  return { status: 'ok', version: '0.1.0', execution: kind, runtime, maintenance: { enabled, message } };
+  return {
+    status: 'ok',
+    version: '0.1.0',
+    execution: kind,
+    runtime,
+    maintenance: { enabled, message },
+    reclaimIdleSignal: 'SIGUSR2',
+  };
 });
 app.addHook('preClose', async () => {
   connections.close();
@@ -366,12 +385,6 @@ app.addHook('preClose', async () => {
   await sshRelay.stop();
 });
 app.addHook('onClose', async () => { await ssh.close(); store.close(); });
-let shuttingDown = false;
-process.on('SIGUSR2', () => {
-  if (shuttingDown) return;
-  const reclaimed = agents.reclaimIdle();
-  app.log.info({ reclaimed }, 'SIGUSR2 触发空闲常驻 CLI 回收');
-});
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
   if (shuttingDown) return;
   shuttingDown = true;

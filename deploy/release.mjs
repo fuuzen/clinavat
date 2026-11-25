@@ -105,6 +105,11 @@ function reachableHost(value) {
   return value === '0.0.0.0' ? '127.0.0.1' : value === '::' ? '[::1]' : value.includes(':') ? `[${value}]` : value;
 }
 
+function hubHealthUrl() {
+  const host = reachableHost(process.env.CLINAVAT_HOST ?? '127.0.0.1');
+  return `http://${host}:${process.env.CLINAVAT_PORT ?? '3001'}/api/health`;
+}
+
 async function webCheck() {
   const host = reachableHost(process.env.CLINAVAT_WEB_BIND ?? '127.0.0.1');
   const expected = await readFile(join(liveDirectory, 'frontend', 'dist', 'index.html'), 'utf8');
@@ -120,9 +125,7 @@ async function webCheck() {
 }
 
 async function healthCheck() {
-  const configuredHost = process.env.CLINAVAT_HOST ?? '127.0.0.1';
-  const host = reachableHost(configuredHost);
-  const address = `http://${host}:${process.env.CLINAVAT_PORT ?? '3001'}/api/health`;
+  const address = hubHealthUrl();
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     try {
@@ -134,11 +137,31 @@ async function healthCheck() {
   throw new Error('后端健康检查失败');
 }
 
+// Sending SIGUSR2 to a legacy Hub without a handler terminates the process (exit 140) and its cgroup.
+async function probeIdleReclaimSupport() {
+  try {
+    const response = await fetch(hubHealthUrl(), { signal: AbortSignal.timeout(1500) });
+    if (!response.ok) return { supported: false, reason: `健康检查返回 HTTP ${response.status}` };
+    const payload = await response.json();
+    if (payload?.status !== 'ok') return { supported: false, reason: '健康检查未返回 status=ok' };
+    if (payload.reclaimIdleSignal === 'SIGUSR2') return { supported: true };
+    return { supported: false, reason: '在线 Hub 健康检查未声明 SIGUSR2 空闲回收能力（可能为旧版本）' };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { supported: false, reason: `无法探测在线 Hub 健康检查（${reason}）` };
+  }
+}
+
 async function signalIdleReclaim() {
   const hub = await serviceState(services[0]);
   if (hub.ActiveState !== 'active' || !hub.MainPID || hub.MainPID === '0') return false;
   const pid = Number(hub.MainPID);
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  const probe = await probeIdleReclaimSupport();
+  if (!probe.supported) {
+    console.error(`跳过向 Hub (PID ${pid}) 发送 SIGUSR2：${probe.reason}`);
+    return false;
+  }
   try {
     process.kill(pid, 'SIGUSR2');
     return true;

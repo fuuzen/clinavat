@@ -54,7 +54,7 @@ interface Props {
   onToggleMode?: () => void;
   active: boolean;
   available: boolean;
-  /** Maintenance or read-only mode: disables sending/attaching while keeping stop/pause controls. */
+  /** Maintenance or read-only mode: disables sending/attaching while keeping stop/pause/resume controls. */
   readOnly?: boolean;
   /** A submitted message is still on its way; keep the draft as sent. */
   locked: boolean;
@@ -83,8 +83,8 @@ export default function ChatComposer(props: Props) {
   const hasDraft = !!props.draft.trim() || props.images.length > 0;
   const canAttach = props.available && !props.locked && !props.readOnly;
   const resumable = props.runStatus === "paused" || props.runStatus === "pausing";
-  const pauseLabel = resumable ? (props.readOnly ? "系统维护中，暂不支持恢复任务" : "继续任务") : "暂停任务";
-  const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus || (!!props.readOnly && resumable);
+  const pauseLabel = resumable ? "继续任务" : "暂停任务";
+  const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus;
   const completion = useComposerCompletion({
     inputRef, draft: props.draft, onDraftChange: props.onDraftChange, projectId: props.projectId,
     commands: props.commands ?? noCommands, enabled: !minimized && props.available && !props.locked && !props.readOnly,
