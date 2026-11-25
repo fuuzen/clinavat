@@ -13,8 +13,8 @@ import type {
   Turn,
 } from "./types";
 import { useWorkspaceEvents } from "./useWorkspaceEvents";
-import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useConversationHistory } from "./useConversationHistory";
+import { useSelectedSession } from "./hooks/useSelectedSession";
 import { useSessionBehavior, useSessionPermissions, useSessionQuestions, useSessionSlot } from "./useSessionPermissions";
 import { useSessionRunControl } from "./useSessionRunControl";
 import { usePendingSends } from "./components/chat/usePendingSends";
@@ -61,12 +61,10 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [initialError, setInitialError] = useState("");
-  const { projectId, setProjectId, sessionId, setSessionId } = useWorkspaceSelection();
   const [streaming, setStreaming] = useState("");
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const { sending, beginSend, clearPendingSends } = usePendingSends(projectId, sessionId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminVisited, setAdminVisited] = useState(false);
@@ -78,18 +76,8 @@ export default function App() {
   const [inspectorRequest, setInspectorRequest] = useState<{ tab: "changes"; id: number }>();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
-  const selectedSessionRef = useRef(sessionId);
-  selectedSessionRef.current = sessionId;
-  const selectedProjectRef = useRef(projectId);
-  selectedProjectRef.current = projectId;
   const sendRequestRef = useRef(0);
   const forking = useRef(false);
-  const { messages, turns, reloadMessages, receiveTurn, resetHistory } =
-    useConversationHistory(selectedSessionRef);
-  const project = overview?.projects.find((item) => item.id === projectId);
-  const session = overview?.sessions.find(
-    (item) => item.id === sessionId && item.project_id === projectId,
-  );
   const notify = useCallback(
     (content: string, kind: Notice["kind"] = "error") => {
       const id = Date.now() + Math.random();
@@ -104,6 +92,14 @@ export default function App() {
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
+  const closeAdmin = useCallback(() => setAdminOpen(false), []);
+  const {
+    projectId, sessionId, setSessionId, selectedProjectRef, selectedSessionRef, changeSelection,
+    project, session, select, openSession, archiveSession, handleSessionDeleted, clearOpenedArchived,
+  } = useSelectedSession({ overview, setOverview, sendRequestRef, onNavigate: closeAdmin, refresh, notify });
+  const { sending, beginSend, clearPendingSends } = usePendingSends(projectId, sessionId);
+  const { messages, turns, reloadMessages, receiveTurn, resetHistory } =
+    useConversationHistory(selectedSessionRef);
   const receiveMaintenance = useCallback((maintenance: MaintenanceState) => {
     setOverview((current) => (current ? { ...current, maintenance } : current));
   }, []);
@@ -190,17 +186,6 @@ export default function App() {
     setTools,
     setInspectorRefresh,
   });
-  function changeSelection(nextProjectId: string, nextSessionId = "") {
-    sendRequestRef.current += 1;
-    selectedProjectRef.current = nextProjectId;
-    selectedSessionRef.current = nextSessionId;
-    setProjectId(nextProjectId);
-    setSessionId(nextSessionId);
-  }
-  function select(nextProject: Project, nextSession?: Session) {
-    setAdminOpen(false);
-    changeSelection(nextProject.id, nextSession?.id);
-  }
   const send = createMessageSender({
     project, session, userId: overview?.user.id, beginSend, request: sendRequestRef,
     selectedProject: selectedProjectRef, selectedSession: selectedSessionRef, selectSession: setSessionId,
@@ -248,17 +233,6 @@ export default function App() {
     await refresh();
     notify("已删除", "success");
   }
-  async function archive(target: Session, archived: boolean) {
-    try {
-      const updated = await post<Session>(`/sessions/${target.id}/${archived ? "archive" : "unarchive"}`);
-      setOverview((current) => current
-        ? { ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) } : current);
-      if (archived && target.id === sessionId) changeSelection(projectId);
-      notify(archived ? `已归档「${target.title}」，可在侧栏的「已归档」中查看或恢复` : `已恢复「${target.title}」`, "success");
-    } catch (cause) {
-      notify(errorText(cause));
-    }
-  }
   async function fork(turn: Turn) {
     if (!project || !session || forking.current) return;
     forking.current = true;
@@ -278,6 +252,7 @@ export default function App() {
     try {
       await post("/auth/logout");
       setOverview(null);
+      clearOpenedArchived();
       setAdminOpen(false);
       setAdminVisited(false);
       clearPendingSends();
@@ -294,6 +269,7 @@ export default function App() {
   useEffect(() => {
     const signedOut = () => {
       setOverview(null);
+      clearOpenedArchived();
       setAdminOpen(false);
       setAdminVisited(false);
       setDialog(null);
@@ -305,7 +281,7 @@ export default function App() {
     };
     window.addEventListener("clinavat:unauthorized", signedOut);
     return () => window.removeEventListener("clinavat:unauthorized", signedOut);
-  }, [resetHistory, clearPendingSends]);
+  }, [resetHistory, clearPendingSends, clearOpenedArchived]);
   const createProject = (host?: DevHost) => {
     if (!overview?.hosts.length) setDialog({ type: "host" });
     else setDialog({ type: "project", host });
@@ -368,7 +344,7 @@ export default function App() {
         onRename={(selected) =>
           setDialog({ type: "rename", session: selected })
         }
-        onArchive={(selected, archived) => void archive(selected, archived)}
+        onArchive={(selected, archived) => void archiveSession(selected, archived)}
         onDiscuss={(target) => setDialog({ type: "discussion", project: target })}
         onMemory={(target) => setDialog({ type: "memory", project: target })}
         onSettings={() => setDialog({ type: "settings" })}
@@ -411,12 +387,9 @@ export default function App() {
           onSlotChange={changeSlot}
           onPause={runControl.pause}
           onResume={runControl.resume}
-          onRestore={(target) => archive(target, false)}
+          onRestore={(target) => archiveSession(target, false).then(() => undefined)}
           onFork={(turn) => void fork(turn)}
-          onOpenSession={(target) => {
-            const owner = overview.projects.find((item) => item.id === target.project_id);
-            if (owner) select(owner, target);
-          }}
+          onOpenSession={openSession}
           controlPending={runControl.controlPending}
           stopPending={runControl.stopPending}
           onStop={() => void runControl.stop()}
@@ -497,7 +470,15 @@ export default function App() {
           onSaved={refresh}
         />
       )}
-      {dialog?.type === "settings" && <Settings overview={overview} onClose={closeDialog} />}
+      {dialog?.type === "settings" && (
+        <Settings
+          overview={overview}
+          onClose={closeDialog}
+          onOpenSession={openSession}
+          onRestoreSession={(target) => archiveSession(target, false)}
+          onSessionDeleted={handleSessionDeleted}
+        />
+      )}
       {dialog?.type === "discussion" && <DiscussionDialog overview={overview} project={dialog.project} onClose={closeDialog}
         onCreated={(sessionId) => { setDialog(null); void refresh().then(() => changeSelection(dialog.project.id, sessionId)); }} />}
       {dialog?.type === "memory" && <ProjectMemoryDialog project={dialog.project} onClose={closeDialog} onNotice={notify} />}

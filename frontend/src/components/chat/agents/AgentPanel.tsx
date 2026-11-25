@@ -14,7 +14,7 @@ interface Props {
   sessions: Session[];
   approvals: Approval[];
   connected: boolean;
-  onOpen: (session: Session) => void;
+  onOpen: (session: Session | string) => void;
   onNotice: (message: string) => void;
 }
 
@@ -66,8 +66,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
 
   const toggle = (tab: DockTab) => setActiveTab((previous) => (previous === tab ? null : tab));
   const openChild = (id: string) => {
-    const child = sessions.find((item) => item.id === id);
-    if (child) onOpen(child);
+    onOpen(sessions.find((item) => item.id === id) ?? id);
   };
 
   const filteredDiscussions = discussionQuery.trim()

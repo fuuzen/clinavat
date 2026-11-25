@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from "react";
-import { BarChart3, CircleUserRound, MessageCircleQuestion, Palette, SlidersHorizontal, Users } from "lucide-react";
-import type { Overview } from "../types";
+import { Archive, BarChart3, CircleUserRound, MessageCircleQuestion, Palette, SlidersHorizontal, Users } from "lucide-react";
+import type { ArchivedSessionItem, Overview, Session } from "../types";
 import { Modal } from "./Dialogs";
 import AccountSettings from "./settings/AccountSettings";
 import RosterSettings from "./settings/RosterSettings";
@@ -8,22 +8,27 @@ import ServiceStatus from "./settings/ServiceStatus";
 import QuestionSettings from "./settings/QuestionSettings";
 import AgentDefaultsSettings from "./settings/AgentDefaultsSettings";
 import TokenUsageSettings from "./settings/TokenUsageSettings";
+import ArchivedSessionsSettings from "./settings/ArchivedSessionsSettings";
 
 const AppearanceSettings = lazy(() => import("./settings/AppearanceSettings"));
 
 interface Props {
   overview: Overview;
   onClose: () => void;
+  onOpenSession: (session: ArchivedSessionItem) => void;
+  onRestoreSession: (session: Session) => Promise<boolean>;
+  onSessionDeleted: (sessionId: string) => void;
 }
 
-export default function Settings({ overview, onClose }: Props) {
-  const [tab, setTab] = useState<"account" | "usage" | "conversation" | "roster" | "appearance" | "system">(
-    "account",
-  );
+export default function Settings({ overview, onClose, onOpenSession, onRestoreSession, onSessionDeleted }: Props) {
+  const [tab, setTab] = useState<
+    "account" | "usage" | "conversation" | "roster" | "archived" | "appearance" | "system"
+  >("account");
+  const archivedCount = overview.archivedSessionsCount ?? 0;
   return (
     <Modal
       title="工作台设置"
-      subtitle="管理个人账号和对话默认值、查看用量、调整工作台外观，查看连接与服务状态。"
+      subtitle="管理个人账号、对话默认值与已归档对话，查看用量、调整工作台外观与服务状态。"
       onClose={onClose}
       wide
     >
@@ -58,6 +63,14 @@ export default function Settings({ overview, onClose }: Props) {
             智能体名册
           </button>
           <button
+            className={tab === "archived" ? "active" : ""}
+            onClick={() => setTab("archived")}
+          >
+            <Archive size={16} />
+            <span>已归档对话</span>
+            {archivedCount > 0 && <span className="settings-nav-count">{archivedCount}</span>}
+          </button>
+          <button
             className={tab === "appearance" ? "active" : ""}
             onClick={() => setTab("appearance")}
           >
@@ -89,6 +102,17 @@ export default function Settings({ overview, onClose }: Props) {
             </>
           )}
           {tab === "roster" && <RosterSettings overview={overview} />}
+          {tab === "archived" && (
+            <ArchivedSessionsSettings
+              overview={overview}
+              onOpen={(item) => {
+                onOpenSession(item);
+                onClose();
+              }}
+              onRestore={onRestoreSession}
+              onDeleted={onSessionDeleted}
+            />
+          )}
           {tab === "system" && <ServiceStatus />}
         </div>
       </div>

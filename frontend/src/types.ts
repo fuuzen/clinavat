@@ -249,12 +249,28 @@ export interface MaintenanceActivity {
   readyToPublish: boolean;
 }
 
+export type ArchivedSessionKind = "all" | "primary" | "child";
+
+export interface ArchivedSessionItem extends Session {
+  project_name?: string;
+  root_project_id?: string;
+}
+
+export interface ArchivedSessionsResponse {
+  items: ArchivedSessionItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface Overview {
   user: User;
   slots: Slot[];
   hosts: DevHost[];
   projects: Project[];
   sessions: Session[];
+  archivedSessionsCount?: number;
   questionDefaults: QuestionPolicy;
   agentDefaults: AgentPreferences;
   deferredQuestions: { session_id: string; count: number }[];

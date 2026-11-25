@@ -15,7 +15,7 @@ export default function DiscussionCard({ discussion, sessions, pending, onOpen, 
   discussion: DiscussionView;
   sessions: Session[];
   pending: boolean;
-  onOpen: (session: Session) => void;
+  onOpen: (session: Session | string) => void;
   onStop: (id: string) => void;
 }) {
   const running = discussion.status === "running";
@@ -39,8 +39,8 @@ export default function DiscussionCard({ discussion, sessions, pending, onOpen, 
           const state = participant.running ? "running" : spoke?.status === "completed" ? "done" : spoke ? "error" : "idle";
           const session = sessions.find((item) => item.id === participant.sessionId);
           return (
-            <button key={participant.sessionId} type="button" className={`discussion-participant participant-${state}`} disabled={!session}
-              onClick={() => session && onOpen(session)} title={`${participant.name}${participant.stance ? `（${participant.stance}）` : ""} · ${participant.model || "默认模型"}`}>
+            <button key={participant.sessionId} type="button" className={`discussion-participant participant-${state}`} disabled={!participant.sessionId}
+              onClick={() => onOpen(session ?? participant.sessionId)} title={`${participant.name}${participant.stance ? `（${participant.stance}）` : ""} · ${participant.model || "默认模型"}`}>
               <span className={`engine-logo engine-logo-${participant.engine}`} aria-hidden="true" />
               {participant.name.replace(/^d\d+-/, "")}
               {participant.stance && <small>{participant.stance}</small>}

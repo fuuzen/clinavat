@@ -87,7 +87,7 @@ interface Props {
   onResume: () => Promise<boolean>;
   onRestore: (session: Session) => Promise<void>;
   onFork: (turn: Turn) => void;
-  onOpenSession: (session: Session) => void;
+  onOpenSession: (session: Session | string) => void;
   controlPending: boolean;
   stopPending: boolean;
   onApproval: (

@@ -19,7 +19,7 @@ export default function ActionInbox({
   approvals: Approval[];
   connected: boolean;
   onApproval: (id: string, decision: "allow" | "deny", reason?: string) => Promise<void>;
-  onOpenSession: (session: Session) => void;
+  onOpenSession: (session: Session | string) => void;
 }) {
   const childMap = new Map(
     session
@@ -50,8 +50,7 @@ export default function ActionInbox({
         sessionId={session?.id}
         connected={connected}
         onOpenSession={(targetId) => {
-          const target = sessions.find((item) => item.id === targetId);
-          if (target) onOpenSession(target);
+          onOpenSession(sessions.find((item) => item.id === targetId) ?? targetId);
         }}
       />
     </>

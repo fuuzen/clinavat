@@ -45,13 +45,11 @@ function TaskRow({
   task,
   archived,
   childByName,
-  sessions,
   onOpenAssignee,
 }: {
   task: WorkItemView;
   archived?: boolean;
   childByName: Map<string, ChildAgent>;
-  sessions: Session[];
   onOpenAssignee: (name: string) => void;
 }) {
   const detail = [
@@ -59,8 +57,7 @@ function TaskRow({
     task.acceptance ? `验收标准：${task.acceptance}` : null,
     task.dependsOn.length ? `依赖：${task.dependsOn.join("、")}` : null,
   ].filter(Boolean).join("\n");
-  const hasSession = !!task.assignedAgent && !!childByName.get(task.assignedAgent)
-    && sessions.some((item) => item.id === childByName.get(task.assignedAgent!)?.sessionId);
+  const hasSession = !!task.assignedAgent && !!childByName.get(task.assignedAgent)?.sessionId;
   const codeText = archived ? `S${task.stage ?? 1}·${task.code}` : task.code;
 
   return (
@@ -111,7 +108,7 @@ export default function TaskBoardCard({
   agents: ChildAgent[];
   sessions: Session[];
   readOnly?: boolean;
-  onOpen: (session: Session) => void;
+  onOpen: (session: Session | string) => void;
   onNotice?: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -197,8 +194,8 @@ export default function TaskBoardCard({
 
   const openAssignee = (name: string) => {
     const child = childByName.get(name);
-    const target = child && sessions.find((item) => item.id === child.sessionId);
-    if (target) onOpen(target);
+    if (!child?.sessionId) return;
+    onOpen(sessions.find((item) => item.id === child.sessionId) ?? child.sessionId);
   };
 
   return (
@@ -258,7 +255,6 @@ export default function TaskBoardCard({
                 key={task.id}
                 task={task}
                 childByName={childByName}
-                sessions={sessions}
                 onOpenAssignee={openAssignee}
               />
             ))}
@@ -303,7 +299,6 @@ export default function TaskBoardCard({
                       task={task}
                       archived
                       childByName={childByName}
-                      sessions={sessions}
                       onOpenAssignee={openAssignee}
                     />
                   ))}

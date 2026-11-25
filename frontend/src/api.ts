@@ -1,4 +1,10 @@
-import type { TaskBoardArchiveResponse, TaskBoardResponse } from "./types";
+import type {
+  ArchivedSessionKind,
+  ArchivedSessionsResponse,
+  Session,
+  TaskBoardArchiveResponse,
+  TaskBoardResponse,
+} from "./types";
 
 let maintenanceEnabled = false;
 const maintenanceListeners = new Set<(enabled: boolean) => void>();
@@ -81,6 +87,35 @@ export function fetchSessionTasks(sessionId: string, includeArchived = false): P
 
 export function archiveSessionTasks(sessionId: string, codes?: string[]): Promise<TaskBoardArchiveResponse> {
   return post<TaskBoardArchiveResponse>(`/sessions/${sessionId}/tasks/archive`, codes?.length ? { codes } : {});
+}
+
+export interface ArchivedSessionsQuery {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  projectId?: string;
+  kind?: ArchivedSessionKind;
+}
+
+export function fetchArchivedSessions(
+  params: ArchivedSessionsQuery = {},
+  signal?: AbortSignal,
+): Promise<ArchivedSessionsResponse> {
+  const query = new URLSearchParams();
+  if (params.page !== undefined) query.set("page", String(params.page));
+  if (params.pageSize !== undefined) query.set("pageSize", String(params.pageSize));
+  if (params.q) query.set("q", params.q);
+  if (params.projectId) query.set("projectId", params.projectId);
+  if (params.kind) query.set("kind", params.kind);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return api<ArchivedSessionsResponse>(`/sessions/archived${suffix}`, { signal });
+}
+
+export function fetchSessionById(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<{ session: Session }> {
+  return api<{ session: Session }>(`/sessions/${sessionId}`, { signal });
 }
 
 export function errorText(error: unknown): string {

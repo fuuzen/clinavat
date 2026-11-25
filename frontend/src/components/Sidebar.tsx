@@ -22,7 +22,6 @@ import {
   X,
 } from "lucide-react";
 import Brand from "./Brand";
-import ArchivedSessions from "./sidebar/ArchivedSessions";
 import SessionRow from "./sidebar/SessionRow";
 import SessionGroup, { groupSessions } from "./sidebar/SessionGroup";
 import ClientHubSwitch from "./ClientHubSwitch";
@@ -149,7 +148,8 @@ export default function Sidebar(props: Props) {
                   matches(project.name) ||
                   activeSessions.some(
                     (session) =>
-                      session.project_id === project.id &&
+                      (session.project_id === project.id ||
+                        worktreeParents.get(session.project_id) === project.id) &&
                       matches(session.title),
                   ),
               )
@@ -388,20 +388,6 @@ export default function Sidebar(props: Props) {
               </div>
             );
           })}
-          <ArchivedSessions
-            overview={overview}
-            selectedSessionId={selectedSession?.id}
-            readOnly={maintenanceEnabled}
-            matches={matches}
-            menu={menu}
-            onMenu={setMenu}
-            onSelect={(project, session) => {
-              props.onSelect(project, session);
-              props.onClose();
-            }}
-            onRestore={(session) => props.onArchive(session, false)}
-            onDelete={(session) => props.onDelete("session", session.id, session.title)}
-          />
         </nav>
         <div className="sidebar-bottom">
           <button className="sidebar-settings" onClick={props.onSettings}>
