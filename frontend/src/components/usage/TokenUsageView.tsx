@@ -61,8 +61,8 @@ export default function TokenUsageView({ path, heading, groupOf, emptyText }: Pr
         : groups.length ? <TokenUsageTable groups={groups} heading={heading} />
           : !error && <div className="settings-empty"><BarChart3 size={29} /><p>{emptyText}</p></div>}
       <p className="token-usage-note">
-        数据来自官方 CLI 在对话中报告的 Token 用量，从启用统计后开始记录。Claude 的金额由 CLI 自行估算，Codex 按
-        {report ? ` ${report.priceSnapshotDate} ` : "内置"}的模型价格快照折算。订阅账号的金额只是按 API 标价折算的等价值，并非实际扣费；
+        数据来自官方 CLI 在对话中报告的 Token 用量，从启用统计后开始记录。Claude 的金额由 CLI 自行估算，Codex 和 Antigravity 按
+        {report ? ` ${report.priceSnapshotDate} ` : "内置"}的模型价格快照折算。OpenAI 和 Gemini 采用自动前缀缓存，仅上报缓存读取，缓存写入显示为 0 属正常现象。订阅账号的金额只是按 API 标价折算的等价值，并非实际扣费；
         带 + 的金额不含价格未知的模型。展开一行可查看各模型的明细。
       </p>
     </div>

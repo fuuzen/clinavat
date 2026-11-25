@@ -50,7 +50,7 @@ export default function ModelPrices() {
     catch { setError("文件不是有效的 JSON"); return; }
     // LiteLLM's full list is several megabytes; only these providers' entries are sent, the Hub filters them exactly.
     const subset = Object.fromEntries(Object.entries(document ?? {})
-      .filter(([, model]) => model && ["openai", "anthropic"].includes(String(model.litellm_provider))));
+      .filter(([, model]) => model && ["openai", "anthropic", "gemini"].includes(String(model.litellm_provider))));
     await change("/admin/model-prices/snapshot", { method: "PUT", body: JSON.stringify(subset) }, `已导入「${file.name}」，用量统计按新价格重新折算`);
   }
   async function save(event: FormEvent) {
@@ -87,7 +87,7 @@ export default function ModelPrices() {
       <p className="token-usage-note">
         {list ? `当前使用${list.snapshot.source === "imported" ? ` ${list.snapshot.date} 导入的` : `内置的 ${list.snapshot.date} `}价格快照，共 ${list.snapshot.models} 个模型。` : "正在读取价格…"}
         单位为美元 / 百万 Token。导入时上传 LiteLLM 的 <a href={litellmSource} target="_blank" rel="noreferrer">model_prices_and_context_window.json</a>，
-        只保留其中 OpenAI 和 Anthropic 的模型。自定义价格优先于快照，也会替代 Claude CLI 自己估算的金额；价格变更会应用到所有已记录的用量。
+        只保留其中 OpenAI、Anthropic 和 Google Gemini 的模型。自定义价格优先于快照，也会替代 Claude CLI 自己估算的金额；价格变更会应用到所有已记录的用量。
       </p>
       {error && <div className="inline-error" role="alert">{error}</div>}
       {message && <p className="admin-site-access-status" role="status"><Check size={13} />{message}</p>}

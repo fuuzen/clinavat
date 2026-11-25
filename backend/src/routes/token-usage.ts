@@ -31,7 +31,7 @@ export function tokenUsageRoutes(app: FastifyInstance, context: Context) {
     requireAdmin(request);
     return priceList();
   });
-  // LiteLLM's price list format; the page sends only OpenAI and Anthropic entries to stay within request limits.
+  // LiteLLM's price list format; the page sends only OpenAI, Anthropic, and Gemini entries to stay within request limits.
   app.put('/api/admin/model-prices/snapshot', async request => {
     requireAdmin(request);
     prices.importLiteLLM(request.body);

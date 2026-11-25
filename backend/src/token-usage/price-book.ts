@@ -45,7 +45,7 @@ export class PriceBook {
 
   importLiteLLM(document: unknown): PriceSnapshotInfo {
     const prices = litellmPrices(document);
-    if (!Object.keys(prices).length) throw new HttpError(400, '文件中没有 OpenAI 或 Anthropic 模型的价格，请上传 LiteLLM 的 model_prices_and_context_window.json');
+    if (!Object.keys(prices).length) throw new HttpError(400, '文件中没有 OpenAI、Anthropic 或 Google Gemini 模型的价格，请上传 LiteLLM 的 model_prices_and_context_window.json');
     this.store.run(`INSERT INTO model_price_snapshot(id,prices,imported_at) VALUES(1,?,datetime('now'))
       ON CONFLICT(id) DO UPDATE SET prices=excluded.prices,imported_at=excluded.imported_at`, JSON.stringify(prices));
     this.load();

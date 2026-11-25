@@ -48,12 +48,14 @@ export class ClaudeUsageMeter {
     const records = stated && typeof stated === 'object'
       ? Object.entries(stated as Record<string, any>).map(([model, usage]) => priced(model, {
         inputTokens: count(usage?.inputTokens), cacheReadTokens: count(usage?.cacheReadInputTokens),
-        cacheWriteTokens: count(usage?.cacheCreationInputTokens), outputTokens: count(usage?.outputTokens), reasoningTokens: 0,
+        cacheWriteTokens: count(usage?.cacheCreationInputTokens), outputTokens: count(usage?.outputTokens),
+        reasoningTokens: count(usage?.thinkingTokens),
       }, usage?.costUSD))
       // A CLI without that internal field still reports each API message's usage; reports price those.
       : [...this.messages.values()].map(({ model, usage }) => priced(model, {
         inputTokens: count(usage.input_tokens), cacheReadTokens: count(usage.cache_read_input_tokens),
-        cacheWriteTokens: count(usage.cache_creation_input_tokens), outputTokens: count(usage.output_tokens), reasoningTokens: 0,
+        cacheWriteTokens: count(usage.cache_creation_input_tokens), outputTokens: count(usage.output_tokens),
+        reasoningTokens: count((usage.output_tokens_details as { thinking_tokens?: unknown } | undefined)?.thinking_tokens),
       }));
     this.messages.clear();
     const contextTokens = this.lastContextTokens;

@@ -11,11 +11,31 @@ export interface TokenCounts {
 /** USD per million tokens: input, cache read, cache write, output. A missing cache price falls back to input. */
 export type ModelPrice = readonly [number, number | null, number | null, number];
 
-/** Names to look a model up by: Claude adds a context variant (`claude-opus-5-5[1m]`), dated snapshots share a price. */
+/** Antigravity model aliases that share pricing with their underlying Gemini model. */
+const modelAliases: Record<string, string> = {
+  'gemini-pro-orchestrator': 'gemini-4-carbon',
+  'gemini-pro-orchestrator-neon': 'gemini-4-neon',
+  'gemini-pro-orchestrator-argon': 'gemini-4-argon',
+  'gemini-pro-orchestrator-hydrogen': 'gemini-4-hydrogen',
+};
+
+/**
+ * Names to look a model up by, keeping the normalized original name first so administrator overrides on it win:
+ * Claude adds context (`[1m]`) or `-thinking` variants, dated snapshots share a price, and Antigravity aliases
+ * map to their underlying Gemini models.
+ */
 export function priceKeys(model: string): string[] {
   const name = model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
-  const undated = name.replace(/-\d{4}-?\d{2}-?\d{2}$/, '');
-  return undated === name ? [name] : [name, undated];
+  const keys = [name];
+  const add = (candidate: string | undefined) => {
+    if (candidate && !keys.includes(candidate)) keys.push(candidate);
+  };
+  const unthinking = name.replace(/-thinking$/, '');
+  add(unthinking);
+  add(name.replace(/-\d{4}-?\d{2}-?\d{2}$/, ''));
+  add(unthinking.replace(/-\d{4}-?\d{2}-?\d{2}$/, ''));
+  for (const candidate of [...keys]) add(modelAliases[candidate]);
+  return keys;
 }
 
 export function costOf(price: ModelPrice, counts: TokenCounts): number {
@@ -27,16 +47,25 @@ export function costOf(price: ModelPrice, counts: TokenCounts): number {
 const perMillion = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Number((value * 1e6).toPrecision(12)) : null;
 
-/** The OpenAI and Anthropic chat models of LiteLLM's `model_prices_and_context_window.json`. */
+/** The OpenAI, Anthropic, and Google Gemini chat models of LiteLLM's `model_prices_and_context_window.json`. */
 export function litellmPrices(document: unknown): Record<string, ModelPrice> {
   if (!document || typeof document !== 'object' || Array.isArray(document)) return {};
+  const entries = Object.entries(document as Record<string, any>).sort(([left], [right]) => left.localeCompare(right));
   const prices: Record<string, ModelPrice> = {};
-  for (const [name, model] of Object.entries(document as Record<string, any>).sort(([left], [right]) => left.localeCompare(right))) {
-    if (!model || typeof model !== 'object' || !['openai', 'anthropic'].includes(model.litellm_provider)
-      || !['chat', 'responses'].includes(model.mode) || !/^(gpt-|o\d|claude-|codex)/.test(name) || name.includes('/')) continue;
+  for (const [name, model] of entries) {
+    if (!model || typeof model !== 'object') continue;
+    const provider = model.litellm_provider;
+    let key: string | null = null;
+    if (['openai', 'anthropic'].includes(provider) && ['chat', 'responses'].includes(model.mode)
+      && /^(gpt-|o\d|claude-|codex)/.test(name) && !name.includes('/')) {
+      key = name;
+    } else if (provider === 'gemini' && model.mode === 'chat' && /^(?:gemini\/)?gemini-[^/]+$/.test(name)) {
+      key = name.replace(/^gemini\//, '');
+    }
+    if (!key || key in prices) continue;
     const input = perMillion(model.input_cost_per_token), output = perMillion(model.output_cost_per_token);
     if (input === null || output === null) continue;
-    prices[name] = [input, perMillion(model.cache_read_input_token_cost), perMillion(model.cache_creation_input_token_cost), output];
+    prices[key] = [input, perMillion(model.cache_read_input_token_cost), perMillion(model.cache_creation_input_token_cost), output];
   }
-  return prices;
+  return Object.fromEntries(Object.entries(prices).sort(([left], [right]) => left.localeCompare(right)));
 }
