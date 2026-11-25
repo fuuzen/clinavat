@@ -77,6 +77,26 @@ async function validateKeys(context: Context, userId: string, keys: (string | un
   }
 }
 
+async function revokeHostApprovals(
+  context: Context,
+  userId: string,
+  devHostId: string,
+  relayReason: string,
+  note: string,
+): Promise<void> {
+  const revoked = context.devHostApprovals.revokeByHost(userId, devHostId, note);
+  for (const approval of revoked) {
+    await context.sshRelay.revoke(
+      { userId, pinnedIp: approval.pinned_ip, port: approval.port },
+      relayReason,
+    );
+    revokeTerminalSockets(
+      { userId, pinnedIp: approval.pinned_ip, port: approval.port },
+      note,
+    );
+  }
+}
+
 export function hostRoutes(app: FastifyInstance, context: Context) {
   const { store, ssh, events, sshRelay, devHostApprovals } = context;
   app.get('/api/hosts', async request => {
@@ -133,6 +153,11 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
       };
       const targetChanged = (['host', 'port', 'jump_host', 'jump_port'] as const)
         .some(field => (host[field] ?? null) !== (previous[field] ?? null));
+      const previousFirstHop = firstHopOf(previous);
+      const nextFirstHop = firstHopOf(host);
+      const firstHopChanged = previousFirstHop.hop !== nextFirstHop.hop
+        || previousFirstHop.host !== nextFirstHop.host
+        || previousFirstHop.port !== nextFirstHop.port;
       const changed = targetChanged || !!input.privateKey || !!input.jumpHost?.privateKey
         || (['username', 'jump_username'] as const).some(field => (host[field] ?? null) !== (previous[field] ?? null));
       if (!changed) {
@@ -154,7 +179,9 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         await ssh.disconnectHost(request.user.id, previous);
         await ssh.addHost(request.user.id, host, input.privateKey, input.jumpHost?.privateKey,
           classified ? { useRelay: classified.kind === 'private' } : undefined);
-        if (targetChanged) devHostApprovals.revokeByHost(request.user.id, id, '开发机目标地址或端口已变更');
+        if (firstHopChanged) {
+          await revokeHostApprovals(context, request.user.id, id, 'host_target_changed', '开发机目标地址或端口已变更');
+        }
         store.run("UPDATE dev_hosts SET name=?,host=?,port=?,username=?,jump_host=?,jump_port=?,jump_username=?,status='DISCONNECTED' WHERE id=?",
           host.name, host.host, host.port, host.username, host.jump_host ?? null,
           host.jump_port ?? null, host.jump_username ?? null, id);
@@ -243,7 +270,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
       if (store.get('SELECT id FROM projects WHERE dev_host_id=?', id)) throw new HttpError(409, '请先删除开发机下的项目');
       await sshRelay.revoke({ userId: request.user.id, devHostId: id }, 'host_deleted');
       revokeTerminalSockets({ userId: request.user.id, devHostId: id }, '开发机已删除');
-      devHostApprovals.revokeByHost(request.user.id, id, '开发机已删除');
+      await revokeHostApprovals(context, request.user.id, id, 'host_deleted', '开发机已删除');
       await ssh.deleteHost(request.user.id, host);
       store.run('DELETE FROM dev_hosts WHERE id=?', id);
       return { ok: true };

@@ -21,7 +21,12 @@ export interface TerminalSecurityOptions {
   policy: SshTargetPolicy;
   approvals: DevHostApprovalStore;
   requirePrivateApproval: boolean;
+  isUserActive?: (userId: string) => boolean;
 }
+
+const privateApprovalRequiredMessage =
+  '该内网开发机尚未获得管理员审批，请联系管理员在「网关 / 内网开发机审批」面板批准后再打开终端';
+const userUnavailableMessage = '用户账号已停用或不存在，无法打开终端';
 
 interface ActiveTerminalSocket {
   id: string;
@@ -116,10 +121,16 @@ export async function attachTerminal(
   try {
     const firstHop = jumpHost ?? host;
     const classified = await security.policy.classifyTarget(firstHop.host, firstHop.port);
-    if (security.requirePrivateApproval && classified.kind === 'private'
-      && !security.approvals.findApproved(userId, classified.pinnedIp, classified.port)) {
-      throw new Error('该内网开发机尚未获得管理员审批，请联系管理员在「网关 / 内网开发机审批」面板批准后再打开终端');
-    }
+    const assertStillAuthorized = () => {
+      if (security.isUserActive && !security.isUserActive(userId)) {
+        throw new Error(userUnavailableMessage);
+      }
+      if (security.requirePrivateApproval && classified.kind === 'private'
+        && !security.approvals.findApproved(userId, classified.pinnedIp, classified.port)) {
+        throw new Error(privateApprovalRequiredMessage);
+      }
+    };
+    assertStillAuthorized();
 
     await workspaces.flush(project);
     const [privateKey, hostKeys, jumpPrivateKey, jumpHostKeys] = await Promise.all([
@@ -132,14 +143,18 @@ export async function attachTerminal(
     if (closed) return;
 
     await security.policy.assertNotDenied(classified.pinnedIp);
-    if (security.requirePrivateApproval && classified.kind === 'private'
-      && !security.approvals.findApproved(userId, classified.pinnedIp, classified.port)) {
-      throw new Error('该内网开发机尚未获得管理员审批，请联系管理员在「网关 / 内网开发机审批」面板批准后再打开终端');
-    }
+    assertStillAuthorized();
 
     const dialed = await dialAuthorizedTcp(classified.pinnedIp, classified.port, 15_000);
     rawSocket = dialed;
     if (closed) { dialed.destroy(); return; }
+    // Re-check approval and user status synchronously after dial to close the TOCTOU window before registration.
+    try {
+      assertStillAuthorized();
+    } catch (error) {
+      dialed.destroy();
+      throw error;
+    }
     activeTerminals.set(terminalId, {
       id: terminalId,
       userId,

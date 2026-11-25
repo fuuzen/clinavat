@@ -172,6 +172,7 @@ export class SshRelayServer {
     this.sweepExpiredProbeTokens();
     if (!/^[a-zA-Z0-9_-]{16,128}$/.test(token)) throw new Error('无效的探测令牌格式');
     if (!isIPv4(entry.pinnedIp)) throw new Error('探测令牌目标必须是 IPv4 地址');
+    if (!isPrivateIpv4(entry.pinnedIp)) throw new Error('探测令牌目标必须是私网 IPv4 地址');
     if (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535) throw new Error('探测令牌端口无效');
     this.probeTokens.set(token, {
       userId: entry.userId,
@@ -264,14 +265,16 @@ export class SshRelayServer {
       if (!entry || entry.userId !== caller.userId || entry.remainingUses <= 0 || entry.expiresAt <= Date.now()) {
         throw new Error('invalid or expired probe token');
       }
+      if (!isPrivateIpv4(entry.pinnedIp)) {
+        throw new Error('relay only forwards approved private first hops');
+      }
       await this.policy.assertNotDenied(entry.pinnedIp);
-      const requiresApproval = isPrivateIpv4(entry.pinnedIp);
-      if (requiresApproval && !this.approvals.findApproved(caller.userId, entry.pinnedIp, entry.port)) {
+      if (!this.approvals.findApproved(caller.userId, entry.pinnedIp, entry.port)) {
         throw new Error('private target not approved');
       }
       entry.remainingUses -= 1;
       if (entry.remainingUses <= 0) this.probeTokens.delete(command.token);
-      return { pinnedIp: entry.pinnedIp, port: entry.port, requiresApproval };
+      return { pinnedIp: entry.pinnedIp, port: entry.port, requiresApproval: true };
     }
 
     const host = this.store.get<DevHostRow>(
@@ -280,16 +283,24 @@ export class SshRelayServer {
     );
     if (!host) throw new Error('unknown host');
 
-    const hostname = command.hop === 'jump' ? host.jump_host : host.host;
-    const port = command.hop === 'jump' ? host.jump_port : host.port;
-    if (!hostname || !port) throw new Error('jump host not configured');
+    const hasJump = !!host.jump_host?.trim();
+    const expectedHop: SshRelayHop = hasJump ? 'jump' : 'target';
+    if (command.hop !== expectedHop) {
+      throw new Error(hasJump ? 'hop must be jump when jump host is configured' : 'jump host not configured');
+    }
+
+    const hostname = expectedHop === 'jump' ? host.jump_host : host.host;
+    const port = expectedHop === 'jump' ? host.jump_port : host.port;
+    if (!hostname || !port) throw new Error('invalid target configuration');
 
     const classified = await this.policy.classifyTarget(hostname, port);
-    const requiresApproval = classified.kind === 'private';
-    if (requiresApproval && !this.approvals.findApproved(caller.userId, classified.pinnedIp, classified.port)) {
+    if (classified.kind !== 'private') {
+      throw new Error('relay only forwards approved private first hops');
+    }
+    if (!this.approvals.findApproved(caller.userId, classified.pinnedIp, classified.port)) {
       throw new Error('private target not approved');
     }
-    return { pinnedIp: classified.pinnedIp, port: classified.port, devHostId: host.id, requiresApproval, hop: command.hop };
+    return { pinnedIp: classified.pinnedIp, port: classified.port, devHostId: host.id, requiresApproval: true, hop: command.hop };
   }
 
   private async handleConnection(clientSocket: Socket): Promise<void> {

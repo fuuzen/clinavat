@@ -317,11 +317,26 @@ export class SshManager {
     await this.addHost(userId, host, undefined, undefined, { useRelay: viaRelay });
     this.masters.set(`${userId}:${host.id}`, { userId, host });
     if (this.execution?.kind === 'vm') {
-      return this.execution.run(
-        'ssh',
-        ['-F', this.configPath(userId), '-o', 'ControlMaster=no', '-o', 'ControlPath=none', this.alias(host), remoteBash(command)],
-        { scope: { userId, paths: [] }, timeout, maxBytes },
-      );
+      const jump = this.jumpHost(host);
+      const execConfigPath = join(this.keys.directory(userId), `exec-${randomUUID()}.conf`);
+      // ProxyJump spawns a child ssh that does not inherit target CLI -o flags, so disable ControlMaster in a temporary config.
+      await atomicWrite(execConfigPath, [
+        `Host ${[host, ...(jump ? [jump] : [])].map(endpoint => this.alias(endpoint)).join(' ')}`,
+        '  ControlMaster no',
+        '  ControlPath none',
+        'Host *',
+        `  Include ${configQuote(this.configPath(userId))}`,
+        '',
+      ].join('\n'));
+      try {
+        return await this.execution.run(
+          'ssh',
+          ['-F', execConfigPath, this.alias(host), remoteBash(command)],
+          { scope: { userId, paths: [] }, timeout, maxBytes },
+        );
+      } finally {
+        await rm(execConfigPath, { force: true });
+      }
     }
     return runCommand(this.config.sshBinary ?? 'ssh', ['-F', this.configPath(userId), this.alias(host), remoteBash(command)], { timeout, maxBytes });
   }

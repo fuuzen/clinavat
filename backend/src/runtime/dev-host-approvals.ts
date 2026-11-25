@@ -170,6 +170,11 @@ export class DevHostApprovalStore {
     return this.decide(id, 'revoked', adminUserId, note);
   }
 
+  /**
+   * Releases approvals linked to `devHostId` when that host is deleted or its first hop changes.
+   * Shared approvals still referenced by another SSH dev host of the same user are reassigned;
+   * unreferenced approvals are revoked and returned so callers can disconnect remaining sockets.
+   */
   revokeByHost(userId: string, devHostId: string, note?: string): DevHostApproval[] {
     const now = new Date().toISOString();
     const reason = normalizeNote(note);
@@ -180,14 +185,60 @@ export class DevHostApprovalStore {
         userId, devHostId,
       );
       if (!affected.length) return [];
-      this.store.run(
-        `UPDATE dev_host_approvals
-         SET status='revoked', decided_at=?, note=COALESCE(?, note)
-         WHERE user_id=? AND dev_host_id=? AND status IN ('pending','approved')`,
-        now, reason, userId, devHostId,
-      );
-      return affected.map(row => this.byId(row.id)!);
+      const revoked: DevHostApproval[] = [];
+      for (const approval of affected) {
+        const replacement = this.findOtherHostForFirstHop(
+          userId, devHostId, approval.hostname, approval.pinned_ip, approval.port,
+        );
+        if (replacement) {
+          this.store.run(
+            'UPDATE dev_host_approvals SET dev_host_id=?, hop=?, hostname=? WHERE id=?',
+            replacement.id, replacement.hop, replacement.hostname, approval.id,
+          );
+          continue;
+        }
+        this.store.run(
+          `UPDATE dev_host_approvals
+           SET status='revoked', decided_at=?, note=COALESCE(?, note)
+           WHERE id=?`,
+          now, reason, approval.id,
+        );
+        revoked.push(this.byId(approval.id)!);
+      }
+      return revoked;
     });
+  }
+
+  private findOtherHostForFirstHop(
+    userId: string,
+    excludeDevHostId: string,
+    hostname: string,
+    pinnedIp: string,
+    port: number,
+  ): { id: string; hop: DevHostApprovalHop; hostname: string } | undefined {
+    const row = this.store.get<{ id: string; host: string; jump_host: string | null }>(
+      `SELECT id, host, jump_host FROM dev_hosts
+       WHERE user_id=? AND kind='ssh' AND id<>?
+         AND (
+           (jump_host IS NOT NULL AND jump_host<>'' AND jump_host IN (?,?) AND jump_port=?)
+           OR ((jump_host IS NULL OR jump_host='') AND host IN (?,?) AND port=?)
+         )
+       ORDER BY
+         CASE WHEN (CASE WHEN jump_host IS NOT NULL AND jump_host<>'' THEN jump_host ELSE host END) = ? THEN 0 ELSE 1 END,
+         created_at ASC
+       LIMIT 1`,
+      userId, excludeDevHostId,
+      hostname, pinnedIp, port,
+      hostname, pinnedIp, port,
+      hostname,
+    );
+    if (!row) return undefined;
+    const hasJump = !!row.jump_host?.trim();
+    return {
+      id: row.id,
+      hop: hasJump ? 'jump' : 'target',
+      hostname: hasJump ? row.jump_host! : row.host,
+    };
   }
 
   revokeByUser(userId: string, note?: string): DevHostApproval[] {

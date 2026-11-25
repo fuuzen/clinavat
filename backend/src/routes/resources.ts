@@ -267,6 +267,12 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
           policy: context.targetPolicy,
           approvals: context.devHostApprovals,
           requirePrivateApproval: config.executionHost === 'lxd',
+          isUserActive: userId => {
+            const user = store.get<{ id: string; suspended_at: string | null }>(
+              'SELECT id,suspended_at FROM users WHERE id=?', userId,
+            );
+            return !!user && user.suspended_at === null;
+          },
         });
       }).catch(error => {
         socket.send(JSON.stringify({ type: 'error', message: error instanceof Error ? error.message : String(error) })); socket.close();
