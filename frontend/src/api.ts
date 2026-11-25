@@ -2,6 +2,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public data?: Record<string, unknown> | null,
   ) {
     super(message);
   }
@@ -30,6 +31,7 @@ export async function api<T>(
     throw new ApiError(
       String(body?.message || body?.error || `请求失败 (${response.status})`),
       response.status,
+      body,
     );
   }
   return body as T;

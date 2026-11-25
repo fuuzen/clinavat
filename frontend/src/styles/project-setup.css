@@ -74,6 +74,43 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.connection-test-pending {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-line);
+  color: var(--warning);
+  white-space: normal;
+}
+.connection-test-pending > svg {
+  margin-top: 2px;
+}
+.connection-test-pending-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.connection-test-pending-body > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.connection-test-pending-body > p {
+  margin: 0;
+  line-height: 1.6;
+}
+.connection-test-pending-target code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--text);
+}
+.connection-test-pending-hint {
+  opacity: 0.9;
+}
 .sync-progress {
   display: flex;
   flex-direction: column;

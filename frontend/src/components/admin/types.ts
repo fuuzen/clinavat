@@ -22,3 +22,34 @@ export interface AdminHealth {
     ssh: boolean;
   };
 }
+
+export type DevHostApprovalStatus = "pending" | "approved" | "rejected" | "revoked";
+
+export interface DevHostApprovalView {
+  id: string;
+  user_id: string;
+  username: string | null;
+  dev_host_id: string | null;
+  dev_host_name: string | null;
+  hop: "target" | "jump";
+  hostname: string;
+  pinned_ip: string;
+  port: number;
+  status: DevHostApprovalStatus;
+  requested_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  decided_by_username: string | null;
+  note: string | null;
+}
+
+export interface DevHostRelayStatus {
+  enabled: boolean;
+  port: number;
+  activeConnections: number;
+}
+
+export interface DevHostApprovalsResponse {
+  approvals: DevHostApprovalView[];
+  relay: DevHostRelayStatus;
+}

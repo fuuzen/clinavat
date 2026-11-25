@@ -1,14 +1,17 @@
 #!/bin/bash
 # Lets slot machines log in to this host's sshd over the VM bridge as the Hub user: in VM mode, the administrator's
-# local projects run their shell commands here. setup.sh runs apply; run it yourself on an existing installation.
-# Run as root; see docs/vm-isolation.md.
+# local projects run their shell commands here. It also manages and verifies the egress ACL rule for the Hub's
+# single-port SSH relay (default TCP 22100, or CLINAVAT_SSH_RELAY_PORT) used for approved private dev hosts.
+# setup.sh runs apply; run apply or apply-relay yourself on an existing installation. Run as root; see docs/vm-isolation.md.
 #
-#   sudo deploy/lxd/host-commands.sh apply --hub-user <user> [--port 22]
-#   sudo deploy/lxd/host-commands.sh check --hub-user <user> [--port 22]
+#   sudo deploy/lxd/host-commands.sh apply --hub-user <user> [--port 22] [--relay-port 22100]
+#   sudo deploy/lxd/host-commands.sh check --hub-user <user> [--port 22] [--relay-port 22100]
+#   sudo deploy/lxd/host-commands.sh apply-relay [--relay-port 22100]
 #
-# apply lets the VM network log in with keys only, opens the port in the egress ACL, then runs check. It never
-# changes where sshd listens, so a mistake cannot lock out other logins. The Hub itself keeps the key and its entry
-# in the Hub user's authorized_keys, and logs in once at start; the admin panel shows the result.
+# apply lets the VM network log in with keys only, opens the sshd and Hub SSH relay ports in the egress ACL, then
+# runs check. apply-relay only ensures the Hub SSH relay ACL rule exists (idempotent, without touching sshd_config).
+# It never changes where sshd listens, so a mistake cannot lock out other logins. The Hub itself keeps the key and its
+# entry in the Hub user's authorized_keys, and logs in once at start; the admin panel shows the result.
 set -euo pipefail
 
 NETWORK=clinavat-users
@@ -18,18 +21,18 @@ BEGIN='# BEGIN clinavat host commands'
 END='# END clinavat host commands'
 
 command="${1:-}"; shift || true
-hub_user="" port=22
+hub_user="" port=22 relay_port="${CLINAVAT_SSH_RELAY_PORT:-22100}"
 while (($#)); do
   case "$1" in
     --hub-user) hub_user="$2"; shift 2 ;;
     --port) port="$2"; shift 2 ;;
+    --relay-port) relay_port="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
-[[ "$port" =~ ^[0-9]+$ ]] || { echo "invalid --port $port" >&2; exit 64; }
-[[ -n "$hub_user" ]] || { echo "--hub-user is required" >&2; exit 64; }
-id "$hub_user" >/dev/null || { echo "no such user: $hub_user" >&2; exit 1; }
+[[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { echo "invalid --port $port" >&2; exit 64; }
+[[ "$relay_port" =~ ^[0-9]+$ ]] && (( relay_port >= 1 && relay_port <= 65535 )) || { echo "invalid --relay-port $relay_port" >&2; exit 64; }
 
 lxc() { /snap/bin/lxc "$@" </dev/null; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -38,8 +41,13 @@ problems=0
 problem() { echo "  FAIL: $*" >&2; problems=$((problems + 1)); }
 warn() { echo "  warning: $*" >&2; }
 
-sshd="$(command -v sshd)" || fail "sshd is not installed"
-[[ -f "$SSHD_CONFIG" ]] || fail "$SSHD_CONFIG does not exist"
+require_host_command_prereqs() {
+  [[ -n "$hub_user" ]] || { echo "--hub-user is required" >&2; exit 64; }
+  id "$hub_user" >/dev/null || { echo "no such user: $hub_user" >&2; exit 1; }
+  sshd="$(command -v sshd)" || fail "sshd is not installed"
+  [[ -f "$SSHD_CONFIG" ]] || fail "$SSHD_CONFIG does not exist"
+}
+
 # The bridge address, its network, and a guest address inside it to evaluate sshd's Match rules with.
 read -r bridge subnet guest < <(lxc network get "$NETWORK" ipv4.address | python3 -I -c '
 import ipaddress, sys
@@ -101,6 +109,7 @@ apply_sshd() {
 }
 
 acl_allows_port() {
+  local target_port="${1:-$port}"
   lxc query "/1.0/network-acls/$ACL" | python3 -I -c '
 import json, sys
 bridge, port = sys.argv[1], sys.argv[2]
@@ -110,7 +119,28 @@ for rule in json.load(sys.stdin).get("egress") or []:
     if (rule.get("action") == "allow" and rule.get("state", "enabled") == "enabled" and rule.get("protocol") == "tcp"
             and (bridge in destinations or f"{bridge}/32" in destinations) and port in ports):
         sys.exit(0)
-sys.exit(1)' "$bridge" "$port"
+sys.exit(1)' "$bridge" "$target_port"
+}
+
+ensure_relay_acl() {
+  if acl_allows_port "$relay_port"; then
+    ok "egress ACL $ACL already allows $bridge:$relay_port (Hub SSH relay)"
+  else
+    lxc network acl rule add "$ACL" egress action=allow destination="$bridge/32" protocol=tcp destination_port="$relay_port" \
+      state=enabled description="Clinavat SSH relay"
+    ok "egress ACL $ACL allows $bridge:$relay_port (Hub SSH relay)"
+  fi
+}
+
+check_ufw_port() {
+  local target_port="$1" label="$2" status
+  if command -v ufw >/dev/null && status="$(ufw status 2>/dev/null)" && grep -q '^Status: active' <<<"$status"; then
+    if grep -Eq "(^|[[:space:]])${target_port}/tcp([[:space:]]|$).*ALLOW" <<<"$status"; then
+      ok "ufw has an allow rule for tcp/$target_port ($label)"
+    else
+      warn "ufw is active and may block $label from $NETWORK to $bridge:$target_port; run: sudo ufw allow in on $NETWORK to $bridge port $target_port proto tcp"
+    fi
+  fi
 }
 
 check_key_path_modes() {
@@ -152,31 +182,43 @@ check() {
   else
     problem "logins from $subnet may still use passwords; run apply"
   fi
-  if acl_allows_port; then ok "egress ACL $ACL allows $bridge:$port"; else problem "egress ACL $ACL does not allow $bridge:$port; run apply"; fi
-  if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
-    warn "ufw is active; if it drops the bridge's traffic, run: ufw allow in on $NETWORK to $bridge port $port proto tcp"
+  if acl_allows_port "$port"; then ok "egress ACL $ACL allows $bridge:$port"; else problem "egress ACL $ACL does not allow $bridge:$port; run apply"; fi
+  if acl_allows_port "$relay_port"; then
+    ok "egress ACL $ACL allows $bridge:$relay_port (Hub SSH relay)"
+  else
+    problem "egress ACL $ACL does not allow $bridge:$relay_port (Hub SSH relay); run: sudo $0 apply-relay --relay-port $relay_port"
   fi
+  check_ufw_port "$port" "host commands (sshd)"
+  check_ufw_port "$relay_port" "Hub SSH relay"
   home="$(getent passwd "$hub_user" | cut -d: -f6)"
   keys="$home/.ssh/authorized_keys"
   if grep -qx 'strictmodes yes' <<<"$effective"; then check_key_path_modes "$home" "$keys"; fi
   if grep -q ' clinavat-host-commands$' "$keys" 2>/dev/null; then ok "$keys holds the Hub's host command key"
   else warn "$keys has no host command key yet; the Hub adds it when it starts in VM mode"; fi
   ((problems == 0)) || fail "$problems problem(s) found"
-  echo "Host-side checks passed. The Hub uses $hub_user@$bridge:$port; the admin panel's 宿主机 page shows whether it logs in."
+  echo "Host-side checks passed. The Hub uses $hub_user@$bridge:$port (SSH relay: $bridge:$relay_port); the admin panel's 宿主机 page shows whether it logs in."
 }
 
 case "$command" in
-  check) check ;;
+  check)
+    require_host_command_prereqs
+    check ;;
   apply)
+    require_host_command_prereqs
     echo "== apply"
     apply_sshd
     ok "logins from $subnet accept keys only (previous file: $SSHD_CONFIG.clinavat-backup)"
-    if acl_allows_port; then ok "egress ACL $ACL already allows $bridge:$port"
+    if acl_allows_port "$port"; then ok "egress ACL $ACL already allows $bridge:$port"
     else
       lxc network acl rule add "$ACL" egress action=allow destination="$bridge/32" protocol=tcp destination_port="$port" \
         state=enabled description="Clinavat host commands"
       ok "egress ACL $ACL allows $bridge:$port"
     fi
+    ensure_relay_acl
     check ;;
-  *) sed -n '2,12p' "$0"; exit 64 ;;
+  apply-relay)
+    echo "== apply-relay: allow guests on $subnet to reach Hub SSH relay $bridge:$relay_port"
+    ensure_relay_acl
+    check_ufw_port "$relay_port" "Hub SSH relay" ;;
+  *) sed -n '2,14p' "$0"; exit 64 ;;
 esac

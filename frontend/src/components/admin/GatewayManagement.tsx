@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, errorText } from "../../api";
 import SiteAccessSettings from "./SiteAccessSettings";
+import DevHostApprovals from "./DevHostApprovals";
 import GatewayProxyConfiguration from "./gateway/GatewayProxyConfiguration";
 import type { GatewayPreproxyState } from "./gateway/gateway-proxy-state";
 import GatewayBindingRow, { type GatewaySource as Source } from "./GatewayBindingRow";
@@ -180,6 +181,7 @@ export default function GatewayManagement() {
   return (
     <div className="gateway-page" aria-busy={loading || !!busy}>
       <SiteAccessSettings onConfigLoaded={updatePublicHosts} />
+      <DevHostApprovals />
       <section className="admin-card gateway-summary">
         <div className="gateway-summary-identity">
           <span className="admin-host-icon admin-host-icon-large"><Waypoints size={24} /></span>
@@ -255,12 +257,12 @@ export default function GatewayManagement() {
             onSave={(rules) => change("修改分流规则", "/admin/gateway/rules", "PUT", { rules })} />
         </Section>
 
-        <Section icon={ShieldCheck} title="开发机直连" description={`这些公网地址不经代理，供 SSH 与同步直连；其余外网流量即使 sing-box 停止也不能直接出站。内网段由网关 infra.json 固定：${overview.infra.lan_direct.join("、")}。`}>
+        <Section icon={ShieldCheck} title="开发机直连" description={`网关仅管理公网开发机直连（不经代理）；其余外网流量即使 sing-box 停止也不能直接出站。内网开发机首跳由上方「内网开发机审批」经 Hub 中继按用户审批控制（网关 infra.json 内网段：${overview.infra.lan_direct.join("、")}）。`}>
           <ListEditor value={state.dev_direct} extra={extraDirect} disabled={disabled} placeholder="每行一个 IPv4 CIDR，例如 203.0.113.7/32"
             onSave={(devDirect) => change("修改直连名单", "/admin/gateway/dev-direct", "PUT", { dev_direct: devDirect })} />
           {devHosts && <div className="gateway-dev-hosts">
             <h4>开发机地址</h4>
-            {uncovered.length === 0 ? <p className="gateway-hint">所有开发机地址均已直连。</p> : uncovered.map((item) => (
+            {uncovered.length === 0 ? <p className="gateway-hint">当前所有公网开发机地址均已在网关直连名单中；内网开发机首跳仍受上方 Hub 中继审批控制。</p> : uncovered.map((item) => (
               <div key={`${item.label}-${item.address}`} className="gateway-row">
                 <span>{item.label}</span><code>{item.address}</code>
                 <button type="button" className="button button-ghost button-small" disabled={disabled}

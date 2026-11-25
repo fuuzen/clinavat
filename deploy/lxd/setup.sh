@@ -3,16 +3,20 @@
 #
 #   sudo deploy/lxd/setup.sh --storage lvm:ubuntu-vg/clinavat-thin --hub-user clinavat \
 #     --data-dir /srv/clinavat/data --workspace-dir /var/tmp/clinavat-workspace \
-#     --allow 172.16.0.10/32:tcp:22 --allow 172.16.0.11/32:tcp:2222
+#     [--relay-port 22100]
 #
-# --storage   lvm:<vg>/<existing thin pool> or dir:<directory> for the LXD storage pool
-# --allow     private development-host endpoints the VMs may reach (public addresses are always allowed); this
-#             host's own sshd is opened by host-commands.sh, which this script runs
-# --max-vms   project quota for slot VMs, default 8. Memory and CPU quotas are sized from it and from this
-#             machine: 75% of RAM, and two vCPUs per VM since vCPUs can be shared.
-# --max-users project quota for workspace containers (one per user with projects), default 32
+# --storage    lvm:<vg>/<existing thin pool> or dir:<directory> for the LXD storage pool
+# --relay-port TCP port on the bridge for the Hub's single-port SSH relay to approved private development hosts,
+#              default 22100 (or CLINAVAT_SSH_RELAY_PORT)
+# --allow      legacy static private egress exception (cidr:proto:port, repeatable; kept for backward compatibility).
+#              Private dev hosts now go through the Hub's single-port SSH relay with per-user admin approval, so
+#              global private --allow entries are normally unnecessary. This host's own sshd is opened by
+#              host-commands.sh, which this script runs.
+# --max-vms    project quota for slot VMs, default 8. Memory and CPU quotas are sized from it and from this
+#              machine: 75% of RAM, and two vCPUs per VM since vCPUs can be shared.
+# --max-users  project quota for workspace containers (one per user with projects), default 32
 # --local-root directory the administrator's local projects live in; repeatable. It is mounted whole into slot
-#             machines, so it must not contain the data directory, the environment file or LXD's client key.
+#              machines, so it must not contain the data directory, the environment file or LXD's client key.
 #
 # The script locks the LXD socket to root, then creates a storage pool, an isolated bridge, an
 # egress ACL, a restricted project and a restricted client token for the Hub. Local projects run their shell
@@ -31,12 +35,14 @@ ADMIN_GROUP=lxd-admin
 LISTEN=127.0.0.1:8443
 
 storage="" hub_user="" data_dir="" workspace_dir="" allows=() max_vms=8 max_users=32 local_roots=()
+relay_port="${CLINAVAT_SSH_RELAY_PORT:-22100}"
 while (($#)); do
   case "$1" in
     --storage) storage="$2"; shift 2 ;;
     --hub-user) hub_user="$2"; shift 2 ;;
     --data-dir) data_dir="$2"; shift 2 ;;
     --workspace-dir) workspace_dir="$2"; shift 2 ;;
+    --relay-port) relay_port="$2"; shift 2 ;;
     --allow) allows+=("$2"); shift 2 ;;
     --max-vms) max_vms="$2"; shift 2 ;;
     --max-users) max_users="$2"; shift 2 ;;
@@ -46,6 +52,7 @@ while (($#)); do
 done
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ -n "$storage" && -n "$hub_user" && -n "$data_dir" && -n "$workspace_dir" ]] || { echo "missing required arguments" >&2; exit 64; }
+[[ "$relay_port" =~ ^[0-9]+$ ]] && (( relay_port >= 1 && relay_port <= 65535 )) || { echo "invalid --relay-port $relay_port" >&2; exit 64; }
 id "$hub_user" >/dev/null
 for directory in "$data_dir/users" "$data_dir/slots" "$workspace_dir"; do
   [[ -d "$directory" && ! -L "$directory" ]] || { echo "not a real directory: $directory" >&2; exit 1; }
@@ -94,7 +101,7 @@ exists network show "$NETWORK" || lxc network create "$NETWORK" \
   ipv4.address="$BRIDGE_ADDRESS/$BRIDGE_SUBNET" ipv4.nat=true ipv6.address=none dns.mode=managed
 
 echo "== Egress ACL $ACL"
-# Allow rules only, with default reject: public internet, the bridge's DHCP/DNS, and listed dev hosts.
+# Allow rules only, with default reject: public internet, the bridge's DHCP/DNS, the Hub's SSH relay, and any legacy --allow entries.
 exists network acl show "$ACL" || lxc network acl create "$ACL"
 public="$(python3 -I -c '
 import ipaddress
@@ -114,6 +121,7 @@ trap 'rm -f "$rules"' EXIT
   echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: udp, destination_port: \"53,67\", state: enabled}"
   echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: tcp, destination_port: \"53\", state: enabled}"
   echo "- {action: allow, destination: \"255.255.255.255/32\", protocol: udp, destination_port: \"67\", state: enabled}"
+  echo "- {action: allow, destination: \"$BRIDGE_ADDRESS/32\", protocol: tcp, destination_port: \"$relay_port\", state: enabled}"
   for allow in "${allows[@]}"; do
     IFS=: read -r cidr protocol port <<<"$allow"
     [[ -n "$cidr" && "$protocol" =~ ^(tcp|udp)$ && "$port" =~ ^[0-9]+$ ]] || { echo "invalid --allow $allow" >&2; exit 64; }
@@ -169,7 +177,7 @@ exists profile device get workspace eth0 network --project "$PROJECT" || \
 
 # After the ACL: editing it above replaces every rule, including the one for this host's sshd.
 echo "== Host commands"
-"$SOURCE/host-commands.sh" apply --hub-user "$hub_user"
+"$SOURCE/host-commands.sh" apply --hub-user "$hub_user" --relay-port "$relay_port"
 
 echo "== Hub client"
 lxc config set core.https_address "$LISTEN"

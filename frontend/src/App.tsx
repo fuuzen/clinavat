@@ -221,7 +221,7 @@ export default function App() {
         `/hosts/${host.id}/connect`,
       );
       await refresh();
-      notify(hostConnectionMessage(host.name, result), "success");
+      notify(hostConnectionMessage(host.name, result), result.pendingApproval ? undefined : "success");
     } catch (cause) {
       notify(errorText(cause));
       await refresh().catch(() => {});
