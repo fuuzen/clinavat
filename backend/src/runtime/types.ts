@@ -63,17 +63,21 @@ export function isValidSshHost(value: string): boolean {
     || /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$/.test(value));
 }
 
+export function isValidSshUsername(username: string): boolean {
+  return /^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}$/.test(username);
+}
+
 export function assertHostOwner(userId: string, host: DevHost): void {
   assertIdentifier(userId);
   assertIdentifier(host.id);
   if (host.user_id !== userId) throw new Error('无权访问此开发机');
   if (host.kind === 'local') return;
   if (!isValidSshHost(host.host)) throw new Error('开发机地址格式无效');
-  if (!/^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(host.username)) throw new Error('SSH 用户名格式无效');
+  if (!isValidSshUsername(host.username)) throw new Error('SSH 用户名格式无效');
   if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535) throw new Error('SSH 端口无效');
   if (host.jump_host != null || host.jump_port != null || host.jump_username != null) {
     if (!host.jump_host || !isValidSshHost(host.jump_host)) throw new Error('跳板机地址格式无效');
-    if (!host.jump_username || !/^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(host.jump_username)) throw new Error('跳板机 SSH 用户名格式无效');
+    if (!host.jump_username || !isValidSshUsername(host.jump_username)) throw new Error('跳板机 SSH 用户名格式无效');
     if (!Number.isInteger(host.jump_port) || host.jump_port! < 1 || host.jump_port! > 65535) throw new Error('跳板机 SSH 端口无效');
   }
 }

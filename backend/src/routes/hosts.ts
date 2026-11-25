@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { type Context, assertProjectIdle, hostFor, withResourceLocks } from '../context.js';
 import { HttpError, type Host, type Project } from '../models.js';
-import { isValidSshHost } from '../runtime/types.js';
+import { isValidSshHost, isValidSshUsername } from '../runtime/types.js';
 import { ensureLocalHost } from '../local-host.js';
 import { localDirectories } from './local-projects.js';
 import { readLegacyRules } from '../runtime/sync-rules.js';
@@ -17,7 +17,7 @@ const portInput = z.coerce.number().int().min(1).max(65535);
 const endpointFields = {
   host: z.string().trim().min(1).max(253).refine(isValidSshHost, '请输入有效的域名或 IP 地址，用户名和端口请分别填写'),
   port: portInput.default(22),
-  username: z.string().trim().regex(/^[a-zA-Z_][a-zA-Z0-9_.-]*$/).max(64),
+  username: z.string().trim().min(1).max(64).refine(isValidSshUsername, 'SSH 用户名格式无效'),
   privateKey: z.string().trim().min(1).max(65536).optional(),
 };
 const hostInput = z.object({

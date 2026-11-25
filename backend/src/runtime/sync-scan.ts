@@ -163,8 +163,208 @@ function unsyncableLink(path: string, target: string, remoteRoot: string, worksp
   return undefined;
 }
 
-function findPattern(path: string): string {
-  return `./${path.replace(/\/$/, '').replace(/[\\*?[\]]/g, '\\$&')}`;
+const PERL_SCAN_SCRIPT = String.raw`use strict;
+use warnings;
+binmode STDIN;
+binmode STDOUT;
+my $limit = $ARGV[0] + 0;
+my (%prune_name, %prune_path);
+{
+  local $/ = "\0";
+  while (defined(my $kind = <STDIN>)) {
+    chomp $kind;
+    my $val = <STDIN>;
+    last unless defined $val;
+    chomp $val;
+    if ($kind eq "n") { $prune_name{$val} = 1; }
+    elsif ($kind eq "p") { $prune_path{$val} = 1; }
+  }
+}
+my $written = 0;
+my @stack = ("");
+while (@stack) {
+  my $prefix = pop @stack;
+  my $dir = $prefix eq "" ? "." : "./$prefix";
+  opendir(my $dh, $dir) or next;
+  while (defined(my $entry = readdir($dh))) {
+    next if $entry eq "." || $entry eq "..";
+    my $rel = $prefix eq "" ? $entry : "$prefix/$entry";
+    next if $prune_name{$entry} || $prune_path{$rel};
+    my $fs = "./$rel";
+    my @st = lstat($fs) or next;
+    my $rec;
+    if (-l _) {
+      my $target = readlink($fs);
+      next unless defined $target;
+      $rec = "l\0$target\0$rel\0";
+    } elsif (-f _) {
+      $rec = "f\0$st[7]\0$rel\0";
+    } elsif (-d _) {
+      push @stack, $rel;
+      next;
+    } else {
+      next;
+    }
+    my $len = length($rec);
+    if ($written + $len >= $limit) {
+      print STDOUT substr($rec, 0, $limit - $written);
+      exit 0;
+    }
+    print STDOUT $rec;
+    $written += $len;
+  }
+  closedir($dh);
+}
+`;
+
+const PYTHON_SCAN_SCRIPT = String.raw`import os, sys
+
+limit = int(sys.argv[1])
+data = sys.stdin.buffer.read().split(b'\0')
+prune_names = set()
+prune_paths = set()
+for i in range(0, len(data) - 1, 2):
+    kind = data[i]
+    val = data[i + 1]
+    if kind == b'n':
+        prune_names.add(val)
+    elif kind == b'p':
+        prune_paths.add(val)
+
+out = sys.stdout.buffer
+written = 0
+stack = [b'']
+while stack:
+    prefix = stack.pop()
+    dir_path = b'.' if not prefix else b'./' + prefix
+    try:
+        it = os.scandir(dir_path)
+    except OSError:
+        continue
+    try:
+        with it:
+            for entry in it:
+                name = entry.name
+                rel = name if not prefix else prefix + b'/' + name
+                if name in prune_names or rel in prune_paths:
+                    continue
+                try:
+                    if entry.is_symlink():
+                        target = os.readlink(entry.path)
+                        rec = b'l\0' + target + b'\0' + rel + b'\0'
+                    elif entry.is_file(follow_symlinks=False):
+                        size = entry.stat(follow_symlinks=False).st_size
+                        rec = b'f\0' + str(size).encode('ascii') + b'\0' + rel + b'\0'
+                    elif entry.is_dir(follow_symlinks=False):
+                        stack.append(rel)
+                        continue
+                    else:
+                        continue
+                except OSError:
+                    continue
+                n = len(rec)
+                if written + n >= limit:
+                    out.write(rec[:limit - written])
+                    out.flush()
+                    sys.exit(0)
+                out.write(rec)
+                written += n
+    except OSError:
+        continue
+out.flush()
+`;
+
+function buildRemoteScanScript(remotePath: string, pruneNames: string[], prunePaths: string[]): string {
+  return [
+    `cd -- ${shellQuote(remotePath)} || exit`,
+    // Prefer /usr/bin tools so Windows Git Bash does not pick System32 utilities over MSYS2 coreutils/findutils.
+    `pick_tool() {`,
+    `  local c`,
+    `  for c in "$@"; do`,
+    `    case "$c" in`,
+    `      */*) [ -x "$c" ] && { printf '%s' "$c"; return 0; } ;;`,
+    `      *) command -v "$c" >/dev/null 2>&1 && { command -v "$c"; return 0; } ;;`,
+    `    esac`,
+    `  done`,
+    `  return 1`,
+    `}`,
+    `GZIP_BIN="$(pick_tool /usr/bin/gzip gzip || true)"`,
+    `BASE64_BIN="$(pick_tool /usr/bin/base64 base64 || true)"`,
+    `HEAD_BIN="$(pick_tool /usr/bin/head head || true)"`,
+    `[ -n "$GZIP_BIN" ] && [ -n "$BASE64_BIN" ] || { echo '远端缺少 gzip 或 base64' >&2; exit 3; }`,
+    `PRUNE_NAMES=(${pruneNames.map(shellQuote).join(' ')})`,
+    `PRUNE_PATHS=(${prunePaths.map(shellQuote).join(' ')})`,
+    `escape_find_path() {`,
+    `  local s="$1" i ch`,
+    `  ESCAPED_PATH='./'`,
+    `  for ((i=0; i<\${#s}; i++)); do`,
+    `    ch="\${s:i:1}"`,
+    `    case "$ch" in`,
+    `      \\\\|\\*|\\?|\\[|\\]) ESCAPED_PATH="\${ESCAPED_PATH}\\\\\${ch}" ;;`,
+    `      *) ESCAPED_PATH="\${ESCAPED_PATH}\${ch}" ;;`,
+    `    esac`,
+    `  done`,
+    `}`,
+    `emit_prunes() {`,
+    `  local n p`,
+    `  if [ "\${#PRUNE_NAMES[@]}" -gt 0 ]; then`,
+    `    for n in "\${PRUNE_NAMES[@]}"; do printf 'n\\000%s\\000' "$n"; done`,
+    `  fi`,
+    `  if [ "\${#PRUNE_PATHS[@]}" -gt 0 ]; then`,
+    `    for p in "\${PRUNE_PATHS[@]}"; do printf 'p\\000%s\\000' "$p"; done`,
+    `  fi`,
+    `}`,
+    `FIND_BIN=""`,
+    `if [ -n "$HEAD_BIN" ]; then`,
+    `  for c in /usr/bin/find gfind /opt/homebrew/bin/gfind /usr/local/bin/gfind find; do`,
+    `    bin=""`,
+    `    case "$c" in`,
+    `      */*) [ -x "$c" ] && bin="$c" ;;`,
+    `      *) bin="$(command -v "$c" 2>/dev/null || true)" ;;`,
+    `    esac`,
+    `    if [ -n "$bin" ] && "$bin" . -maxdepth 0 -printf '' </dev/null >/dev/null 2>&1; then`,
+    `      FIND_BIN="$bin"`,
+    `      break`,
+    `    fi`,
+    `  done`,
+    `fi`,
+    `if [ -n "$FIND_BIN" ]; then`,
+    `  FIND_PRUNES=()`,
+    `  if [ "\${#PRUNE_NAMES[@]}" -gt 0 ]; then`,
+    `    for n in "\${PRUNE_NAMES[@]}"; do`,
+    `      [ "\${#FIND_PRUNES[@]}" -gt 0 ] && FIND_PRUNES+=(-o)`,
+    `      FIND_PRUNES+=(-name "$n")`,
+    `    done`,
+    `  fi`,
+    `  if [ "\${#PRUNE_PATHS[@]}" -gt 0 ]; then`,
+    `    for p in "\${PRUNE_PATHS[@]}"; do`,
+    `      [ "\${#FIND_PRUNES[@]}" -gt 0 ] && FIND_PRUNES+=(-o)`,
+    `      case "$p" in`,
+    `        *\\\\*|*\\**|*\\?*|*\\[*|*\\]*)`,
+    `          escape_find_path "$p"`,
+    `          FIND_PRUNES+=(-path "$ESCAPED_PATH")`,
+    `          ;;`,
+    `        *) FIND_PRUNES+=(-path "./$p") ;;`,
+    `      esac`,
+    `    done`,
+    `  fi`,
+    `  "$FIND_BIN" . '(' "\${FIND_PRUNES[@]}" ')' -prune -o -type f -printf 'f\\0%s\\0%P\\0' -o -type l -printf 'l\\0%l\\0%P\\0' 2>/dev/null | "$HEAD_BIN" -c ${OUTPUT_LIMIT} | "$GZIP_BIN" -1c | "$BASE64_BIN"`,
+    `  exit`,
+    `fi`,
+    // macOS bundles /usr/bin/perl natively without triggering Xcode CLT installation prompts.
+    `PERL_BIN="$(pick_tool /usr/bin/perl perl || true)"`,
+    `if [ -n "$PERL_BIN" ] && "$PERL_BIN" -e 'exit 0' </dev/null >/dev/null 2>&1; then`,
+    `  emit_prunes | "$PERL_BIN" -e ${shellQuote(PERL_SCAN_SCRIPT)} -- ${OUTPUT_LIMIT} | "$GZIP_BIN" -1c | "$BASE64_BIN"`,
+    `  exit`,
+    `fi`,
+    `PYTHON_BIN="$(pick_tool /usr/bin/python3 python3 || true)"`,
+    `if [ -n "$PYTHON_BIN" ] && "$PYTHON_BIN" -c 'import os,sys' </dev/null >/dev/null 2>&1; then`,
+    `  emit_prunes | "$PYTHON_BIN" -c ${shellQuote(PYTHON_SCAN_SCRIPT)} ${OUTPUT_LIMIT} | "$GZIP_BIN" -1c | "$BASE64_BIN"`,
+    `  exit`,
+    `fi`,
+    `echo '远端缺少可用的目录扫描工具（需要 GNU find、perl 或 python3）' >&2`,
+    `exit 3`,
+  ].join('\n');
 }
 
 // Lists remote file sizes and symbolic links once, before the first sync, so users can exclude the largest outputs
@@ -173,17 +373,18 @@ export async function scanSyncCandidates(config: RuntimeConfig, ssh: SshManager,
   assertRemotePath(remotePath);
   const policy = await loadSyncPolicy(config, ssh, userId, host, remotePath, rules);
   // Pruning remotely keeps dependency trees and Git-ignored directories out of the listing.
-  const names = ['.git', ...DEFAULT_IGNORES.filter(pattern => /^[^!/*?[{\\]+$/.test(pattern))];
-  const prunes = [
-    ...names.map(name => `-name ${shellQuote(name)}`),
-    ...policy.archivePaths.slice(0, MAX_PRUNED_PATHS).map(path => `-path ${shellQuote(findPattern(path))}`),
-  ].join(' -o ');
-  const result = await ssh.exec(userId, host, [
-    `cd -- ${shellQuote(policy.remotePath)} || exit`,
-    `command -v gzip >/dev/null && command -v base64 >/dev/null || { echo '远端缺少 gzip 或 base64' >&2; exit 3; }`,
-    `find . -maxdepth 0 -printf '' 2>/dev/null || { echo '远端 find 不支持 -printf，需要 GNU findutils' >&2; exit 3; }`,
-    `find . \\( ${prunes} \\) -prune -o -type f -printf 'f\\0%s\\0%P\\0' -o -type l -printf 'l\\0%l\\0%P\\0' 2>/dev/null | head -c ${OUTPUT_LIMIT} | gzip -1c | base64`,
-  ].join('\n'), 180_000, 64 * 1024 * 1024);
+  const pruneNames = ['.git', ...DEFAULT_IGNORES.filter(pattern => /^[^!/*?[{\\]+$/.test(pattern))];
+  const prunePaths = policy.archivePaths
+    .slice(0, MAX_PRUNED_PATHS)
+    .map(path => path.replace(/\/$/, ''))
+    .filter(Boolean);
+  const result = await ssh.exec(
+    userId,
+    host,
+    buildRemoteScanScript(policy.remotePath, pruneNames, prunePaths),
+    180_000,
+    64 * 1024 * 1024,
+  );
   if (result.code !== 0) throw new Error(`远端体积扫描失败：${result.stderr.trim() || `退出码 ${result.code}`}`);
   const raw = gunzipSync(Buffer.from(result.stdout, 'base64'));
   const truncated = raw.length >= OUTPUT_LIMIT;

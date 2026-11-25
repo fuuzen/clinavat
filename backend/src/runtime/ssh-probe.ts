@@ -88,11 +88,11 @@ else
 fi
 chmod 600 "$kh" 2>/dev/null || true
 if [ -n "$jump_alias" ]; then
-  if ! ssh -F "$cfg" -o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$kh" "$jump_alias" true >/dev/null; then
+  if ! ssh -F "$cfg" -o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$kh" "$jump_alias" 'exit 0' >/dev/null; then
     exit 10
   fi
 fi
-if ! ssh -F "$cfg" -o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$kh" "$target_alias" true >/dev/null; then
+if ! ssh -F "$cfg" -o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$kh" "$target_alias" 'exit 0' >/dev/null; then
   exit 11
 fi
 cat -- "$kh"
@@ -163,7 +163,7 @@ export async function runIsolatedHandshake(options: SshHandshakeOptions): Promis
     const attempt = async (target: string, heading: string, timeout: number, hasJump: boolean) => {
       const res = await runCommand(
         sshBinary,
-        ['-F', configPath, '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'StrictHostKeyChecking=accept-new', '-o', `UserKnownHostsFile=${hostKh}`, target, 'true'],
+        ['-F', configPath, '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'StrictHostKeyChecking=accept-new', '-o', `UserKnownHostsFile=${hostKh}`, target, 'exit 0'],
         { timeout },
       );
       if (res.code !== 0) {

@@ -50,7 +50,7 @@ export default function EndpointFields({
           onChange={(event) => onChange({ ...value, username: event.target.value })}
           placeholder="远程登录用户名"
           maxLength={64}
-          pattern="[a-zA-Z_][a-zA-Z0-9_.-]*"
+          pattern="[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
           required
         />
       </label>
