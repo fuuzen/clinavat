@@ -30,6 +30,9 @@ export function agentModelRoutes(app: FastifyInstance, context: Context) {
   app.get('/api/agent/models', async request => {
     const query = z.object({ engine, slotId: selectedSlotId }).parse(request.query);
     const slot = slotForUser(store, query.slotId, request.user.id, query.engine);
+    if (context.maintenance.isEnabled()) {
+      return config.catalogs.read(slot.id) ?? { models: [], refreshedAt: '' };
+    }
     try { return await loadModelCatalog(config, { user: request.user, slot, session: { engine: query.engine } }); }
     catch (error) { throw catalogError(error); }
   });

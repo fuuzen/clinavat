@@ -45,6 +45,9 @@ export class Discussions {
     private readonly agents: ChildAgents, private readonly roster: AgentRoster) {}
 
   async start(user: User, host: Session, input: DiscussionInput, startedBy: 'master' | 'user'): Promise<{ id: string; participants: Session[] }> {
+    if (this.context.maintenance.isEnabled()) {
+      throw new HttpError(503, `系统正在维护中，暂不支持发起新的多智能体讨论：${this.context.maintenance.blockMessage()}`);
+    }
     const { store } = this.context;
     const limits = this.context.orchestrationSettings.view();
     if (input.participants.length > limits.discussionParticipants) throw new HttpError(409, `每场讨论最多 ${limits.discussionParticipants} 位参与者`);

@@ -84,6 +84,15 @@ export class AccountCredentials {
     const lease = this.leases.get(slotId);
     return lease && !lease.parked ? lease.journal.userId : null;
   }
+  slotLeaseSummary(): { activeSlots: number; parkedSlots: number } {
+    let activeSlots = 0;
+    let parkedSlots = 0;
+    for (const lease of this.leases.values()) {
+      if (lease.parked && !lease.finishing) parkedSlots++;
+      else activeSlots++;
+    }
+    return { activeSlots, parkedSlots };
+  }
 
   /** Saves the state a parked slot still holds for its last user; a slot in use stays as it is. */
   async releaseParked(slotId: string): Promise<void> {

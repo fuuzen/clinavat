@@ -9,10 +9,10 @@ import { RunControl } from './run-control.js';
 import { HttpError } from '../models.js';
 import { awaitApproval, shellHash } from './run-context.js';
 import { RuntimeFailovers } from './runtime-failover.js';
-import { superReadModeOf } from './orchestration-tools.js';
 import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
-import { settingsKey, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
+import { acceptsResidentContext, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf, settingsKey, summarizeActiveRuns,
+  type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
 import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, MessageSource, QueuedInput,
   RunServices, TurnOrigin, TurnOutcome } from './types.js';
@@ -57,26 +57,19 @@ export class AgentManager {
     const state = this.active.get(sessionId);
     const switching = this.failovers.view(sessionId);
     if (switching && (this.failovers.has(sessionId) || !state)) return switching;
-    return {
-      resident: !!state && !state.finishing && !state.closing,
-      turnActive: !!state?.turnActive,
-      queue: state?.queue.map(({ id, content, queuedAt, images }) => ({ id, content, queuedAt, images: images?.length ?? 0 })) ?? [],
-      tasks: state?.run?.tasks() ?? [],
-    };
+    return runtimeViewOf(state);
+  }
+
+  activitySummary(): { activeSessions: number; idleResidentSessions: number } {
+    return summarizeActiveRuns(this.active, sessionId => this.failovers.has(sessionId));
   }
 
   /** No turn is open, but the process still has work of its own, such as a command agy moved to the background. */
-  hasBackgroundWork(sessionId: string): boolean {
-    const state = this.active.get(sessionId);
-    return !!state?.run && !state.finishing && !state.closing && !state.turnActive && !state.run.isIdle();
-  }
+  hasBackgroundWork(sessionId: string): boolean { return hasResidentBackgroundWork(this.active.get(sessionId)); }
 
   /** The resident process can take a new turn with these settings without restarting. */
   accepts(sessionId: string, context: AgentContext): boolean {
-    const state = this.active.get(sessionId);
-    return !this.failovers.has(sessionId) && !!state?.run && !state.finishing && !state.closing && !state.context.session.command
-      && !context.session.command && state.settings === settingsKey(context)
-      && superReadModeOf(state.context.session) === superReadModeOf(context.session);
+    return acceptsResidentContext(this.active.get(sessionId), context, this.failovers.has(sessionId));
   }
 
   /** `images` are the IDs of the images attached to the first message. */
@@ -293,12 +286,23 @@ export class AgentManager {
 
   /** Ends the resident process if it has nothing left to do; a busy one stays and keeps its lease. */
   async reclaim(sessionId: string): Promise<void> {
-    if (this.failovers.has(sessionId)) return;
     const state = this.active.get(sessionId);
-    if (!state?.run || state.turnActive || state.queue.length || !state.run.isIdle()) return;
+    if (!state || !isIdleResidentRun(state, this.failovers.has(sessionId))) return;
     this.closeRuntime(state);
     await state.completion?.catch(() => undefined);
     this.config.orchestration?.clearInspectCache(sessionId);
+  }
+
+  /** Closes every idle resident CLI without interrupting running turns, queues, or background tasks. */
+  reclaimIdle(): number {
+    let reclaimed = 0;
+    for (const [sessionId, state] of this.active) {
+      if (!isIdleResidentRun(state, this.failovers.has(sessionId))) continue;
+      this.closeRuntime(state);
+      void state.completion?.catch(() => undefined).finally(() => this.config.orchestration?.clearInspectCache(sessionId));
+      reclaimed++;
+    }
+    return reclaimed;
   }
 
   async reclaimWhere(filter: { projectId?: string; slotId?: string; userId?: string }): Promise<void> {
@@ -398,8 +402,11 @@ export class AgentManager {
 
   private scheduleIdle(state: ActiveRun): void {
     clearTimeout(state.idleTimer);
-    if (this.failovers.has(state.context.session.id) || state.finishing || state.closing || state.turnActive || state.queue.length || !state.run?.isIdle()) return;
-    state.idleTimer = setTimeout(() => this.closeRuntime(state), this.config.runtimeIdleMs);
+    if (!isIdleResidentRun(state, this.failovers.has(state.context.session.id))) return;
+    const delayMs = this.callbacks.isMaintenanceMode?.() ? 0 : this.config.runtimeIdleMs;
+    state.idleTimer = setTimeout(() => {
+      if (isIdleResidentRun(state, this.failovers.has(state.context.session.id))) this.closeRuntime(state);
+    }, delayMs);
     state.idleTimer.unref();
   }
 

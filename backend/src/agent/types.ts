@@ -141,6 +141,8 @@ export interface AgentCallbacks {
   deferQuestion(question: DeferredQuestion): void;
   /** Must never fail the run: usage statistics are secondary to the conversation. */
   recordTokenUsage?(owner: UsageOwner, update: TokenUsageUpdate): void;
+  /** When true, idle resident CLIs close immediately after their turn ends instead of waiting `runtimeIdleMs`. */
+  isMaintenanceMode?(): boolean;
 }
 
 export type TurnOrigin = { messageId: string } | { summary: string };

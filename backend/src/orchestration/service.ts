@@ -120,6 +120,12 @@ export class Orchestrator implements OrchestrationHost {
     return agentEngines.filter(engine => engineSlots(this.context, userId, engine).length > 0);
   }
 
+  private assertNotInMaintenance(action: string): void {
+    if (this.context.maintenance.isEnabled()) {
+      throw new HttpError(503, `系统正在维护中，暂不支持${action}：${this.context.maintenance.blockMessage()}`);
+    }
+  }
+
   private async run(tool: Exclude<ToolName, 'inspect'>, user: User, master: Session, args: unknown, signal: AbortSignal,
     planning: boolean): Promise<HubToolResult> {
     const superAgent = orchestrationModeOf(master) === 'super';
@@ -129,6 +135,7 @@ export class Orchestrator implements OrchestrationHost {
         return json(this.list(user, master));
       }
       case 'start_agent': {
+        this.assertNotInMaintenance('派生新的子智能体');
         const input = this.roster.resolve(master, toolInputs.start_agent.parse(args), this.availableEngines(user.id));
         if (planning && input.access === 'write') throw new HttpError(409, 'Plan 模式下只能派生只读子智能体');
         assertNewName(this.context, master, input.name);
@@ -165,6 +172,7 @@ export class Orchestrator implements OrchestrationHost {
         });
       }
       case 'message_agent': {
+        this.assertNotInMaintenance('向子智能体派发新任务');
         const input = toolInputs.message_agent.parse(args);
         const child = this.child(master, input.agent);
         if (planning && child.agent_access === 'write') throw new HttpError(409, 'Plan 模式下不能指挥可写子智能体');
@@ -188,6 +196,7 @@ export class Orchestrator implements OrchestrationHost {
         return json({ ...result, ...(archived ? { archived: true } : {}) });
       }
       case 'start_discussion': {
+        this.assertNotInMaintenance('发起新的多智能体讨论');
         const input = toolInputs.start_discussion.parse(args);
         const { id, participants } = await this.discussions.start(user, master, input, 'master');
         return json({ discussionId: id, participants: participants.map(participant => participant.agent_name), status: 'running',

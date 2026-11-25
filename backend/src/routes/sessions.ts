@@ -191,6 +191,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       deferredQuestions: store.all<{ session_id: string; count: number }>(`SELECT deferred_questions.session_id,COUNT(*) AS count
         FROM deferred_questions JOIN sessions ON sessions.id=deferred_questions.session_id
         WHERE sessions.user_id=? AND sessions.archived_at IS NULL GROUP BY deferred_questions.session_id`, request.user.id),
+      maintenance: context.maintenance.getState(),
     };
   });
   app.post('/api/sessions', async (request, reply) =>

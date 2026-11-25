@@ -61,6 +61,25 @@ export function activityCounts(database) {
 
 export function hasActivity(counts) { return counts.sessions > 0 || counts.turns > 0 || counts.approvals > 0; }
 
+export function maintenanceState(database) {
+  const empty = { enabled: false, message: null, enabledBy: null, enabledAt: null, updatedAt: null };
+  try {
+    const exists = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_mode'").get();
+    if (!exists) return empty;
+    const row = database.prepare('SELECT enabled,message,enabled_by,enabled_at,updated_at FROM maintenance_mode WHERE id=1').get();
+    if (!row) return empty;
+    return {
+      enabled: row.enabled === 1,
+      message: row.message ?? null,
+      enabledBy: row.enabled_by ?? null,
+      enabledAt: row.enabled_at ?? null,
+      updatedAt: row.updated_at ?? null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 export function gateCount(database) {
   return gateNames.filter(name => database.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?").get(name)).length;
 }
@@ -155,7 +174,8 @@ export async function deploymentStatus(dataDirectory) {
     const [hub, web] = await Promise.all(services.map(service => serviceState(service)));
     const activity = activityCounts(database);
     const runtime = await runtimeCounts(database, dataDirectory, hub);
+    const maintenance = maintenanceState(database);
     return { checkedAt: new Date().toISOString(), state: hasActivity(activity) || hasRuntimeActivity(runtime) ? 'waiting' : 'idle',
-      ...activity, ...runtime, gateTriggers: gateCount(database), services: { hub: hub.ActiveState, web: web.ActiveState } };
+      ...activity, ...runtime, maintenance, gateTriggers: gateCount(database), services: { hub: hub.ActiveState, web: web.ActiveState } };
   } finally { database.close(); }
 }

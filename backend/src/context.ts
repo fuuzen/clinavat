@@ -20,6 +20,7 @@ import type { AgentDefaults } from './agent-defaults.js';
 import type { OrchestrationSettingsStore } from './orchestration/limits.js';
 import type { Worktrees } from './orchestration/worktrees.js';
 import type { MachineResourceHost, MachineResourceSettingsStore } from './execution/machine-resources.js';
+import type { MaintenanceService } from './runtime/maintenance.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
@@ -44,6 +45,7 @@ export interface Context {
   machineResources?: MachineResourceHost;
   /** Only with slot machines; otherwise a local project's commands already run on the host. */
   hostCommands?: HostCommands;
+  maintenance: MaintenanceService;
 }
 const activeResources = new WeakMap<Context, Set<string>>();
 const sharedResources = new WeakMap<Context, Map<string, number>>();

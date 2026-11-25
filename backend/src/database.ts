@@ -48,6 +48,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS site_settings (
         id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS maintenance_mode (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        message TEXT,
+        enabled_by TEXT,
+        enabled_at TEXT,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS dev_hosts (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
         host TEXT NOT NULL, port INTEGER NOT NULL, username TEXT NOT NULL,

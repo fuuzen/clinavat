@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError } from '../models.js';
 import { validateAnswers, type UserInputAnswers, type UserInputQuestion } from '../agent/user-input.js';
+import { sendMaintenanceBlocked } from '../runtime/maintenance-guard.js';
 import { messageInput, sendSessionMessage } from './session-messages.js';
 
 interface StoredQuestion { id: string; session_id: string; questions: string; created_at: string; deferred_at: string }
@@ -39,7 +40,7 @@ export function sessionQuestionRoutes(app: FastifyInstance, context: Context) {
     );
     return [...own, ...childRequests];
   });
-  app.post('/api/sessions/:id/questions/:requestId', async request => {
+  app.post('/api/sessions/:id/questions/:requestId', async (request, reply) => {
     const { id, requestId } = z.object({ id: z.uuid(), requestId: z.uuid() }).parse(request.params);
     sessionFor(context, id, request.user.id);
     const input = answerInput.parse(request.body);
@@ -47,6 +48,7 @@ export function sessionQuestionRoutes(app: FastifyInstance, context: Context) {
       agents.questions.answer(id, requestId, input.answers, input.skip);
       return { ok: true };
     }
+    if (context.maintenance.isEnabled()) return sendMaintenanceBlocked(reply, context.maintenance);
     return withResourceLocks(context, [`question:${requestId}`], async () => {
       const question = deferred(id).find(item => item.id === requestId);
       if (!question) throw new HttpError(409, '这个问题已结束，请刷新对话');

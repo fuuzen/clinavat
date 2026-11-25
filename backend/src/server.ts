@@ -18,6 +18,8 @@ import { DevHostApprovalStore } from './runtime/dev-host-approvals.js';
 import { SshRelayServer } from './runtime/ssh-relay.js';
 import { revokeSockets as revokeTerminalSockets } from './runtime/terminal.js';
 import { WorkspaceManager } from './runtime/workspace.js';
+import { MaintenanceService } from './runtime/maintenance.js';
+import { registerMaintenanceGuard } from './runtime/maintenance-guard.js';
 import { describeSkippedLinks, recordSkippedLinks } from './sync-links.js';
 import { AgentManager } from './agent/manager.js';
 import { resourceRoutes } from './routes/resources.js';
@@ -173,7 +175,9 @@ for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_stat
 }
 // Assigned once the context exists; it sees every agent event, and turn ends drive child reports.
 let observeAgentEvent: (event: AgentEvent) => void = () => undefined;
+let maintenance: MaintenanceService | undefined;
 const agents: AgentManager = new AgentManager(agentConfig, {
+  isMaintenanceMode: () => maintenance?.isEnabled() ?? false,
   verifyAutomaticSlot: previous => slots.ensureEligible(
     slotForUser(store, previous.slot.id, previous.user.id, previous.session.engine), previous.user.id, previous.session.model),
   assertAutomaticSlot(previous) {
@@ -303,6 +307,8 @@ const agents: AgentManager = new AgentManager(agentConfig, {
 });
 credentials.reclaimIdle = slotId => agents.reclaimWhere({ slotId });
 usage.readResident = slot => agents.readUsage(slot);
+const maintenanceService = new MaintenanceService(store, agents, credentials, events);
+maintenance = maintenanceService;
 
 await app.register(cookie);
 await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute' });
@@ -324,9 +330,10 @@ app.addHook('onSend', async (_request, reply) => {
   reply.header('Cache-Control', 'no-store');
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
+registerMaintenanceGuard(app, maintenanceService);
 events.register(app, connections);
 const context = { config: agentConfig, store, events, ssh, targetPolicy, devHostApprovals, sshRelay, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
-  usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
+  usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined, maintenance: maintenanceService };
 const worktrees = new Worktrees(context);
 Object.assign(context, { worktrees });
 const orchestrator = new Orchestrator(context);
@@ -347,7 +354,8 @@ gateway = new GatewayService(new GatewayClient(config, ssh.keys), store, slotMac
 gatewayRoutes(app, gateway, context);
 app.get('/api/health', async () => {
   const { kind, ...runtime } = await execution.health();
-  return { status: 'ok', version: '0.1.0', execution: kind, runtime };
+  const { enabled, message } = maintenanceService.getState();
+  return { status: 'ok', version: '0.1.0', execution: kind, runtime, maintenance: { enabled, message } };
 });
 app.addHook('preClose', async () => {
   connections.close();
@@ -359,6 +367,11 @@ app.addHook('preClose', async () => {
 });
 app.addHook('onClose', async () => { await ssh.close(); store.close(); });
 let shuttingDown = false;
+process.on('SIGUSR2', () => {
+  if (shuttingDown) return;
+  const reclaimed = agents.reclaimIdle();
+  app.log.info({ reclaimed }, 'SIGUSR2 触发空闲常驻 CLI 回收');
+});
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
   if (shuttingDown) return;
   shuttingDown = true;

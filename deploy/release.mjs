@@ -134,14 +134,46 @@ async function healthCheck() {
   throw new Error('后端健康检查失败');
 }
 
+async function signalIdleReclaim() {
+  const hub = await serviceState(services[0]);
+  if (hub.ActiveState !== 'active' || !hub.MainPID || hub.MainPID === '0') return false;
+  const pid = Number(hub.MainPID);
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 'SIGUSR2');
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function reclaimIdleHubProcesses(initial) {
+  if (!await signalIdleReclaim()) return initial;
+  const deadline = Date.now() + 5000;
+  let latest = initial;
+  while (Date.now() < deadline) {
+    if (cancelled) break;
+    await delay(500);
+    latest = await deploymentStatus(dataDirectory);
+    if (hasActivity(latest) || (!latest.runtimeJournals && !latest.conversationProcesses)) break;
+  }
+  return latest;
+}
+
 async function drainPreparations(database) {
   const deadline = Date.now() + 45000;
   let cleanSamples = 0;
+  let signaledReclaim = false;
   while (Date.now() < deadline) {
     checkCancelled();
     const activity = activityCounts(database);
     if (hasActivity(activity)) throw retryLater('发布门禁后仍检测到活跃对话，已中止发布');
     const runtime = await runtimeCounts(database, dataDirectory, await serviceState(services[0]));
+    if (!signaledReclaim && (runtime.runtimeJournals > 0 || runtime.conversationProcesses > 0)) {
+      signaledReclaim = true;
+      await signalIdleReclaim().catch(() => false);
+    }
     cleanSamples = hasRuntimeActivity(runtime, !frontendOnly) ? 0 : cleanSamples + 1;
     if (cleanSamples >= 2) return;
     await delay(500);
@@ -155,7 +187,11 @@ function retryLater(message) {
 }
 
 async function publish(staging) {
-  const initial = await deploymentStatus(dataDirectory);
+  let initial = await deploymentStatus(dataDirectory);
+  // Conversations may have ended while their resident CLIs are still in the idle grace period.
+  if (!hasActivity(initial) && (initial.runtimeJournals > 0 || initial.conversationProcesses > 0)) {
+    initial = await reclaimIdleHubProcesses(initial);
+  }
   // Frontend-only releases leave the Hub and its quota probes running throughout.
   if (hasActivity(initial) || hasRuntimeActivity(initial, !frontendOnly)) {
     console.log(JSON.stringify(initial)); process.exitCode = 75; return;
@@ -293,7 +329,10 @@ async function waitAndPublish(staging) {
   for (;;) {
     let idle = false;
     try {
-      const status = await deploymentStatus(dataDirectory);
+      let status = await deploymentStatus(dataDirectory);
+      if (!hasActivity(status) && (status.runtimeJournals > 0 || status.conversationProcesses > 0)) {
+        status = await reclaimIdleHubProcesses(status);
+      }
       idle = !hasActivity(status) && !hasRuntimeActivity(status, !frontendOnly);
     } catch (error) { console.error(`检查部署状态失败，稍后重试：${error.message}`); }
     // The locked run checks again and gates atomically; 75 means work started in between.

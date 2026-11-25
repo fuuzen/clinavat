@@ -16,6 +16,7 @@ import { orchestrationDefaults, orchestrationSettingsSchema } from '../orchestra
 import { adminUserRoutes } from './admin-users.js';
 import { adminMachineRoutes } from './admin-machines.js';
 import { adminDevHostRoutes } from './admin-dev-hosts.js';
+import { adminMaintenanceRoutes } from './admin-maintenance.js';
 import { agentEngines, engineProfiles } from '../agent/engines.js';
 
 const slotId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
@@ -24,12 +25,14 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
   adminUserRoutes(app, context);
   adminMachineRoutes(app, context);
   adminDevHostRoutes(app, context);
+  adminMaintenanceRoutes(app, context);
   app.get('/api/slots', async request => availableSlots(store, request.user.id).map(slot => serializeUserSlot(context, slot, request.user.id)));
   const usageSlots = (userId: string, admin: boolean) => admin
     ? store.all<Slot>('SELECT * FROM account_slots ORDER BY id') : availableSlots(store, userId);
   app.get('/api/slots/usage', async request => {
     const { refresh } = z.object({ refresh: z.enum(['0', '1']).default('0') }).parse(request.query);
-    return config.usage!.views(usageSlots(request.user.id, request.user.role === 'admin'), refresh === '1');
+    const allowRefresh = refresh === '1' && !context.maintenance.isEnabled();
+    return config.usage!.views(usageSlots(request.user.id, request.user.role === 'admin'), allowRefresh);
   });
   app.post('/api/slots/:id/usage/refresh', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async request => {
     const { id } = z.object({ id: slotId }).parse(request.params);

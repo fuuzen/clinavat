@@ -122,6 +122,7 @@ export function sessionGoalRoutes(app: FastifyInstance, context: Context): void 
     const { id } = identifier.parse(request.params);
     const session = codexSession(context, id, request.user.id);
     if (context.agents.isBusy(id)) return { goal: await context.agents.getGoal(id) };
+    if (context.maintenance.isEnabled()) return { goal: null };
     return withResourceLocks(context, [`session:${id}`], async () => ({
       goal: await accessIdleGoal(context, codexSession(context, id, request.user.id)),
     }), [`project:${session.project_id}`]);
