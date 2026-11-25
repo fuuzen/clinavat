@@ -10,7 +10,7 @@ import { getPermissionMode, permissionModes, type PermissionMode } from '../agen
 import { availableSlots, slotForUser } from '../accounts/access.js';
 import { assertAutomaticSlot } from '../accounts/selection.js';
 import { selectedSlotId } from '../routes/session-messages.js';
-import { createSession, stopSession } from '../routes/sessions.js';
+import { createSession, sessionInput, stopSession, type ChildAgent } from '../routes/sessions.js';
 import type { toolInputs } from './tools.js';
 import type { AgentTasks } from './tasks.js';
 
@@ -29,13 +29,15 @@ export function engineSlots(context: Context, userId: string, engine: AgentEngin
   });
 }
 
-function pickRankedManualSlot(context: Context, user: User, engine: AgentEngine, candidates: Slot[], model?: string | null): Slot | undefined {
-  if (!candidates.length) return undefined;
-  const pinnedSlotId = context.config.credentials.activeSlotForUser(user.id, engine);
-  if (pinnedSlotId) {
-    const pinned = candidates.find(slot => slot.id === pinnedSlotId);
-    if (pinned) return pinned;
-  }
+function rankManualSlots(
+  context: Context,
+  user: User,
+  engine: AgentEngine,
+  candidates: Slot[],
+  model?: string | null,
+  enforcePinned = false,
+): Slot[] {
+  if (!candidates.length) return [];
   const effectiveModel = model ?? context.agentDefaults.forUser(user.id, engine).model;
   const supportsModel = effectiveModel
     ? (slotId: string) => {
@@ -43,7 +45,12 @@ function pickRankedManualSlot(context: Context, user: User, engine: AgentEngine,
         return !catalog || catalog.models.some(item => item.id === effectiveModel);
       }
     : undefined;
-  return context.slots.rankSlots(candidates, engine, effectiveModel, supportsModel)[0];
+  const ranked = context.slots.rankSlots(candidates, engine, effectiveModel, supportsModel);
+  const pinnedSlotId = context.config.credentials.activeSlotForUser(user.id, engine);
+  if (!pinnedSlotId) return ranked;
+  const pinned = ranked.find(slot => slot.id === pinnedSlotId);
+  if (pinned) return enforcePinned ? [pinned] : [pinned, ...ranked.filter(slot => slot.id !== pinnedSlotId)];
+  return enforcePinned ? [] : ranked;
 }
 
 /** Where a child runs when the master named no slot: keep auto for automatic-slot engines when any non-token slot can participate, else rank usable slots. */
@@ -57,7 +64,7 @@ export function slotChoice(context: Context, user: User, engine: AgentEngine, sl
     if (hasAutoSlot) return { slotMode: 'auto' as const };
   }
   // Respect VM single-machine SQLite exclusivity first, then pick the healthiest non-limited slot.
-  const free = pickRankedManualSlot(context, user, engine, usable.map(entry => entry.slot), model);
+  const free = rankManualSlots(context, user, engine, usable.map(entry => entry.slot), model)[0];
   if (free) return { slotMode: 'manual' as const, slotId: free.id };
   throw new HttpError(409, slots.length
     ? `没有可用的 ${engineProfiles[engine].label} 槽位：${slots.map(({ slot, inUseByOther }) => `${slot.id}（${inUseByOther ? '其他用户正在使用' : slot.status}）`).join('、')}`
@@ -111,31 +118,56 @@ export function assertChildRoom(context: Context, tasks: AgentTasks, user: User,
   }
 }
 
+type SessionWithoutSlot = Omit<z.input<typeof sessionInput>, 'slotMode' | 'slotId'>;
+
+/** Creates a session via slotChoice; when auto selection fails with 409, retries across all usable non-cooldown slots ranked by SlotSelector. */
+export async function createSessionWithSlotFallback(
+  context: Context,
+  user: User,
+  base: SessionWithoutSlot,
+  requestedSlotId?: string,
+  child?: ChildAgent,
+): Promise<Session> {
+  const model = base.model ?? undefined;
+  const choice = slotChoice(context, user, base.engine, requestedSlotId, model);
+  try {
+    return await createSession(context, user, sessionInput.parse({ ...base, ...choice }), child);
+  } catch (error) {
+    if (choice.slotMode !== 'auto' || !(error instanceof HttpError) || error.statusCode !== 409) throw error;
+    const fallbackPool = engineSlots(context, user.id, base.engine)
+      .filter(entry => entry.usable && !context.slots.isBlocked(entry.slot, model))
+      .map(entry => entry.slot);
+    const candidates = rankManualSlots(context, user, base.engine, fallbackPool, model, true);
+    if (!candidates.length) throw error;
+    let lastError: unknown = error;
+    for (const candidate of candidates) {
+      try {
+        return await createSession(context, user, sessionInput.parse({ ...base, slotMode: 'manual', slotId: candidate.id }), child);
+      } catch (candidateError) {
+        if (candidateError instanceof HttpError && [400, 403, 409, 502].includes(candidateError.statusCode)) {
+          lastError = candidateError;
+          continue;
+        }
+        throw candidateError;
+      }
+    }
+    throw lastError;
+  }
+}
+
 export async function createChild(context: Context, user: User, master: Session, input: ChildRequest, placement: Placement): Promise<Session> {
   assertNewName(context, master, input.name);
   const title = `${input.name} · ${input.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
-  const choice = slotChoice(context, user, input.engine, input.slot, input.model);
   const base = {
     projectId: placement.project.id, engine: input.engine, title, orchestration: false,
     model: input.model ?? null, reasoningEffort: input.effort ?? null,
     permissionMode: childPermissionMode(master, input.engine), agentMode: 'normal' as const, rolePreset: 'default' as const,
   };
-  const childMeta = {
+  const childMeta: ChildAgent = {
     parentSessionId: master.id, name: input.name, access: input.access, directory: placement.directory,
     isolation: placement.isolation, ephemeral: input.ephemeral, instructions: input.instructions, profile: input.profile,
   };
-  try {
-    return await createSession(context, user, { ...base, ...choice }, childMeta);
-  } catch (error) {
-    if (choice.slotMode !== 'auto' || !(error instanceof HttpError) || error.statusCode !== 409) throw error;
-    // Only fall back when every auto-schedulable slot failed and a usable long-lived token slot can still serve the engine.
-    const tokenSlots = engineSlots(context, user.id, input.engine)
-      .filter(entry => entry.usable && entry.slot.auth_method === 'token' && !context.slots.isBlocked(entry.slot, input.model))
-      .map(entry => entry.slot);
-    const fallback = pickRankedManualSlot(context, user, input.engine, tokenSlots, input.model);
-    if (!fallback) throw error;
-    return createSession(context, user, { ...base, slotMode: 'manual', slotId: fallback.id }, childMeta);
-  }
+  return createSessionWithSlotFallback(context, user, base, input.slot, childMeta);
 }
 
 export interface ChildReconfigureInput {
@@ -143,6 +175,83 @@ export interface ChildReconfigureInput {
   model?: string;
   effort?: string;
   mode: 'queue' | 'steer' | 'interrupt';
+}
+
+interface ValidatedReconfigure {
+  targetSlot: Slot;
+  nextSlotMode: 'auto' | 'manual';
+  nextModel: string | null;
+  nextEffort: string | null;
+}
+
+function isPinnedByOther(context: Context, userId: string, current: Session, pinnedSlotId: string): boolean {
+  if (current.slot_id !== pinnedSlotId || !context.config.credentials.isSessionBusy(current.id)) return true;
+  const others = context.store.all<{ id: string }>(
+    'SELECT id FROM sessions WHERE user_id=? AND engine=? AND slot_id=? AND id<>?',
+    userId, current.engine, pinnedSlotId, current.id,
+  );
+  return others.some(session => context.config.credentials.isSessionBusy(session.id) || context.agents.isBusy(session.id));
+}
+
+/** Read-only validation of target slot access, engine/IDLE state, occupant, VM single-machine exclusivity, and model/effort compatibility. */
+async function validateReconfigure(
+  context: Context,
+  user: User,
+  current: Session,
+  input: ChildReconfigureInput,
+  preflight: boolean,
+): Promise<ValidatedReconfigure> {
+  const wantsAuto = input.slot === 'auto';
+  const wantsSlot = input.slot !== undefined && !wantsAuto;
+  const nextSlotMode = wantsAuto ? 'auto' as const : wantsSlot ? 'manual' as const : current.slot_mode;
+  let nextModel = input.model !== undefined ? input.model : current.model;
+  let nextEffort = input.effort !== undefined ? input.effort
+    : (input.model !== undefined && input.model !== current.model ? null : current.reasoning_effort);
+
+  if (nextSlotMode === 'auto') {
+    assertAutomaticSlot(current.engine);
+    const targetSlot = await context.slots.select(
+      { userId: user.id, engine: current.engine, model: nextModel, preferredSlotId: wantsAuto ? undefined : current.slot_id },
+      candidate => validateAgentSelection(context.config, { user, slot: candidate, session: { engine: current.engine } },
+        { model: nextModel, reasoningEffort: nextEffort }),
+    );
+    return { targetSlot, nextSlotMode, nextModel, nextEffort };
+  }
+
+  if (wantsSlot && !selectedSlotId.safeParse(input.slot).success) throw new HttpError(400, '槽位 ID 格式无效');
+  const targetSlotId = wantsSlot ? input.slot! : current.slot_id;
+  if (!targetSlotId) throw new HttpError(409, '子智能体尚未绑定授权槽位，请指定 slot');
+  const targetSlot = slotForUser(context.store, targetSlotId, user.id, current.engine);
+  const occupant = context.config.credentials.activeUserId(targetSlot.id);
+  if (occupant && occupant !== user.id) throw new HttpError(409, `槽位 ${targetSlot.id} 正由其他用户使用，请换其他可用槽位`);
+  const pinnedSlotId = context.config.credentials.activeSlotForUser(user.id, current.engine);
+  const pinnedConflict = !!pinnedSlotId && pinnedSlotId !== targetSlot.id
+    && (!preflight || isPinnedByOther(context, user.id, current, pinnedSlotId));
+  if (pinnedConflict) {
+    const label = context.store.get<{ label: string }>('SELECT label FROM account_slots WHERE id=?', pinnedSlotId)?.label ?? pinnedSlotId;
+    throw new HttpError(409, `你的 ${engineProfiles[current.engine].label} 正在槽位 ${label} 上运行，它的会话数据库不能同时在两台槽位虚拟机中使用；请改用槽位 ${label}，或等那里的对话结束后再试`);
+  }
+  // When only this running child holds a VM single-machine slot, probing an uncached catalog on another slot would hit assertOneMachine before stopSession;
+  // cached catalogs still validate in preflight, and full validation runs again inside the lock after stopSession.
+  const deferUncachedProbe = preflight && !!pinnedSlotId && pinnedSlotId !== targetSlot.id && !context.config.catalogs.read(targetSlot.id);
+  if (!deferUncachedProbe) {
+    try {
+      await validateAgentSelection(context.config, { user, slot: targetSlot, session: { engine: current.engine } },
+        { model: nextModel, reasoningEffort: nextEffort });
+    } catch (error) {
+      // When switching slots without explicitly naming model/effort, fall back to the new slot's default if the previous model is unavailable.
+      if (wantsSlot && targetSlot.id !== current.slot_id && input.model === undefined && input.effort === undefined
+        && error instanceof HttpError && error.statusCode === 400) {
+        nextModel = null;
+        nextEffort = null;
+        await validateAgentSelection(context.config, { user, slot: targetSlot, session: { engine: current.engine } },
+          { model: null, reasoningEffort: null });
+      } else {
+        throw error;
+      }
+    }
+  }
+  return { targetSlot, nextSlotMode, nextModel, nextEffort };
 }
 
 /** Safely validates and applies optional slot/model/effort changes on a child before sending a continuation message. */
@@ -161,15 +270,6 @@ export async function reconfigureChild(
   const effortChanging = input.effort !== undefined && input.effort !== child.reasoning_effort;
   if (!slotChanging && !modelChanging && !effortChanging) return { child, notes: [] };
 
-  // Validate basic slot eligibility before interrupting an active child.
-  if (wantsAuto) assertAutomaticSlot(child.engine);
-  if (wantsSlot) {
-    if (!selectedSlotId.safeParse(input.slot).success) throw new HttpError(400, '槽位 ID 格式无效');
-    const target = slotForUser(context.store, input.slot!, user.id, child.engine);
-    const occupant = context.config.credentials.activeUserId(target.id);
-    if (occupant && occupant !== user.id) throw new HttpError(409, `槽位 ${target.id} 正由其他用户使用，请换其他可用槽位`);
-  }
-
   const runtime = context.agents.view(child.id);
   const activelyRunning = tasks.running(child.id).length > 0 || runtime.turnActive || !!runtime.switching || !!runtime.settling
     || runtime.queue.length > 0 || context.agents.hasBackgroundWork(child.id)
@@ -178,6 +278,8 @@ export async function reconfigureChild(
     if (input.mode !== 'interrupt') {
       throw new HttpError(409, `子智能体 ${child.agent_name} 正在运行，切换 slot/model/effort 需等待当前轮次结束，或将 mode 设为 "interrupt" 先中断再切换`);
     }
+    // Run full read-only validation before interrupting so invalid slot/VM/model requests never abort a running turn.
+    await validateReconfigure(context, user, child, input, true);
     await stopSession(context, user.id, child.id);
     const runningIds = tasks.running(child.id).map(task => task.id);
     if (runningIds.length) {
@@ -193,46 +295,7 @@ export async function reconfigureChild(
       || context.config.credentials.isSessionBusy(current.id)) {
       throw new HttpError(409, '子智能体仍在运行或回收状态，请等待结束或先停止后再切换槽位/模型');
     }
-    const nextSlotMode = wantsAuto ? 'auto' as const : wantsSlot ? 'manual' as const : current.slot_mode;
-    let nextModel = input.model !== undefined ? input.model : current.model;
-    let nextEffort = input.effort !== undefined ? input.effort
-      : (input.model !== undefined && input.model !== current.model ? null : current.reasoning_effort);
-
-    let targetSlot: Slot;
-    if (nextSlotMode === 'auto') {
-      assertAutomaticSlot(current.engine);
-      targetSlot = await context.slots.select(
-        { userId: user.id, engine: current.engine, model: nextModel, preferredSlotId: wantsAuto ? undefined : current.slot_id },
-        candidate => validateAgentSelection(context.config, { user, slot: candidate, session: { engine: current.engine } },
-          { model: nextModel, reasoningEffort: nextEffort }),
-      );
-    } else {
-      const targetSlotId = wantsSlot ? input.slot! : current.slot_id;
-      if (!targetSlotId) throw new HttpError(409, '子智能体尚未绑定授权槽位，请指定 slot');
-      targetSlot = slotForUser(context.store, targetSlotId, user.id, current.engine);
-      const occupant = context.config.credentials.activeUserId(targetSlot.id);
-      if (occupant && occupant !== user.id) throw new HttpError(409, `槽位 ${targetSlot.id} 正由其他用户使用，请换其他可用槽位`);
-      const pinnedSlotId = context.config.credentials.activeSlotForUser(user.id, current.engine);
-      if (pinnedSlotId && pinnedSlotId !== targetSlot.id) {
-        const label = context.store.get<{ label: string }>('SELECT label FROM account_slots WHERE id=?', pinnedSlotId)?.label ?? pinnedSlotId;
-        throw new HttpError(409, `你的 ${engineProfiles[current.engine].label} 正在槽位 ${label} 上运行，它的会话数据库不能同时在两台槽位虚拟机中使用；请改用槽位 ${label}，或等那里的对话结束后再试`);
-      }
-      try {
-        await validateAgentSelection(context.config, { user, slot: targetSlot, session: { engine: current.engine } },
-          { model: nextModel, reasoningEffort: nextEffort });
-      } catch (error) {
-        // When switching slots without explicitly naming model/effort, fall back to the new slot's default if the previous model is unavailable.
-        if (wantsSlot && targetSlot.id !== current.slot_id && input.model === undefined && input.effort === undefined
-          && error instanceof HttpError && error.statusCode === 400) {
-          nextModel = null;
-          nextEffort = null;
-          await validateAgentSelection(context.config, { user, slot: targetSlot, session: { engine: current.engine } },
-            { model: null, reasoningEffort: null });
-        } else {
-          throw error;
-        }
-      }
-    }
+    const { targetSlot, nextSlotMode, nextModel, nextEffort } = await validateReconfigure(context, user, current, input, false);
 
     context.store.run(
       "UPDATE sessions SET slot_id=?,slot_mode=?,model=?,reasoning_effort=?,updated_at=datetime('now') WHERE id=?",

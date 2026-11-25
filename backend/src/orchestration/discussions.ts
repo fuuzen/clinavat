@@ -1,10 +1,11 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { projectFor, sessionFor, type Context } from '../context.js';
+import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Session, type User } from '../models.js';
 import { agentEngines } from '../agent/engines.js';
 import type { AgentEngine } from '../agent/engines.js';
 import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
+import { setSessionArchived } from '../routes/sessions.js';
 import { childDirectory, createChild, engineSlots } from './children.js';
 import {
   aggregateRanking, agreed, compactRecordMessage, critiquePrompt, debatePrompt, openingPrompt, parseRanking, recordMessage,
@@ -33,13 +34,16 @@ interface DiscussionRow {
 
 /** How long a round waits for its slowest participant; after that it goes on without that statement. */
 const roundTimeoutMs = 30 * 60_000;
+const activeSessionStatuses = new Set(['running', 'waiting', 'pausing', 'paused']);
+const archiveRetryDelaysMs = [200, 400, 800];
 
 /**
  * Runs discussions among read-only child agents. The Hub assembles every round's prompts, so participants never have
  * to agree on turn-taking among themselves, and the host receives the whole record at the end.
  */
 export class Discussions {
-  private running = new Map<string, AbortController>();
+  private running = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  private finalizing = new Map<string, Promise<void>>();
 
   constructor(private readonly context: Context, private readonly tasks: AgentTasks, private readonly reports: ReportDelivery,
     private readonly agents: ChildAgents, private readonly roster: AgentRoster) {}
@@ -82,12 +86,12 @@ export class Discussions {
     } catch (error) {
       // They never ran, so nothing of theirs is worth keeping.
       for (const participant of participants) store.run('DELETE FROM sessions WHERE id=?', participant.id);
-      this.finish(id, 'error', `参与者未能创建：${error instanceof Error ? error.message : String(error)}`);
+      await this.finalize(user, id, 'error', `参与者未能创建：${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
     const controller = new AbortController();
-    this.running.set(id, controller);
-    void this.run(user, host, id, controller.signal).finally(() => this.running.delete(id));
+    const done = this.run(user, host, id, controller.signal).finally(() => this.running.delete(id));
+    this.running.set(id, { controller, done });
     this.agents.publish(host.id);
     return { id, participants };
   }
@@ -97,19 +101,21 @@ export class Discussions {
     const discussion = this.row(id);
     sessionFor(this.context, discussion.host_session_id, user.id);
     if (discussion.status !== 'running') throw new HttpError(409, '讨论已结束');
-    const controller = this.running.get(id);
-    if (!controller) { this.finish(id, 'stopped', '讨论已停止'); return; }
-    controller.abort();
-    for (const participant of this.participants(id)) {
-      if (this.tasks.running(participant.id).length) await this.agents.stopChild(user, participant).catch(() => undefined);
+    const active = this.running.get(id);
+    if (!active) {
+      await this.finalize(user, id, 'stopped', '讨论已停止');
+      return;
     }
+    active.controller.abort();
+    await active.done;
   }
 
   private async run(user: User, host: Session, id: string, signal: AbortSignal): Promise<void> {
-    const discussion = this.row(id);
-    const participants = this.participants(id);
-    const record: DiscussionRecord = { id, format: discussion.format, topic: discussion.topic, status: 'running', detail: null, rounds: [] };
+    let record: DiscussionRecord | undefined;
     try {
+      const discussion = this.row(id);
+      const participants = this.participants(id);
+      record = { id, format: discussion.format, topic: discussion.topic, status: 'running', detail: null, rounds: [] };
       let current = await this.round(user, host, id, 1, participants.map(participant =>
         [participant, openingPrompt(discussion.format, discussion.topic, participant.discussion_stance)]), signal);
       record.rounds.push({ round: 1, contributions: current });
@@ -139,12 +145,19 @@ export class Discussions {
           if (current.length && current.every(item => item.status === 'completed' && agreed(item.text))) break;
         }
       }
+      if (signal.aborted) throw new Error('讨论已停止');
       record.status = 'completed';
     } catch (error) {
-      record.status = signal.aborted ? 'stopped' : 'error';
-      record.detail = signal.aborted ? '讨论已停止' : error instanceof Error ? error.message : String(error);
+      const status = signal.aborted ? 'stopped' : 'error';
+      const detail = signal.aborted ? '讨论已停止' : error instanceof Error ? error.message : String(error);
+      if (!record) {
+        await this.finalize(user, id, status, detail);
+        return;
+      }
+      record.status = status;
+      record.detail = detail;
     }
-    this.finish(id, record.status as DiscussionRow['status'], record.detail);
+    await this.finalize(user, id, record.status as DiscussionRow['status'], record.detail);
     if (record.status === 'stopped') return;
     const currentHost = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', host.id) ?? host;
     const hostMode = orchestrationModeOf(currentHost);
@@ -189,8 +202,62 @@ export class Discussions {
     return contributions;
   }
 
+  private finalize(user: User, id: string, status: DiscussionRow['status'], detail: string | null): Promise<void> {
+    const active = this.finalizing.get(id);
+    if (active) return active;
+    const task = this.finalizeNow(user, id, status, detail).finally(() => this.finalizing.delete(id));
+    this.finalizing.set(id, task);
+    return task;
+  }
+
+  private async finalizeNow(user: User, id: string, status: DiscussionRow['status'], detail: string | null): Promise<void> {
+    this.finish(id, status, detail);
+    const discussion = this.context.store.get<DiscussionRow>('SELECT * FROM discussions WHERE id=?', id);
+    if (!discussion) return;
+    const participants = this.participants(id);
+    if (participants.length) {
+      await Promise.allSettled(participants.map(participant => this.cleanupParticipant(user, discussion.host_session_id, participant.id)));
+      this.agents.publish(discussion.host_session_id);
+    }
+  }
+
+  /** Idempotently stops any still-running participant and archives its conversation without ever failing the discussion lifecycle. */
+  private async cleanupParticipant(user: User, hostId: string, participantId: string): Promise<void> {
+    try {
+      for (let attempt = 0; attempt <= archiveRetryDelaysMs.length; attempt++) {
+        const current = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', participantId, user.id);
+        if (!current) return;
+        const stillRunning = this.tasks.running(current.id).length > 0
+          || this.context.agents.isBusy(current.id)
+          || activeSessionStatuses.has(current.status);
+        if (stillRunning) {
+          await this.agents.stopChild(user, current).catch(() => undefined);
+        }
+        const pendingIds = this.tasks.pending(hostId, [current.id]).map(task => task.id);
+        if (pendingIds.length) this.tasks.delivered(pendingIds);
+        const fresh = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', participantId, user.id);
+        if (!fresh || fresh.archived_at) return;
+        try {
+          await withResourceLocks(this.context, [`session:${fresh.id}`], () =>
+            setSessionArchived(this.context, user.id, fresh.id, true));
+          return;
+        } catch (error) {
+          // A turn that just finished may still be releasing its session lock or credential lease for a moment.
+          const retryable = error instanceof HttpError && error.statusCode === 409 && attempt < archiveRetryDelaysMs.length;
+          if (!retryable) return;
+          await new Promise<void>(resolve => setTimeout(resolve, archiveRetryDelaysMs[attempt]).unref());
+        }
+      }
+    } catch {
+      // Never allow cleanup errors to disrupt discussion completion or record delivery.
+    }
+  }
+
   private finish(id: string, status: DiscussionRow['status'], detail: string | null): void {
-    this.context.store.run("UPDATE discussions SET status=?,detail=?,finished_at=datetime('now') WHERE id=?", status, detail, id);
+    this.context.store.run(
+      "UPDATE discussions SET status=?,detail=?,finished_at=COALESCE(finished_at,datetime('now')) WHERE id=? AND status='running'",
+      status, detail, id,
+    );
     const discussion = this.context.store.get<DiscussionRow>('SELECT * FROM discussions WHERE id=?', id);
     if (discussion) this.agents.publish(discussion.host_session_id);
   }

@@ -4,9 +4,8 @@ import { projectFor, sessionFor, withResourceLocks, type Context } from '../cont
 import { HttpError } from '../models.js';
 import type { Orchestrator } from '../orchestration/service.js';
 import { toolInputs } from '../orchestration/tools.js';
-import { slotChoice } from '../orchestration/children.js';
+import { createSessionWithSlotFallback } from '../orchestration/children.js';
 import { agentEngines } from '../agent/engines.js';
-import { createSession, sessionInput } from './sessions.js';
 import { profileInput } from '../orchestration/roster.js';
 import { memoryKeySchema } from '../orchestration/memory.js';
 
@@ -60,10 +59,10 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     const { moderator, ...input } = discussionInput.parse(request.body);
     const project = projectFor(context, id, request.user.id);
     if (project.parent_project_id) throw new HttpError(400, '请在主项目中发起讨论');
-    const host = await createSession(context, request.user, sessionInput.parse({
-      projectId: id, engine: moderator.engine, ...slotChoice(context, request.user, moderator.engine, moderator.slotId, moderator.model),
+    const host = await createSessionWithSlotFallback(context, request.user, {
+      projectId: id, engine: moderator.engine,
       title: `讨论：${input.topic.replace(/\s+/g, ' ').slice(0, 40)}`, model: moderator.model, reasoningEffort: moderator.reasoningEffort,
-    }));
+    }, moderator.slotId);
     try {
       const { id: discussionId } = await orchestrator.startDiscussion(request.user, host, input);
       return reply.code(201).send({ sessionId: host.id, discussionId });
