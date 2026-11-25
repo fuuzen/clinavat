@@ -1,6 +1,51 @@
 import type { RunControl } from './run-control.js';
 import { orchestrationModeOf, superReadModeOf } from './orchestration-tools.js';
-import type { AgentContext, AgentRun, QueuedInput, RunTask } from './types.js';
+import type { AgentContext, AgentErrorDetail, AgentRun, QueuedInput, QuotaFailure, RunTask } from './types.js';
+import type { SlotUsage } from '../accounts/usage.js';
+import { relevantWindowsForEngine } from '../accounts/selection.js';
+
+const quotaErrorPattern = /usage[_\s-]*limit|rate[_\s-]*limit|resource[_\s-]*exhausted|too\s+many\s+requests|\b429\b|quota|hit\s+your\s+limit|limit\s+reached|额度|限流|受限|自动切换账号失败/i;
+
+export function isQuotaErrorMessage(message: string): boolean {
+  return quotaErrorPattern.test(message);
+}
+
+/** Builds a structured error payload so observers receive slot, quota and reset details before turn-state(error). */
+export function buildAgentErrorPayload(
+  message: string,
+  context: AgentContext,
+  options: { turnId?: string; quota?: QuotaFailure; attemptedSlotIds?: string[]; usage?: SlotUsage } = {},
+): AgentErrorDetail {
+  const quotaError = !!options.quota || isQuotaErrorMessage(message);
+  let window = options.quota?.window ?? null;
+  let resetsAt = options.quota?.resetsAt ?? null;
+  if (quotaError && (!resetsAt || !window) && options.usage) {
+    const view = options.usage.view(context.slot.id);
+    if (view.state === 'ok') {
+      const now = Date.now();
+      const relevant = relevantWindowsForEngine(context.session.engine, view.windows, context.session.model);
+      const preferred = (window ? relevant.find(item => item.key === window) : undefined)
+        ?? (view.limitingWindow ? relevant.find(item => item.key === view.limitingWindow) : undefined)
+        ?? relevant.find(item => item.limited && item.resetsAt && Date.parse(item.resetsAt) > now)
+        ?? relevant.find(item => item.resetsAt && Date.parse(item.resetsAt) > now);
+      if (preferred) {
+        window ??= preferred.key;
+        if (!resetsAt && preferred.resetsAt && Date.parse(preferred.resetsAt) > now) resetsAt = preferred.resetsAt;
+      }
+    }
+  }
+  return {
+    ...(options.turnId ? { turnId: options.turnId } : {}),
+    message,
+    errorKind: quotaError ? 'quota_exceeded' : 'runtime_error',
+    slotId: context.slot.id,
+    engine: context.session.engine,
+    model: context.session.model ?? null,
+    ...(window ? { window } : {}),
+    ...(resetsAt ? { resetsAt } : {}),
+    ...(options.attemptedSlotIds?.length ? { attemptedSlotIds: options.attemptedSlotIds } : {}),
+  };
+}
 
 export interface RunContinuation { queue: QueuedInput[]; attemptedSlotIds: string[] }
 

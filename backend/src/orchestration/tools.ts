@@ -45,6 +45,12 @@ export const toolInputs = {
     agent: agentReference,
     task: z.string().trim().min(1).max(64).optional()
       .describe('Task board code for this follow-up. Omit to reuse the child’s current assignment.'),
+    slot: z.string().trim().min(1).max(64).optional()
+      .describe('Optional same-engine account slot ID from list_agents (or "auto" where supported) to switch this child onto before continuing.'),
+    model: z.string().trim().min(1).max(200).optional()
+      .describe('Optional model ID supported by the child\'s engine/slot to switch to before continuing.'),
+    effort: z.string().trim().min(1).max(32).optional()
+      .describe('Optional reasoning effort supported by the selected model.'),
     message: z.string().trim().min(1).max(100_000),
     mode: z.enum(['queue', 'steer', 'interrupt']).default('queue')
       .describe('While the child is replying: "queue" sends after its reply, "steer" joins the running reply, "interrupt" stops it and sends now.'),
@@ -134,7 +140,7 @@ const descriptions: Record<ToolName, string> = {
   list_agents: 'Lists the CLIs, account slots (with quota usage, reset countdowns and VM exclusivity hints) and models you can start child agents with, the children of this conversation with their slot/model/state, and the current limits. Pass refreshUsage with specific slot IDs (or ["all"]) to probe fresh quota on demand.',
   inspect: 'Lists a bounded tree of visible project paths or reads a permitted project text file within the current Super Agent reading mode and turn budget.',
   start_agent: 'Starts a child agent in a new conversation of this project and sends it its first task. Returns at once; when the child finishes, its report arrives as a new message unless notify is false.',
-  message_agent: 'Sends another message to a child agent you started; its next report arrives like the first.',
+  message_agent: 'Sends another message to a child agent you started (optionally switching its same-engine slot, model or reasoning effort first); its next report arrives like the first.',
   wait_agents: 'Waits until the given child agents finish their current tasks or the timeout passes, and returns their reports. Use only when you need the results before going on in this turn; those reports then do not arrive as a new message.',
   read_agent: 'Reads a child agent\'s most recent turns: the tasks it received, its final replies and, if asked, its tool calls.',
   stop_agent: 'Stops what a child agent is doing; the conversation stays and can be messaged again.',

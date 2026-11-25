@@ -84,6 +84,16 @@ export class AccountCredentials {
     const lease = this.leases.get(slotId);
     return lease && !lease.parked ? lease.journal.userId : null;
   }
+  /** The slot currently holding an active lease for this user on a VM single-machine engine, if any. */
+  activeSlotForUser(userId: string, engine: AgentEngine): string | null {
+    if (this.execution.kind !== 'vm' || !engineProfiles[engine].sessionFiles.length) return null;
+    for (const lease of this.leases.values()) {
+      if (lease.count > 0 && lease.journal.userId === userId && lease.journal.engine === engine) {
+        return lease.journal.slotId;
+      }
+    }
+    return null;
+  }
   slotLeaseSummary(): { activeSlots: number; parkedSlots: number } {
     let activeSlots = 0;
     let parkedSlots = 0;

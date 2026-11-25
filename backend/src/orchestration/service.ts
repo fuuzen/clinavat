@@ -7,7 +7,7 @@ import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from 
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { setSessionArchived, stopSession } from '../routes/sessions.js';
 import { WorkBoard, type WorkItemRow } from './board.js';
-import { assertChildRoom, assertNewName, childDirectory, createChild, engineSlots, type Placement } from './children.js';
+import { assertChildRoom, assertNewName, childDirectory, createChild, engineSlots, reconfigureChild, type Placement } from './children.js';
 import { ProjectInspector } from './inspect.js';
 import { delegationPrompt, reportBlock } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
@@ -188,8 +188,10 @@ export class Orchestrator implements OrchestrationHost {
         const item = reference ? this.board.resolve(master.id, reference)
           : superAgent && child.agent_access === 'read' ? this.board.reviewTask(master.id, child.agent_name)
             ?? (child.agent_profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined) : undefined;
-        return this.withReview(superAgent, child.agent_access, child.agent_profile, item,
-          () => this.send(user, master, child, input.message, input.mode, true, [], item, input.wave));
+        return this.withReview(superAgent, child.agent_access, child.agent_profile, item, async () => {
+          const { child: active, notes } = await reconfigureChild(this.context, user, this.tasks, child, input);
+          return this.send(user, master, active, input.message, input.mode, true, notes, item, input.wave);
+        });
       }
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);

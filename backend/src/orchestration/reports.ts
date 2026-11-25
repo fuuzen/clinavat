@@ -3,7 +3,9 @@ import type { Context } from '../context.js';
 import type { Session, User } from '../models.js';
 import { orchestrationModeOf } from '../agent/orchestration-tools.js';
 import type { RuntimeView } from '../agent/manager.js';
-import type { AgentEvent } from '../agent/types.js';
+import { isQuotaErrorMessage } from '../agent/resident-run.js';
+import type { AgentErrorDetail, AgentEvent } from '../agent/types.js';
+import { relevantWindowsForEngine } from '../accounts/selection.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { rolloverSession } from '../routes/sessions.js';
 import { reportBlock, type ReportSource } from './instructions.js';
@@ -52,7 +54,7 @@ function formatBatch(sources: ReportSource[], superAgent: boolean): { count: num
  * delay, or to a wait_agents call that is waiting for them.
  */
 export class ReportDelivery {
-  private errors = new Map<string, string>();
+  private errors = new Map<string, AgentErrorDetail>();
   private waiters = new Map<string, Set<() => void>>();
   private awaited = new Map<string, number>();
   /** Tasks that finished while this process ran; earlier ones wait for the user to deliver them. */
@@ -71,9 +73,22 @@ export class ReportDelivery {
   ) {}
 
   observe(event: AgentEvent): void {
-    const payload = event.payload as { status?: string; message?: string; turnId?: string } | undefined;
-    if (event.type === 'error' && payload?.message) this.errors.set(event.sessionId, payload.message);
+    const payload = event.payload as (Partial<AgentErrorDetail> & { status?: string; turnId?: string }) | undefined;
+    if (event.type === 'error' && payload?.message) {
+      this.errors.set(event.sessionId, {
+        message: payload.message,
+        errorKind: payload.errorKind,
+        slotId: payload.slotId,
+        engine: payload.engine,
+        model: payload.model,
+        window: payload.window,
+        resetsAt: payload.resetsAt,
+        attemptedSlotIds: payload.attemptedSlotIds,
+        turnId: payload.turnId,
+      });
+    }
     if (event.type === 'runtime') { this.runtimeChanged(event.sessionId, event.payload as RuntimeView); return; }
+    if (event.type === 'turn-state' && payload?.status === 'running') { this.errors.delete(event.sessionId); return; }
     if (event.type !== 'turn-state' || !finishedStatuses.has(payload?.status ?? '')) return;
     const session = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=?', event.sessionId);
     if (!session) return;
@@ -101,13 +116,52 @@ export class ReportDelivery {
     this.finishChild(child, status, turnId);
   }
 
+  private formatErrorSuffix(child: Session, detail?: AgentErrorDetail): string {
+    const slotId = detail?.slotId ?? child.slot_id ?? undefined;
+    const engine = detail?.engine ?? child.engine;
+    const model = detail?.model ?? child.model ?? 'default';
+    const message = detail?.message?.trim() || '执行异常退出（未返回具体错误详情）';
+    const quotaError = detail?.errorKind === 'quota_exceeded' || (!detail?.errorKind && isQuotaErrorMessage(message));
+    if (!quotaError) {
+      const attrs = [`errorKind="runtime_error"`, ...(slotId ? [`slotId="${slotId}"`] : []), `engine="${engine}"`, `model="${model}"`].join(' ');
+      return `[子智能体出错 ${attrs}]\n原因：${message}`;
+    }
+    const resetsAt = detail?.resetsAt ?? this.lookupQuotaReset(slotId, child);
+    const attrs = [
+      `errorKind="quota_exceeded"`,
+      ...(slotId ? [`slotId="${slotId}"`] : []),
+      `engine="${engine}"`,
+      `model="${model}"`,
+      ...(detail?.window ? [`window="${detail.window}"`] : []),
+      ...(resetsAt ? [`resetsAt="${resetsAt}"`] : []),
+      ...(detail?.attemptedSlotIds?.length ? [`attemptedSlots="${detail.attemptedSlotIds.join(',')}"`] : []),
+    ].join(' ');
+    const advice = '建议：调用 list_agents 查看同引擎其他可用槽位或跨引擎剩余额度/重置时间；若同引擎仍有可用槽位，可直接对原 child 调用 message_agent(slot="...") 切槽续跑；若同引擎全部受限，可改用具备相应模型能力的其他引擎重新派发。';
+    return `[子智能体限额受限 ${attrs}]\n原因：${message}\n${advice}`;
+  }
+
+  private lookupQuotaReset(slotId: string | undefined, child: Session): string | null {
+    if (!slotId) return null;
+    const cooldown = this.context.slots.cooldownUntil(slotId, child.model);
+    if (cooldown) return cooldown;
+    const view = this.context.config.usage?.view(slotId);
+    if (!view || view.state !== 'ok') return null;
+    const now = Date.now();
+    const relevant = relevantWindowsForEngine(child.engine, view.windows, child.model);
+    const active = relevant.find(window => window.limited && window.resetsAt && Date.parse(window.resetsAt) > now)
+      ?? relevant.find(window => window.resetsAt && Date.parse(window.resetsAt) > now);
+    return active?.resetsAt ?? null;
+  }
+
   private finishChild(child: Session, status: 'completed' | 'interrupted' | 'error', turnId?: string, note = ''): void {
     const answer = turnId ? this.context.store.get<{ content: string }>(`SELECT messages.content FROM session_turns
       JOIN messages ON messages.id=session_turns.assistant_message_id WHERE session_turns.id=?`, turnId)?.content : undefined;
     const error = this.errors.get(child.id);
     this.errors.delete(child.id);
-    const suffix = (status === 'error' ? `\n\n[子智能体出错：${error ?? '未知错误'}]` : '') + note;
-    void this.complete(child, status, (answer?.trim() || fallbackReports[status]) + (answer ? suffix : suffix.trimStart()));
+    const parts = [answer?.trim() || fallbackReports[status]];
+    if (status === 'error') parts.push(this.formatErrorSuffix(child, error));
+    if (note.trim()) parts.push(note.trim());
+    void this.complete(child, status, parts.join('\n\n'));
   }
 
   private defer(childId: string, turnId?: string): void {

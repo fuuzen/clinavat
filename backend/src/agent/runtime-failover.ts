@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { ActiveRun, RunContinuation, RuntimeView } from './resident-run.js';
+import { buildAgentErrorPayload, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 import type { AgentCallbacks, AgentContext, QueuedInput, QuotaFailure } from './types.js';
+import type { SlotUsage } from '../accounts/usage.js';
 import { engineProfiles } from './engines.js';
 
 const MAX_SWITCHES = 3;
@@ -32,6 +33,7 @@ interface FailoverHost {
   start(context: AgentContext, prompt: string, continuation: RunContinuation): Promise<void>;
   close(state: ActiveRun): void;
   publish(state: ActiveRun): void;
+  usage?: SlotUsage;
 }
 
 /** Owns the gap between two resident processes, including Stop and unsent input during that gap. */
@@ -186,12 +188,18 @@ export class RuntimeFailovers {
         await state.completion?.catch(cleanupError => { error = cleanupError; });
         if (state.credentialError) error = state.credentialError;
       }
+      // Clear the switching placeholder before turn-state(error) so observers settle the child instead of treating it as still switching.
+      if (this.pending.get(sessionId) === pending) this.pending.delete(sessionId);
       const status = interrupted ? 'interrupted' : 'error';
       await this.callbacks.updateSession(sessionId, { status });
+      if (!interrupted) {
+        const message = `${pending.terminal ? '账号运行状态回收失败' : '自动切换账号失败'}：${error instanceof Error ? error.message : String(error)}`;
+        this.callbacks.event({ type: 'error', sessionId, payload: buildAgentErrorPayload(message, pending.state.context, {
+          turnId: context.session.turn_id, quota: pending.terminal ? undefined : pending.quota,
+          attemptedSlotIds: pending.attemptedSlotIds, usage: this.host.usage,
+        }) });
+      }
       this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId: context.session.turn_id, status } });
-      if (!interrupted) this.callbacks.event({ type: 'error', sessionId, payload: {
-        message: `${pending.terminal ? '账号运行状态回收失败' : '自动切换账号失败'}：${error instanceof Error ? error.message : String(error)}`,
-      } });
       this.callbacks.event({ type: 'done', sessionId, payload: { stopped: interrupted, failed: !interrupted } });
     } finally {
       if (this.pending.get(sessionId) === pending) this.pending.delete(sessionId);

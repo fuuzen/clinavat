@@ -11,8 +11,8 @@ import { awaitApproval, shellHash } from './run-context.js';
 import { RuntimeFailovers } from './runtime-failover.js';
 import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
-import { acceptsResidentContext, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf, settingsKey, summarizeActiveRuns,
-  type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
+import { acceptsResidentContext, buildAgentErrorPayload, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf, settingsKey,
+  summarizeActiveRuns, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
 import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, MessageSource, QueuedInput,
   RunServices, TurnOrigin, TurnOutcome } from './types.js';
@@ -40,6 +40,7 @@ export class AgentManager {
       current: sessionId => this.active.get(sessionId),
       start: (context, prompt, continuation) => this.start(context, prompt, continuation),
       close: state => this.closeRuntime(state), publish: state => this.publish(state),
+      usage: config.usage,
     });
   }
 
@@ -189,8 +190,8 @@ export class AgentManager {
           const status = aborted && !credentialFailure ? 'interrupted' : failure ? 'error' : 'completed';
           if (!aborted) await this.callbacks.flushWorkspace(sessionId).catch(() => undefined);
           await this.callbacks.updateSession(sessionId, { status });
+          if (failure && (!aborted || credentialFailure)) this.emitError(state, message);
           services.event('turn-state', { status });
-          if (failure && (!aborted || credentialFailure)) services.event('error', { message });
           services.event('done', { stopped: aborted, failed: status === 'error' });
         } else if (credentialFailure) {
           await this.callbacks.updateSession(sessionId, { status: 'error' });
@@ -218,6 +219,7 @@ export class AgentManager {
       if (this.active.get(sessionId) === state) this.active.delete(sessionId);
       const status = interrupted && !credentialFailure ? 'interrupted' : 'error';
       await this.callbacks.updateSession(sessionId, { status });
+      if (status === 'error') this.emitError(state, failure instanceof Error ? failure.message : String(failure ?? 'CLI 启动失败'));
       this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId: context.session.turn_id, status } });
       this.publish(state);
       if (interrupted && !credentialFailure) throw new DOMException('会话已停止', 'AbortError');
@@ -354,10 +356,8 @@ export class AgentManager {
     // Everything below is synchronous: the CLI may already be emitting the next turn's events.
     if (outcome.output) void this.callbacks.saveMessage(sessionId, 'assistant', outcome.output);
     void this.callbacks.updateSession(sessionId, { status: switching ? 'running' : state.halted ? 'error' : outcome.status });
+    if (outcome.status === 'error' && !switching) this.emitError(state, outcome.error || 'CLI 运行失败', outcome.quota);
     this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId, status: outcome.status } });
-    if (outcome.status === 'error' && !switching) {
-      this.callbacks.event({ type: 'error', sessionId, payload: { turnId, message: outcome.error || 'CLI 运行失败' } });
-    }
     if (!switching) this.callbacks.event({ type: 'done', sessionId,
       payload: { turnId, stopped: outcome.status === 'interrupted', failed: outcome.status === 'error' } });
     state.flushes = state.flushes.then(() => this.callbacks.flushWorkspace(sessionId)).catch((error: unknown) => {
@@ -487,10 +487,14 @@ export class AgentManager {
     return state;
   }
 
+  private emitError(state: ActiveRun, message: string, quota?: TurnOutcome['quota']): void {
+    this.callbacks.event({ type: 'error', sessionId: state.context.session.id, payload: buildAgentErrorPayload(message, state.context,
+      { turnId: state.context.session.turn_id, quota, attemptedSlotIds: state.attemptedSlotIds, usage: this.config.usage }) });
+  }
+
   async close(): Promise<void> {
     this.closing = true;
     await Promise.allSettled([...this.active.keys()].map(sessionId => this.stop(sessionId)));
     await this.failovers.close();
   }
-
 }

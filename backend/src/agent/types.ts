@@ -162,6 +162,18 @@ export interface AgentPrompt { text: string; images: PromptImage[] }
 /** A background task of the running CLI. */
 export interface RunTask { id: string; description: string; type: string }
 export interface QuotaFailure { window: string; resetsAt: string | null }
+export type AgentErrorKind = 'quota_exceeded' | 'runtime_error';
+export interface AgentErrorDetail {
+  message: string;
+  errorKind?: AgentErrorKind;
+  slotId?: string;
+  engine?: AgentEngine;
+  model?: string | null;
+  window?: string | null;
+  resetsAt?: string | null;
+  attemptedSlotIds?: string[];
+  turnId?: string;
+}
 export interface TurnOutcome { status: 'completed' | 'interrupted' | 'error'; error?: string; output?: string; quota?: QuotaFailure }
 
 /** One resident CLI process; a conversation runs any number of turns in it. */
