@@ -28,7 +28,7 @@ export class Orchestrator implements OrchestrationHost {
   private readonly tasks: AgentTasks;
   private readonly reports: ReportDelivery;
   private readonly discussions: Discussions;
-  private readonly board: WorkBoard;
+  readonly board: WorkBoard;
   readonly memory: ProjectMemory;
   readonly roster: AgentRoster;
 
@@ -184,10 +184,10 @@ export class Orchestrator implements OrchestrationHost {
           assertChildRoom(this.context, this.tasks, user, master, { access: child.agent_access ?? 'write',
             isolation: child.agent_isolation ?? 'shared', directory: child.agent_directory });
         }
-        const reference = input.task ?? this.tasks.latestWorkItem(child.id);
-        const item = reference ? this.board.resolve(master.id, reference)
-          : superAgent && child.agent_access === 'read' ? this.board.reviewTask(master.id, child.agent_name)
-            ?? (child.agent_profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined) : undefined;
+        const item = input.task ? this.board.resolve(master.id, input.task)
+          : this.board.resolveActive(master.id, this.tasks.latestWorkItem(child.id))
+            ?? (superAgent && child.agent_access === 'read' ? this.board.reviewTask(master.id, child.agent_name)
+              ?? (child.agent_profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined) : undefined);
         return this.withReview(superAgent, child.agent_access, child.agent_profile, item, async () => {
           const { child: active, notes } = await reconfigureChild(this.context, user, this.tasks, child, input);
           return this.send(user, master, active, input.message, input.mode, true, notes, item, input.wave);
@@ -252,17 +252,10 @@ export class Orchestrator implements OrchestrationHost {
       }
       case 'task_board': {
         const input = toolInputs.task_board.parse(args);
-        if (input.action === 'list') return json({ tasks: this.board.view(master.id) });
-        if (input.action === 'add') {
-          if (!input.tasks?.length) throw new HttpError(400, 'task_board(action="add") 需要提供 tasks 列表');
-          const created = this.board.add(master.id, input.tasks);
-          this.publish(master.id);
-          return json({ created, tasks: this.board.view(master.id) });
-        }
-        if (!input.updates?.length) throw new HttpError(400, 'task_board(action="update") 需要提供 updates 列表');
-        const updated = this.board.update(master.id, input.updates);
-        this.publish(master.id);
-        return json({ updated, tasks: this.board.view(master.id) });
+        if (input.action === 'archive') this.assertNotInMaintenance('归档看板任务');
+        const { result, changed } = this.board.execute(master.id, input);
+        if (changed) this.publish(master.id);
+        return json(result);
       }
       case 'wait_agents': {
         const input = toolInputs.wait_agents.parse(args);
@@ -436,7 +429,7 @@ export class Orchestrator implements OrchestrationHost {
           ...(worktree && worktree.state !== 'clean' ? { worktree: worktree.state } : {}),
         })),
       archivedChildren: view.agents.filter(child => child.archived).length,
-      tasks: this.board.view(master.id),
+      ...this.board.list(master.id),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };
   }
@@ -457,7 +450,7 @@ export class Orchestrator implements OrchestrationHost {
           pendingReports: pending.filter(task => task.child_session_id === child.id).length,
         };
       }),
-      tasks: this.board.view(masterId),
+      ...this.board.list(masterId),
       memories: master ? this.memory.view(master.project_id) : [],
       discussions: this.discussions.view(masterId),
       pendingReports: pending.length,

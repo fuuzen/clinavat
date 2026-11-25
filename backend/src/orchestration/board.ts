@@ -7,10 +7,12 @@ import type { Context } from '../context.js';
 
 export const workItemStatuses = ['pending', 'in_progress', 'verifying', 'blocked', 'completed', 'cancelled'] as const;
 export type WorkItemStatus = typeof workItemStatuses[number];
+const archivableStatuses = new Set<WorkItemStatus>(['completed', 'cancelled']);
 
 export interface WorkItemRow {
   id: string;
   master_session_id: string;
+  stage: number;
   seq: number;
   title: string;
   description: string | null;
@@ -20,6 +22,7 @@ export interface WorkItemRow {
   depends_on: string | null;
   summary: string | null;
   review_rounds: number;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -27,6 +30,7 @@ export interface WorkItemRow {
 export interface WorkItemView {
   id: string;
   code: string;
+  stage: number;
   title: string;
   description: string | null;
   acceptance: string | null;
@@ -35,7 +39,22 @@ export interface WorkItemView {
   dependsOn: string[];
   summary: string | null;
   reviewRounds: number;
+  archivedAt: string | null;
   updatedAt: string;
+}
+
+export interface WorkBoardListView {
+  tasks: WorkItemView[];
+  archivedCount: number;
+  currentStage: number;
+  archivedTasks?: WorkItemView[];
+}
+
+export interface WorkBoardArchiveResult {
+  archived: WorkItemView[];
+  tasks: WorkItemView[];
+  archivedCount: number;
+  currentStage: number;
 }
 
 export interface NewWorkItem {
@@ -53,6 +72,14 @@ export interface WorkItemPatch {
   assignedAgent?: string | null;
   acceptance?: string | null;
   summary?: string | null;
+}
+
+export interface TaskBoardToolInput {
+  action: 'list' | 'add' | 'update' | 'archive';
+  tasks?: NewWorkItem[];
+  updates?: WorkItemPatch[];
+  codes?: string[];
+  includeArchived?: boolean;
 }
 
 const codeOf = (seq: number) => `T${seq}`;
@@ -74,35 +101,124 @@ export class WorkBoard {
   constructor(private readonly store: Store) {}
 
   rows(masterId: string): WorkItemRow[] {
-    return this.store.all<WorkItemRow>('SELECT * FROM work_items WHERE master_session_id=? ORDER BY seq', masterId);
+    return this.store.all<WorkItemRow>(
+      'SELECT * FROM work_items WHERE master_session_id=? AND archived_at IS NULL ORDER BY seq ASC',
+      masterId,
+    );
+  }
+
+  archivedRows(masterId: string): WorkItemRow[] {
+    return this.store.all<WorkItemRow>(
+      'SELECT * FROM work_items WHERE master_session_id=? AND archived_at IS NOT NULL ORDER BY stage DESC, seq ASC',
+      masterId,
+    );
+  }
+
+  archivedCount(masterId: string): number {
+    return this.store.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM work_items WHERE master_session_id=? AND archived_at IS NOT NULL',
+      masterId,
+    )?.count ?? 0;
+  }
+
+  currentStage(masterId: string): number {
+    const active = this.store.get<{ max: number | null }>(
+      'SELECT MAX(stage) AS max FROM work_items WHERE master_session_id=? AND archived_at IS NULL',
+      masterId,
+    )?.max;
+    if (active !== null && active !== undefined) return active;
+    const maxArchived = this.store.get<{ max: number }>(
+      'SELECT COALESCE(MAX(stage), 0) AS max FROM work_items WHERE master_session_id=?',
+      masterId,
+    )?.max ?? 0;
+    return maxArchived + 1;
   }
 
   view(masterId: string): WorkItemView[] {
     return this.rows(masterId).map(row => this.serialize(row));
   }
 
+  list(masterId: string, options?: { includeArchived?: boolean }): WorkBoardListView {
+    const tasks = this.view(masterId);
+    const archivedCount = this.archivedCount(masterId);
+    const currentStage = this.currentStage(masterId);
+    if (!options?.includeArchived) return { tasks, archivedCount, currentStage };
+    const archivedTasks = this.archivedRows(masterId).map(row => this.serialize(row));
+    return { tasks, archivedCount, currentStage, archivedTasks };
+  }
+
   add(masterId: string, items: NewWorkItem[]): WorkItemView[] {
     const created: WorkItemRow[] = [];
     this.store.transaction(() => {
-      let nextSeq = (this.store.get<{ max: number | null }>(
-        'SELECT MAX(seq) AS max FROM work_items WHERE master_session_id=?', masterId)?.max ?? 0) + 1;
-      for (const item of items) {
-        const id = randomUUID();
-        const seq = nextSeq++;
-        const depends = item.dependsOn?.length
-          ? JSON.stringify(item.dependsOn.map(dep => {
-              const num = normalizeCode(dep);
-              return num !== undefined ? codeOf(num) : dep.trim();
-            }))
-          : null;
-        const status: WorkItemStatus = item.assignedAgent ? 'in_progress' : 'pending';
+      const activeRows = this.rows(masterId);
+      let stage: number;
+      let nextSeq: number;
+      if (activeRows.length > 0) {
+        stage = Math.max(...activeRows.map(row => row.stage));
+        nextSeq = (this.store.get<{ max: number | null }>(
+          'SELECT MAX(seq) AS max FROM work_items WHERE master_session_id=? AND stage=?',
+          masterId, stage,
+        )?.max ?? 0) + 1;
+      } else {
+        const maxArchivedStage = this.store.get<{ max: number }>(
+          'SELECT COALESCE(MAX(stage), 0) AS max FROM work_items WHERE master_session_id=?',
+          masterId,
+        )?.max ?? 0;
+        stage = maxArchivedStage + 1;
+        nextSeq = 1;
+      }
+
+      // Dependencies resolve against active tasks, same-stage archived completed tasks, or peers in this add batch.
+      const allowedBySeq = new Map<number, string>();
+      const allowedById = new Map<string, string>();
+      for (const row of activeRows) {
+        allowedBySeq.set(row.seq, codeOf(row.seq));
+        allowedById.set(row.id, codeOf(row.seq));
+      }
+      const sameStageCompleted = this.store.all<Pick<WorkItemRow, 'id' | 'seq'>>(
+        "SELECT id,seq FROM work_items WHERE master_session_id=? AND stage=? AND archived_at IS NOT NULL AND status='completed'",
+        masterId, stage,
+      );
+      for (const row of sameStageCompleted) {
+        if (!allowedBySeq.has(row.seq)) allowedBySeq.set(row.seq, codeOf(row.seq));
+        allowedById.set(row.id, codeOf(row.seq));
+      }
+
+      const planned = items.map((item, index) => ({ item, id: randomUUID(), seq: nextSeq + index }));
+      const batchSeqs = new Set(planned.map(entry => entry.seq));
+
+      for (const entry of planned) {
+        const resolvedDeps: string[] = [];
+        const seenDeps = new Set<string>();
+        for (const rawDep of entry.item.dependsOn ?? []) {
+          const trimmed = rawDep.trim();
+          const num = normalizeCode(trimmed);
+          let canonical: string | undefined;
+          if (num !== undefined) {
+            if (num === entry.seq) {
+              throw new HttpError(400, `任务 ${codeOf(entry.seq)} 不能依赖自身`);
+            }
+            if (allowedBySeq.has(num) || batchSeqs.has(num)) canonical = codeOf(num);
+          } else {
+            canonical = allowedById.get(trimmed);
+          }
+          if (!canonical) {
+            throw new HttpError(400, `任务 ${codeOf(entry.seq)} 的前置依赖 ${trimmed} 不存在或不可引用（仅支持当前活跃任务或同阶段已归档的已完成任务）`);
+          }
+          if (!seenDeps.has(canonical)) {
+            seenDeps.add(canonical);
+            resolvedDeps.push(canonical);
+          }
+        }
+        const depends = resolvedDeps.length ? JSON.stringify(resolvedDeps) : null;
+        const status: WorkItemStatus = entry.item.assignedAgent ? 'in_progress' : 'pending';
         this.store.run(
-          `INSERT INTO work_items(id,master_session_id,seq,title,description,acceptance,status,assigned_agent,depends_on)
-           VALUES(?,?,?,?,?,?,?,?,?)`,
-          id, masterId, seq, item.title.trim(), item.description?.trim() || null,
-          item.acceptance?.trim() || null, status, item.assignedAgent?.trim() || null, depends,
+          `INSERT INTO work_items(id,master_session_id,stage,seq,title,description,acceptance,status,assigned_agent,depends_on)
+           VALUES(?,?,?,?,?,?,?,?,?,?)`,
+          entry.id, masterId, stage, entry.seq, entry.item.title.trim(), entry.item.description?.trim() || null,
+          entry.item.acceptance?.trim() || null, status, entry.item.assignedAgent?.trim() || null, depends,
         );
-        created.push(this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE id=?', id)!);
+        created.push(this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE id=?', entry.id)!);
       }
     });
     return created.map(row => this.serialize(row));
@@ -113,7 +229,7 @@ export class WorkBoard {
     this.store.transaction(() => {
       for (const patch of patches) {
         const current = this.find(masterId, patch.task);
-        if (!current) throw new HttpError(404, `任务看板中没有任务 ${patch.task}，请先用 task_board(action="list") 查看`);
+        if (!current) throw new HttpError(404, `任务看板中没有活跃任务 ${patch.task}，请先用 task_board(action="list") 查看`);
         const title = patch.title !== undefined ? patch.title.trim() : current.title;
         const status = patch.status ?? current.status;
         const assigned = patch.assignedAgent === undefined ? current.assigned_agent : (patch.assignedAgent?.trim() || null);
@@ -129,10 +245,73 @@ export class WorkBoard {
     return updated.map(row => this.serialize(row));
   }
 
+  archive(masterId: string, codesOrIds?: string[]): WorkBoardArchiveResult {
+    const archivedRows: WorkItemRow[] = [];
+    this.store.transaction(() => {
+      let targets: WorkItemRow[];
+      if (!codesOrIds || codesOrIds.length === 0) {
+        targets = this.store.all<WorkItemRow>(
+          `SELECT * FROM work_items WHERE master_session_id=? AND archived_at IS NULL
+           AND status IN ('completed','cancelled') ORDER BY seq ASC`,
+          masterId,
+        );
+      } else {
+        targets = [];
+        const seenIds = new Set<string>();
+        for (const reference of codesOrIds) {
+          const item = this.find(masterId, reference);
+          if (!item) {
+            throw new HttpError(400, `当前活跃任务看板中未找到任务 ${reference}`);
+          }
+          if (!archivableStatuses.has(item.status)) {
+            throw new HttpError(400, `任务 ${codeOf(item.seq)} 当前状态为 ${item.status}，仅已完成（completed）或已取消（cancelled）的任务可归档`);
+          }
+          if (!seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            targets.push(item);
+          }
+        }
+      }
+      for (const target of targets) {
+        this.store.run(
+          "UPDATE work_items SET archived_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND archived_at IS NULL",
+          target.id,
+        );
+        const refreshed = this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE id=?', target.id);
+        if (refreshed) archivedRows.push(refreshed);
+      }
+    });
+    const listView = this.list(masterId);
+    return {
+      archived: archivedRows.map(row => this.serialize(row)),
+      tasks: listView.tasks,
+      archivedCount: listView.archivedCount,
+      currentStage: listView.currentStage,
+    };
+  }
+
+  execute(masterId: string, input: TaskBoardToolInput): { result: unknown; changed: boolean } {
+    if (input.action === 'list') {
+      return { result: this.list(masterId, { includeArchived: input.includeArchived }), changed: false };
+    }
+    if (input.action === 'add') {
+      if (!input.tasks?.length) throw new HttpError(400, 'task_board(action="add") 需要提供 tasks 列表');
+      const created = this.add(masterId, input.tasks);
+      return { result: { created, ...this.list(masterId) }, changed: true };
+    }
+    if (input.action === 'archive') {
+      const outcome = this.archive(masterId, input.codes);
+      return { result: outcome, changed: outcome.archived.length > 0 };
+    }
+    if (!input.updates?.length) throw new HttpError(400, 'task_board(action="update") 需要提供 updates 列表');
+    const updated = this.update(masterId, input.updates);
+    return { result: { updated, ...this.list(masterId) }, changed: true };
+  }
+
   /** Links a task to a newly started child agent and moves pending tasks to in_progress. */
   assign(masterId: string, reference: string, agentName: string): WorkItemView {
     const current = this.find(masterId, reference);
-    if (!current) throw new HttpError(404, `任务看板中没有任务 ${reference}`);
+    if (!current) throw new HttpError(404, `任务看板中没有活跃任务 ${reference}`);
     const nextStatus: WorkItemStatus = current.status === 'pending' ? 'in_progress' : current.status;
     this.store.run(
       `UPDATE work_items SET assigned_agent=?,status=?,updated_at=datetime('now') WHERE id=?`,
@@ -143,8 +322,12 @@ export class WorkBoard {
 
   resolve(masterId: string, reference: string): WorkItemRow {
     const item = this.find(masterId, reference);
-    if (!item) throw new HttpError(404, `任务看板中没有任务 ${reference}`);
+    if (!item) throw new HttpError(404, `任务看板中没有活跃任务 ${reference}`);
     return item;
+  }
+
+  resolveActive(masterId: string, reference: string | undefined): WorkItemRow | undefined {
+    return reference ? this.find(masterId, reference) : undefined;
   }
 
   reviewTask(masterId: string, agentName: string | null): WorkItemRow | undefined {
@@ -171,7 +354,7 @@ export class WorkBoard {
 
   resetReviews(masterId: string): boolean {
     return this.store.run(`UPDATE work_items SET review_rounds=0,updated_at=datetime('now')
-      WHERE master_session_id=? AND review_rounds>0 AND status NOT IN ('completed','cancelled')`, masterId).changes > 0;
+      WHERE master_session_id=? AND archived_at IS NULL AND review_rounds>0 AND status NOT IN ('completed','cancelled')`, masterId).changes > 0;
   }
 
   private latestUserMessage(masterId: string): number | undefined {
@@ -181,12 +364,19 @@ export class WorkBoard {
 
   briefingLines(masterId: string): string[] {
     const items = this.view(masterId);
-    if (!items.length) return [];
+    const archived = this.archivedCount(masterId);
+    if (!items.length && !archived) return [];
+    if (!items.length) {
+      return [`- Task Board (active 0, archived ${archived})`];
+    }
     const done = items.filter(item => item.status === 'completed').length;
     const active = items.filter(item => !['completed', 'cancelled'].includes(item.status));
     const shown = [...active, ...items.filter(item => item.status === 'completed').slice(-5)].slice(0, 12);
+    const header = archived > 0
+      ? `- Task Board (active ${items.length}, archived ${archived}; ${done}/${items.length} completed):`
+      : `- Task Board (${done}/${items.length} completed):`;
     return [
-      `- Task Board (${done}/${items.length} completed):`,
+      header,
       ...shown.map(item => {
         const who = item.assignedAgent ? `, @${item.assignedAgent}` : '';
         const deps = item.dependsOn.length ? `, depends:${item.dependsOn.join('+')}` : '';
@@ -200,16 +390,23 @@ export class WorkBoard {
   private find(masterId: string, reference: string): WorkItemRow | undefined {
     const seq = normalizeCode(reference);
     if (seq !== undefined) {
-      const bySeq = this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE master_session_id=? AND seq=?', masterId, seq);
+      const bySeq = this.store.get<WorkItemRow>(
+        'SELECT * FROM work_items WHERE master_session_id=? AND archived_at IS NULL AND seq=? ORDER BY stage DESC LIMIT 1',
+        masterId, seq,
+      );
       if (bySeq) return bySeq;
     }
-    return this.store.get<WorkItemRow>('SELECT * FROM work_items WHERE master_session_id=? AND id=?', masterId, reference.trim());
+    return this.store.get<WorkItemRow>(
+      'SELECT * FROM work_items WHERE master_session_id=? AND archived_at IS NULL AND id=?',
+      masterId, reference.trim(),
+    );
   }
 
   private serialize(row: WorkItemRow): WorkItemView {
     return {
       id: row.id,
       code: codeOf(row.seq),
+      stage: row.stage,
       title: row.title,
       description: row.description,
       acceptance: row.acceptance,
@@ -218,6 +415,7 @@ export class WorkBoard {
       dependsOn: row.depends_on ? JSON.parse(row.depends_on) as string[] : [],
       summary: row.summary,
       reviewRounds: row.review_rounds,
+      archivedAt: row.archived_at,
       updatedAt: row.updated_at,
     };
   }

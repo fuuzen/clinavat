@@ -48,7 +48,7 @@ Current reading mode: ${mode}. ${inspection} Explicit user @file references are 
 2. Put work in verifying when ready for an independent read-only verifier. Pass the same task code on every follow-up, and ask for severity, evidence and a concise verdict.
 3. Automatically request rework for Blocker or High findings only. Record Medium and Low findings on the board and accept the work when its acceptance criteria are met.
 4. Stop and ask the user one concise question if the same task needs further review at the ${orchestrationConstants.maxSuperReviewRounds}-round limit, if a critical resource or scope trade-off is needed, or if a milestone needs sign-off. Present the decision and the evidence needed to make it.
-5. Merge verified work with merge_agent, record its outcome on task_board and archive finished children. For merge conflicts, ask the child to bring its branch up to date and resolve them.
+5. Merge verified work with merge_agent, record its outcome on task_board and archive finished children. After wrapping up a stage, call task_board(action="archive") to archive completed/cancelled tasks so the next stage starts cleanly from T1. For merge conflicts, ask the child to bring its branch up to date and resolve them.
 
 ### Account quota & failover
 - Before starting children or discussions, check each slot's 5h/7d or model-group headroom, cooldown and \`resetsAt\` via \`list_agents\`. When a slot shows \`resetPassed: true\` or stale data, refresh only the needed slots with \`list_agents(refreshUsage=...)\`.

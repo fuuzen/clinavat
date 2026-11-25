@@ -1,3 +1,32 @@
+import type { TaskBoardArchiveResponse, TaskBoardResponse } from "./types";
+
+let maintenanceEnabled = false;
+const maintenanceListeners = new Set<(enabled: boolean) => void>();
+
+function syncMaintenanceMode(next: boolean) {
+  if (next === maintenanceEnabled) return;
+  maintenanceEnabled = next;
+  for (const listener of maintenanceListeners) listener(next);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("clinavat:maintenance", (event: Event) => {
+    const detail = (event as CustomEvent<{ enabled?: unknown }>).detail;
+    if (detail && typeof detail.enabled === "boolean") syncMaintenanceMode(detail.enabled);
+  });
+}
+
+export function isMaintenanceMode(): boolean {
+  return maintenanceEnabled;
+}
+
+export function onMaintenanceChange(listener: (enabled: boolean) => void): () => void {
+  maintenanceListeners.add(listener);
+  return () => {
+    maintenanceListeners.delete(listener);
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -34,11 +63,24 @@ export async function api<T>(
       body,
     );
   }
+  if (body && typeof body === "object" && "maintenance" in body) {
+    const state = body.maintenance as { enabled?: unknown } | null | undefined;
+    if (state && typeof state.enabled === "boolean") syncMaintenanceMode(state.enabled);
+  }
   return body as T;
 }
 
 export function post<T>(path: string, body: unknown = {}): Promise<T> {
   return api<T>(path, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fetchSessionTasks(sessionId: string, includeArchived = false): Promise<TaskBoardResponse> {
+  const suffix = includeArchived ? "?includeArchived=1" : "";
+  return api<TaskBoardResponse>(`/sessions/${sessionId}/tasks${suffix}`);
+}
+
+export function archiveSessionTasks(sessionId: string, codes?: string[]): Promise<TaskBoardArchiveResponse> {
+  return post<TaskBoardArchiveResponse>(`/sessions/${sessionId}/tasks/archive`, codes?.length ? { codes } : {});
 }
 
 export function errorText(error: unknown): string {

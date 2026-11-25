@@ -24,6 +24,22 @@ export function sessionAgentRoutes(app: FastifyInstance, context: Context, orche
     sessionFor(context, id, request.user.id);
     return orchestrator.view(id);
   });
+  app.get('/api/sessions/:id/tasks', async request => {
+    const { id } = identifier.parse(request.params);
+    sessionFor(context, id, request.user.id);
+    const query = z.object({ includeArchived: z.enum(['0', '1', 'true', 'false']).optional() }).parse(request.query ?? {});
+    const includeArchived = query.includeArchived === '1' || query.includeArchived === 'true';
+    return orchestrator.board.list(id, { includeArchived });
+  });
+  app.post('/api/sessions/:id/tasks/archive', async request => {
+    const { id } = identifier.parse(request.params);
+    sessionFor(context, id, request.user.id);
+    const { codes } = z.object({ codes: z.array(z.string().trim().min(1).max(64)).max(50).optional() })
+      .strict().parse(request.body ?? {});
+    const result = orchestrator.board.archive(id, codes);
+    if (result.archived.length > 0) orchestrator.publish(id);
+    return result;
+  });
   app.post('/api/sessions/:id/agents/stop', async request => {
     const { id } = identifier.parse(request.params);
     sessionFor(context, id, request.user.id);

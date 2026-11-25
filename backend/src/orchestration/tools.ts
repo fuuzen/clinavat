@@ -83,8 +83,8 @@ export const toolInputs = {
       .describe('Completed child agents (with no unmerged worktree changes) to archive so only active workers stay in view.'),
   }),
   task_board: z.object({
-    action: z.enum(['list', 'add', 'update'])
-      .describe('"list" reads all tasks on the board; "add" appends new tasks; "update" modifies status, assignee, acceptance or summary of existing tasks.'),
+    action: z.enum(['list', 'add', 'update', 'archive'])
+      .describe('"list" reads active tasks on the board (pass includeArchived=true for archived history); "add" appends new tasks; "update" modifies status, assignee, acceptance or summary of active tasks; "archive" archives completed/cancelled active tasks (all of them if codes is omitted, or specific codes/IDs).'),
     tasks: z.array(z.object({
       title: z.string().trim().min(1).max(200),
       description: z.string().trim().max(4000).optional(),
@@ -100,6 +100,10 @@ export const toolInputs = {
       acceptance: z.string().trim().max(2000).nullable().optional(),
       summary: z.string().trim().max(4000).nullable().optional().describe('Concise outcome, verification result, or blocker note.'),
     })).min(1).max(20).optional().describe('Required when action is "update".'),
+    codes: z.array(z.string().trim().min(1).max(64)).max(50).optional()
+      .describe('Optional task codes (such as ["T1", "T2"]) or IDs to archive when action is "archive". Omit to archive all completed/cancelled active tasks.'),
+    includeArchived: z.boolean().optional()
+      .describe('When action is "list", set true to also include archivedTasks across stages.'),
   }),
   start_discussion: z.object({
     topic: z.string().trim().min(1).max(20_000)
@@ -147,7 +151,7 @@ const descriptions: Record<ToolName, string> = {
   merge_agent: 'Merges the branch of a child agent that worked in its own worktree into the project, then removes its worktree and branch. The child must have finished.',
   discard_agent: 'Throws away the branch and worktree of a child agent that worked in its own worktree, or cleans them up after a conflict you resolved yourself.',
   archive_agent: 'Archives finished child agent conversations so completed workers retire cleanly from the active panel; read_agent still reads archived children.',
-  task_board: 'Reads or updates the persistent task board (T1, T2, ...) for decomposing multi-step work, tracking child assignments, verification status and outcomes across turns.',
+  task_board: 'Reads, updates, or archives tasks on the persistent task board (T1, T2, ...) for decomposing multi-step work, tracking child assignments, verification status and outcomes across stages.',
   start_discussion: 'Starts a discussion among read-only child agents, run by the Hub round by round. Returns at once; when it ends, its record arrives as a new message for you to synthesize. Use it for open questions, design choices, trade-offs and cross-vendor reviews.',
   stop_discussion: 'Stops a discussion and its participants; no record arrives.',
   read_discussion: 'Reads full statements of a discussion by ID (or "latest"), optionally filtered by round or participant.',

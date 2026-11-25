@@ -51,6 +51,7 @@ export type WorkItemStatus = "pending" | "in_progress" | "verifying" | "blocked"
 export interface WorkItemView {
   id: string;
   code: string;
+  stage?: number;
   title: string;
   description: string | null;
   acceptance: string | null;
@@ -58,7 +59,21 @@ export interface WorkItemView {
   assignedAgent: string | null;
   dependsOn: string[];
   summary: string | null;
+  reviewRounds?: number;
+  archivedAt?: string | null;
   updatedAt: string;
+}
+export interface TaskBoardResponse {
+  tasks: WorkItemView[];
+  archivedTasks?: WorkItemView[];
+  archivedCount: number;
+  currentStage?: number;
+}
+export interface TaskBoardArchiveResponse {
+  archived: WorkItemView[];
+  tasks: WorkItemView[];
+  archivedCount: number;
+  currentStage?: number;
 }
 export interface MemoryEntryView {
   key: string;
@@ -68,6 +83,8 @@ export interface MemoryEntryView {
 export interface AgentPanelView {
   agents: ChildAgent[];
   tasks: WorkItemView[];
+  archivedCount?: number;
+  currentStage?: number;
   memories: MemoryEntryView[];
   discussions: DiscussionView[];
   /** Finished reports the master has not received yet. */

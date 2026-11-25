@@ -191,13 +191,13 @@ export class Store {
       CREATE INDEX IF NOT EXISTS agent_tasks_master ON agent_tasks(master_session_id,status);
       CREATE TABLE IF NOT EXISTS work_items (
         id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        seq INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance TEXT,
+        stage INTEGER NOT NULL DEFAULT 1, seq INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance TEXT,
         status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','verifying','blocked','completed','cancelled')),
         assigned_agent TEXT, depends_on TEXT, summary TEXT, review_rounds INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(master_session_id,seq)
+        UNIQUE(master_session_id,stage,seq)
       );
-      CREATE INDEX IF NOT EXISTS work_items_master ON work_items(master_session_id,seq);
       CREATE TABLE IF NOT EXISTS project_memories (
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         key TEXT NOT NULL, content TEXT NOT NULL,
@@ -282,6 +282,7 @@ export class Store {
     this.addColumn('sessions', 'agent_profile', 'TEXT');
     this.addColumn('work_items', 'review_rounds', 'INTEGER NOT NULL DEFAULT 0');
     this.addColumn('agent_tasks', 'work_item_id', 'TEXT REFERENCES work_items(id) ON DELETE SET NULL');
+    this.migrateWorkItems();
     this.addColumn('agent_tasks', 'wave', 'TEXT');
     // Where a child agent works, relative to its project's root, and whether that project is a Git worktree of its master's.
     this.addColumn('sessions', 'agent_directory', 'TEXT');
@@ -349,6 +350,53 @@ export class Store {
   private addColumn(table: string, column: string, definition: string) {
     if (this.all<{ name: string }>(`PRAGMA table_info(${table})`).some(item => item.name === column)) return;
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+  /**
+   * Rebuilds legacy work_items tables to add stage + archived_at and widen UNIQUE(master_session_id,stage,seq).
+   * Foreign keys must be disabled outside the transaction so dropping the old table does not null agent_tasks.work_item_id.
+   */
+  private migrateWorkItems() {
+    const columns = this.all<{ name: string }>('PRAGMA table_info(work_items)').map(item => item.name);
+    const hasStage = columns.includes('stage');
+    const hasArchivedAt = columns.includes('archived_at');
+    if (!hasStage || !hasArchivedAt) {
+      const unexpectedObjects = this.all<{ type: string; name: string }>(
+        "SELECT type,name FROM sqlite_schema WHERE type IN ('trigger','view') AND sql LIKE '%work_items%'");
+      if (unexpectedObjects.length) {
+        throw new Error(`work_items 存在未预期的触发器或视图，已中止迁移：${unexpectedObjects.map(o => `${o.type}:${o.name}`).join(', ')}`);
+      }
+      const unexpectedRefs = this.all<{ name: string }>(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('work_items','agent_tasks') AND sql LIKE '%work_items%'");
+      if (unexpectedRefs.length) {
+        throw new Error(`存在除 agent_tasks 外引用 work_items 的表，已中止迁移：${unexpectedRefs.map(t => t.name).join(', ')}`);
+      }
+      this.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        this.transaction(() => this.db.exec(`
+          DROP TABLE IF EXISTS work_items_staged;
+          CREATE TABLE work_items_staged (
+            id TEXT PRIMARY KEY, master_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            stage INTEGER NOT NULL DEFAULT 1, seq INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance TEXT,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','verifying','blocked','completed','cancelled')),
+            assigned_agent TEXT, depends_on TEXT, summary TEXT, review_rounds INTEGER NOT NULL DEFAULT 0,
+            archived_at TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(master_session_id,stage,seq)
+          );
+          INSERT INTO work_items_staged(id,master_session_id,stage,seq,title,description,acceptance,status,assigned_agent,depends_on,summary,review_rounds,archived_at,created_at,updated_at)
+            SELECT id,master_session_id,${hasStage ? 'COALESCE(stage,1)' : '1'},seq,title,description,acceptance,status,assigned_agent,depends_on,summary,COALESCE(review_rounds,0),${hasArchivedAt ? 'archived_at' : 'NULL'},created_at,updated_at
+            FROM work_items;
+          DROP TABLE work_items;
+          ALTER TABLE work_items_staged RENAME TO work_items;
+        `));
+      } finally {
+        this.db.exec('PRAGMA foreign_keys = ON');
+      }
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS work_items_master ON work_items(master_session_id,stage,seq);
+      CREATE INDEX IF NOT EXISTS idx_work_items_master_active ON work_items(master_session_id,archived_at,stage,seq);
+    `);
   }
   /**
    * Lets the tables created before an engine existed record it. A wider CHECK keeps every stored row valid, so the

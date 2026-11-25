@@ -1,0 +1,79 @@
+.task-archive-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  white-space: nowrap;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.task-archive-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--hover);
+}
+.task-archive-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.task-archived-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed color-mix(in srgb, var(--line) 80%, transparent);
+}
+.task-archived-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  transition: background 0.14s, color 0.14s;
+}
+.task-archived-toggle:hover {
+  color: var(--text-secondary);
+  background: var(--hover);
+}
+.task-archived-chevron {
+  transition: transform 0.15s ease;
+}
+.task-archived-toggle.expanded .task-archived-chevron {
+  transform: rotate(90deg);
+}
+.task-archived-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.task-archived-retry {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.task-archived-retry:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.task-row-archived {
+  opacity: 0.76;
+}
+.task-code-staged {
+  color: var(--muted);
+}

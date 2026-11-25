@@ -37,12 +37,14 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
   }, [session?.id]);
 
   const tasks = view?.tasks ?? [];
+  const archivedTaskCount = view?.archivedCount ?? 0;
+  const hasTasks = tasks.length > 0 || archivedTaskCount > 0;
   const discussions = view?.discussions ?? [];
   const agents = view?.agents ?? [];
   const activeAgents = agents.filter((agent) => !agent.archived);
   const archivedAgents = agents.filter((agent) => agent.archived);
 
-  if (!enabled || !view || (!agents.length && !tasks.length && !discussions.length && !view.pendingReports)) return null;
+  if (!enabled || !view || (!agents.length && !hasTasks && !discussions.length && !view.pendingReports)) return null;
 
   const waiting = (id: string) => approvals.filter((approval) => approval.session_id === id && ["pending", "PENDING"].includes(approval.status)).length;
   const totalApprovals = activeAgents.reduce((sum, agent) => sum + waiting(agent.sessionId), 0);
@@ -57,7 +59,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
   const runningDiscussions = discussions.filter((item) => item.status === "running").length;
 
   const currentTab: DockTab | null =
-    (activeTab === "tasks" && tasks.length > 0) ||
+    (activeTab === "tasks" && hasTasks) ||
     (activeTab === "agents" && agents.length > 0) ||
     (activeTab === "discussions" && discussions.length > 0)
       ? activeTab : null;
@@ -80,7 +82,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
     <div className={`agent-panel agent-dock${currentTab ? " is-expanded" : ""}`} aria-label="编排协作面板">
       <div className="agent-dock-bar">
         <div className="agent-dock-tabs" role="tablist" aria-label="编排模块">
-          {tasks.length > 0 && (
+          {hasTasks && (
             <button
               type="button"
               role="tab"
@@ -89,7 +91,7 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
               onClick={() => toggle("tasks")}
             >
               <ListTodo size={13} aria-hidden="true" />
-              <span>任务 {completedTasks}/{tasks.length}</span>
+              <span>{tasks.length > 0 ? `任务 ${completedTasks}/${tasks.length}` : `任务 · 已归档 ${archivedTaskCount}`}</span>
               {verifyingTasks > 0 && <span className="agent-dock-badge badge-info">待验收 {verifyingTasks}</span>}
               {blockedTasks > 0 && <span className="agent-dock-badge badge-danger">受阻 {blockedTasks}</span>}
             </button>
@@ -166,7 +168,15 @@ export default function AgentPanel({ session, sessions, approvals, connected, on
       {currentTab && (
         <div className="agent-dock-tray" role="tabpanel">
           {currentTab === "tasks" && (
-            <TaskBoardCard tasks={tasks} agents={agents} sessions={sessions} onOpen={onOpen} />
+            <TaskBoardCard
+              sessionId={session?.id}
+              tasks={tasks}
+              archivedCount={archivedTaskCount}
+              agents={agents}
+              sessions={sessions}
+              onOpen={onOpen}
+              onNotice={onNotice}
+            />
           )}
           {currentTab === "agents" && (
             <AgentListPanel
