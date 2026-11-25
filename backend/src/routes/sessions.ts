@@ -11,6 +11,7 @@ import { availableSlots, serializeUserSlot, slotForUser } from '../accounts/acce
 import { sessionMessageRoutes, selectedSlotId, selectionFields } from './session-messages.js';
 import { sessionGoalRoutes } from './session-goals.js';
 import { sessionQuestionRoutes } from './session-questions.js';
+import { archivedSessionRoutes } from './archived-sessions.js';
 import { agentModes, questionModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { questionTimeout } from '../question-defaults.js';
 import { agentEngines, engineProfiles } from '../agent/engines.js';
@@ -182,8 +183,12 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
       projects: store.all(`SELECT projects.* FROM projects JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
         WHERE projects.user_id=? AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY projects.created_at`, request.user.id, request.user.role),
       sessions: store.all(`SELECT sessions.* FROM sessions JOIN projects ON projects.id=sessions.project_id
-        JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=?
+        JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=? AND sessions.archived_at IS NULL
         AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
+      archivedSessionsCount: store.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sessions
+        JOIN projects ON projects.id=sessions.project_id JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
+        WHERE sessions.user_id=? AND sessions.archived_at IS NOT NULL
+        AND (dev_hosts.kind='ssh' OR ?='admin')`, request.user.id, request.user.role)?.count ?? 0,
       questionDefaults: questionDefaults.forUser(request.user.id),
       agentDefaults: context.agentDefaults.user(request.user.id),
       agentProfiles: store.all('SELECT * FROM agent_profiles WHERE user_id=? ORDER BY name', request.user.id),
@@ -196,6 +201,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
   });
   app.post('/api/sessions', async (request, reply) =>
     reply.code(201).send(await createSession(context, request.user, sessionInput.parse(request.body))));
+  archivedSessionRoutes(app, context);
   app.post('/api/sessions/:id/fork', async (request, reply) => {
     const { id } = identifier.parse(request.params);
     const { turnId } = z.object({ turnId: z.uuid() }).strict().parse(request.body);
