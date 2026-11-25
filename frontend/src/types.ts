@@ -230,6 +230,25 @@ export interface Turn {
   native_ref?: string | null;
 }
 
+export interface MaintenanceState {
+  enabled: boolean;
+  message: string | null;
+  enabledBy: string | null;
+  enabledByUsername: string | null;
+  enabledAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface MaintenanceActivity {
+  activeSessions: number;
+  activeTurns: number;
+  pendingApprovals: number;
+  idleResidentSessions: number;
+  activeSlots: number;
+  parkedSlots: number;
+  readyToPublish: boolean;
+}
+
 export interface Overview {
   user: User;
   slots: Slot[];
@@ -240,6 +259,7 @@ export interface Overview {
   agentDefaults: AgentPreferences;
   deferredQuestions: { session_id: string; count: number }[];
   agentProfiles: AgentProfile[];
+  maintenance?: MaintenanceState;
 }
 
 export interface PoolEvent {

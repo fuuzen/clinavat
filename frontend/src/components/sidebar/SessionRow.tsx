@@ -7,6 +7,7 @@ interface Props {
   session: Session;
   selected: boolean;
   waiting: boolean;
+  readOnly?: boolean;
   menuOpen: boolean;
   onToggleMenu: () => void;
   onSelect: () => void;
@@ -17,7 +18,8 @@ interface Props {
   accessory?: ReactNode;
 }
 
-export default function SessionRow({ session, selected, waiting, menuOpen, onToggleMenu, onSelect, onRename, onArchive, onDelete, accessory }: Props) {
+export default function SessionRow({ session, selected, waiting, readOnly, menuOpen, onToggleMenu, onSelect, onRename, onArchive, onDelete, accessory }: Props) {
+  const readOnlyTip = "系统维护中，暂不支持修改对话";
   return (
     <div className={`session-row ${selected ? "selected" : ""}`}>
       <button className="tree-row" onClick={onSelect}>
@@ -42,12 +44,12 @@ export default function SessionRow({ session, selected, waiting, menuOpen, onTog
         </button>
         {menuOpen && (
           <div className="context-menu">
-            <button onClick={onRename}>重命名</button>
-            <button disabled={isActive(session.status)} title={isActive(session.status) ? "请先停止对话再归档" : undefined} onClick={onArchive}>
+            <button disabled={readOnly} title={readOnly ? readOnlyTip : undefined} onClick={onRename}>重命名</button>
+            <button disabled={readOnly || isActive(session.status)} title={readOnly ? readOnlyTip : isActive(session.status) ? "请先停止对话再归档" : undefined} onClick={onArchive}>
               <Archive size={14} />
               归档对话
             </button>
-            <button className="danger-text" onClick={onDelete}>
+            <button className="danger-text" disabled={readOnly} title={readOnly ? readOnlyTip : undefined} onClick={onDelete}>
               <Trash2 size={14} />
               删除对话
             </button>

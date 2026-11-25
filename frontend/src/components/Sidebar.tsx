@@ -64,6 +64,8 @@ export default function Sidebar(props: Props) {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState("");
+  const maintenanceEnabled = !!overview.maintenance?.enabled;
+  const maintenanceTip = "系统维护中，当前为只读模式，暂不支持新建对话或变更资源";
   const waiting = new Set(overview.deferredQuestions.map((item) => item.session_id));
   const activeSessions = overview.sessions.filter((session) => !session.archived_at);
   const worktreeParents = new Map(overview.projects.flatMap((project) => project.parent_project_id ? [[project.id, project.parent_project_id] as const] : []));
@@ -108,6 +110,8 @@ export default function Sidebar(props: Props) {
           <button
             className="icon-button"
             onClick={props.onNewHost}
+            disabled={maintenanceEnabled}
+            title={maintenanceEnabled ? maintenanceTip : "添加开发机"}
             aria-label="添加开发机"
           >
             <Plus size={15} />
@@ -123,7 +127,12 @@ export default function Sidebar(props: Props) {
                 <br />
                 把熟悉的环境带到工作台。
               </span>
-              <button className="text-button" onClick={props.onNewHost}>
+              <button
+                className="text-button"
+                onClick={props.onNewHost}
+                disabled={maintenanceEnabled}
+                title={maintenanceEnabled ? maintenanceTip : undefined}
+              >
                 添加开发机 <Plus size={13} />
               </button>
             </div>
@@ -181,6 +190,8 @@ export default function Sidebar(props: Props) {
                     {menu === host.id && (
                       <div className="context-menu">
                         {host.kind !== "local" && <><button
+                          disabled={maintenanceEnabled}
+                          title={maintenanceEnabled ? maintenanceTip : undefined}
                           onClick={() => {
                             props.onEditHost(host);
                             setMenu("");
@@ -190,6 +201,8 @@ export default function Sidebar(props: Props) {
                           编辑连接
                         </button>
                         <button
+                          disabled={maintenanceEnabled}
+                          title={maintenanceEnabled ? maintenanceTip : undefined}
                           onClick={() => {
                             props.onConnect(host);
                             setMenu("");
@@ -199,6 +212,8 @@ export default function Sidebar(props: Props) {
                           测试连接
                         </button></>}
                         <button
+                          disabled={maintenanceEnabled}
+                          title={maintenanceEnabled ? maintenanceTip : undefined}
                           onClick={() => {
                             props.onNewProject(host);
                             setMenu("");
@@ -209,6 +224,8 @@ export default function Sidebar(props: Props) {
                         </button>
                         {host.kind !== "local" && <button
                           className="danger-text"
+                          disabled={maintenanceEnabled}
+                          title={maintenanceEnabled ? maintenanceTip : undefined}
                           onClick={() => {
                             props.onDelete("host", host.id, host.name);
                             setMenu("");
@@ -242,6 +259,7 @@ export default function Sidebar(props: Props) {
                           >
                             <button
                               className="tree-row"
+                              title={maintenanceEnabled ? "维护中仅可浏览项目与历史对话，暂不支持发起新对话" : undefined}
                               onClick={() => {
                                 props.onSelect(project);
                                 if (collapsed.has(project.id))
@@ -276,7 +294,11 @@ export default function Sidebar(props: Props) {
                               </button>
                               {menu === project.id && (
                                 <div className="context-menu">
-                                  <button onClick={() => { props.onDiscuss(project); setMenu(""); }}>
+                                  <button
+                                    disabled={maintenanceEnabled}
+                                    title={maintenanceEnabled ? maintenanceTip : undefined}
+                                    onClick={() => { props.onDiscuss(project); setMenu(""); }}
+                                  >
                                     <MessagesSquare size={14} />
                                     发起讨论
                                   </button>
@@ -286,6 +308,8 @@ export default function Sidebar(props: Props) {
                                   </button>
                                   <button
                                     className="danger-text"
+                                    disabled={maintenanceEnabled}
+                                    title={maintenanceEnabled ? maintenanceTip : undefined}
                                     onClick={() => {
                                       props.onDelete(
                                         "project",
@@ -322,6 +346,7 @@ export default function Sidebar(props: Props) {
                                     session={session}
                                     selected={selectedSession?.id === session.id}
                                     waiting={waiting.has(session.id) || (session.id === entry.session.id && entry.children.some((child) => waiting.has(child.id)))}
+                                    readOnly={maintenanceEnabled}
                                     menuOpen={menu === session.id}
                                     onToggleMenu={() => setMenu(menu === session.id ? "" : session.id)}
                                     onSelect={() => {
@@ -350,6 +375,8 @@ export default function Sidebar(props: Props) {
                     {projects.length === 0 && (
                       <button
                         className="tree-row add-project"
+                        disabled={maintenanceEnabled}
+                        title={maintenanceEnabled ? maintenanceTip : undefined}
                         onClick={() => props.onNewProject(host)}
                       >
                         <Plus size={13} />
@@ -364,6 +391,7 @@ export default function Sidebar(props: Props) {
           <ArchivedSessions
             overview={overview}
             selectedSessionId={selectedSession?.id}
+            readOnly={maintenanceEnabled}
             matches={matches}
             menu={menu}
             onMenu={setMenu}

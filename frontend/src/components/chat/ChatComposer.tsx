@@ -54,6 +54,8 @@ interface Props {
   onToggleMode?: () => void;
   active: boolean;
   available: boolean;
+  /** Maintenance or read-only mode: disables sending/attaching while keeping stop/pause controls. */
+  readOnly?: boolean;
   /** A submitted message is still on its way; keep the draft as sent. */
   locked: boolean;
   sendDisabled: boolean;
@@ -79,13 +81,13 @@ export default function ChatComposer(props: Props) {
   const restoreRef = useRef<HTMLButtonElement>(null);
   const focusAfterExpand = useRef<"input" | "minimize" | null>(null);
   const hasDraft = !!props.draft.trim() || props.images.length > 0;
-  const canAttach = props.available && !props.locked;
+  const canAttach = props.available && !props.locked && !props.readOnly;
   const resumable = props.runStatus === "paused" || props.runStatus === "pausing";
-  const pauseLabel = resumable ? "继续任务" : "暂停任务";
-  const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus;
+  const pauseLabel = resumable ? (props.readOnly ? "系统维护中，暂不支持恢复任务" : "继续任务") : "暂停任务";
+  const controlDisabled = props.controlPending || props.stopPending || !props.connected || !props.runStatus || (!!props.readOnly && resumable);
   const completion = useComposerCompletion({
     inputRef, draft: props.draft, onDraftChange: props.onDraftChange, projectId: props.projectId,
-    commands: props.commands ?? noCommands, enabled: !minimized && props.available && !props.locked,
+    commands: props.commands ?? noCommands, enabled: !minimized && props.available && !props.locked && !props.readOnly,
   });
 
   function focusInput() {
@@ -152,7 +154,7 @@ export default function ChatComposer(props: Props) {
       props.onToggleMode();
       return;
     }
-    if (props.locked) {
+    if (props.locked || props.readOnly) {
       if (event.key === "Enter" && !event.shiftKey) event.preventDefault();
       return;
     }
@@ -271,8 +273,8 @@ export default function ChatComposer(props: Props) {
                 event.preventDefault();
                 if (canAttach) props.onAddImages(files);
               }}
-              placeholder={!props.available ? "等待可用账号…" : props.active ? "补充说明，或为下一轮排队…" : "描述任务… 输入 / 查看指令，@ 引用文件"}
-              disabled={!props.available}
+              placeholder={props.readOnly ? "系统维护中，当前为只读模式，暂不支持发送消息" : !props.available ? "等待可用账号…" : props.active ? "补充说明，或为下一轮排队…" : "描述任务… 输入 / 查看指令，@ 引用文件"}
+              disabled={!props.available || props.readOnly}
               readOnly={props.locked}
               aria-busy={props.locked || undefined}
               rows={1}
@@ -297,8 +299,8 @@ export default function ChatComposer(props: Props) {
                 {props.children}
               </div>
               <div className="composer-toolbar-actions">
-                {props.active ? <>{hasDraft && runningSend}{pauseButton}{stopButton}</> : (
-                  <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title="发送消息" aria-label="发送消息">
+                {props.active ? <>{hasDraft && !props.readOnly && runningSend}{pauseButton}{stopButton}</> : (
+                  <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title={props.readOnly ? "系统维护中，暂不支持发送消息" : "发送消息"} aria-label="发送消息">
                     <span className="send-button-symbol"><ArrowUp size={17} aria-hidden="true" /></span>
                   </button>
                 )}

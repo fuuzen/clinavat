@@ -5,6 +5,7 @@ import type { Overview, Project, Session } from "../../types";
 interface Props {
   overview: Overview;
   selectedSessionId?: string;
+  readOnly?: boolean;
   matches: (value: string) => boolean;
   menu: string;
   onMenu: (id: string) => void;
@@ -14,7 +15,8 @@ interface Props {
 }
 
 /** Archived conversations stay readable here, most recently archived first, until restored or deleted. */
-export default function ArchivedSessions({ overview, selectedSessionId, matches, menu, onMenu, onSelect, onRestore, onDelete }: Props) {
+export default function ArchivedSessions({ overview, selectedSessionId, readOnly, matches, menu, onMenu, onSelect, onRestore, onDelete }: Props) {
+  const readOnlyTip = "系统维护中，暂不支持修改对话";
   const [open, setOpen] = useState(false);
   const projects = new Map(overview.projects.map((project) => [project.id, project]));
   const archived = overview.sessions
@@ -46,11 +48,11 @@ export default function ArchivedSessions({ overview, selectedSessionId, matches,
               </button>
               {menu === menuKey && (
                 <div className="context-menu">
-                  <button onClick={() => { onRestore(session); onMenu(""); }}>
+                  <button disabled={readOnly} title={readOnly ? readOnlyTip : undefined} onClick={() => { onRestore(session); onMenu(""); }}>
                     <ArchiveRestore size={14} />
                     恢复对话
                   </button>
-                  <button className="danger-text" onClick={() => { onDelete(session); onMenu(""); }}>
+                  <button className="danger-text" disabled={readOnly} title={readOnly ? readOnlyTip : undefined} onClick={() => { onDelete(session); onMenu(""); }}>
                     <Trash2 size={14} />
                     删除对话
                   </button>

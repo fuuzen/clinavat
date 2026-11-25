@@ -5,6 +5,7 @@ import { loadSiteSettings, useSiteSettings } from "./site/store";
 import type {
   Approval,
   DevHost,
+  MaintenanceState,
   Overview,
   Project,
   Session,
@@ -103,6 +104,9 @@ export default function App() {
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
+  const receiveMaintenance = useCallback((maintenance: MaintenanceState) => {
+    setOverview((current) => (current ? { ...current, maintenance } : current));
+  }, []);
   const syncProgress = useSyncProgress(overview?.projects, notify, refresh);
   const changePermission = useSessionPermissions(setOverview, notify);
   const changeSlot = useSessionSlot(setOverview, notify);
@@ -179,6 +183,7 @@ export default function App() {
     refreshApprovals,
     reloadMessages,
     receiveTurn,
+    receiveMaintenance,
     notify,
     setStreamConnected,
     setStreaming,

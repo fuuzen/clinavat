@@ -10,12 +10,12 @@ import {
   Server,
   ShieldCheck,
   Terminal,
-  Wrench,
 } from "lucide-react";
 import type { AdminHealth } from "./types";
 import MobileCardDetails from "./MobileCardDetails";
 import HostCommands from "./HostCommands";
 import MachineResources from "./MachineResources";
+import MaintenanceControl from "./MaintenanceControl";
 import "../../styles/admin-host.css";
 
 interface Props {
@@ -131,11 +131,7 @@ export default function HostManagement({ health, loading, error, onRefresh }: Pr
         <div className="admin-host-monitor-note"><Info size={15} /><p>服务与 CLI 可用性来自实时检测；版本详情和资源指标将在接入宿主机监控后展示。</p></div>
       </section>
 
-      <section className="admin-card admin-host-maintenance" aria-labelledby="admin-host-maintenance-heading">
-        <span className="admin-host-icon"><Wrench size={19} /></span>
-        <div><h3 id="admin-host-maintenance-heading">维护操作</h3><p>维护能力待接入，后续可在这里检查更新、整理存储和重启服务。</p></div>
-        <button className="button button-secondary button-small" disabled>检查更新</button>
-      </section>
+      <MaintenanceControl />
     </div>
   );
 }

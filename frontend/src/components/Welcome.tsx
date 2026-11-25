@@ -23,6 +23,8 @@ export default function Welcome({
 }: WelcomeProps) {
   // Child agents' worktrees belong to their master project.
   const projects = overview.projects.filter((project) => !project.parent_project_id);
+  const maintenanceEnabled = !!overview.maintenance?.enabled;
+  const maintenanceTip = "系统维护中，当前为只读模式，暂不支持新建对话、项目或开发机";
   return (
     <div className="welcome">
       <div className="welcome-symbol">
@@ -42,6 +44,8 @@ export default function Welcome({
       <div className="welcome-actions">
         <button
           className="button button-primary"
+          disabled={maintenanceEnabled}
+          title={maintenanceEnabled ? maintenanceTip : undefined}
           onClick={overview.hosts.length ? onNewProject : onNewHost}
         >
           <Plus size={16} />
@@ -49,6 +53,11 @@ export default function Welcome({
           <ArrowUpRight size={15} />
         </button>
       </div>
+      {maintenanceEnabled && (
+        <p className="welcome-maintenance-hint">
+          系统维护中，暂不支持新建对话或项目；可通过下方项目列表或侧栏继续浏览历史对话。
+        </p>
+      )}
       <div className="welcome-features">
         <div>
           <span>

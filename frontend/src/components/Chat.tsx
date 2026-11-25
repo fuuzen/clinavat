@@ -11,6 +11,7 @@ import {
   Terminal,
 } from "lucide-react";
 import Welcome from "./Welcome";
+import MaintenanceBanner from "./MaintenanceBanner";
 import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
@@ -98,6 +99,7 @@ interface Props {
 
 export default function Chat(props: Props) {
   const { project, session, overview } = props;
+  const maintenance = !!overview.maintenance?.enabled;
   const { draft, setDraft, draftKey, snapshot, storageError } = useComposerDraft(overview.user.id, project?.id, session?.id);
   const draftVersion = useRef({ key: "", draft: "", revision: 0 });
   if (draftVersion.current.key !== (draftKey ?? "") || draftVersion.current.draft !== draft)
@@ -148,7 +150,7 @@ export default function Chat(props: Props) {
   const commands = useChatCommands({
     engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,
-    onNew: () => { if (project) props.onSelectProject(project); },
+    onNew: () => { if (project && !maintenance) props.onSelectProject(project); },
     onStop: props.onStop, onDiff: props.onDiff, onNotice: props.onNotice,
     onPause: props.onPause, onResume: props.onResume, onRollover: rollover, runStatus,
     onGoalCommand: async arguments_ => {
@@ -217,7 +219,7 @@ export default function Chat(props: Props) {
     setAttachments((current) => ({ ...current, [key]: (current[key] ?? []).filter((image) => !ids.includes(image.id)) }));
   }
   async function send() {
-    if ((!draft.trim() && !images.length) || submittingRef.current) return;
+    if (maintenance || (!draft.trim() && !images.length) || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     try {
@@ -275,7 +277,11 @@ export default function Chat(props: Props) {
       if (request === permissionRequestRef.current) setPermissionSaving(false);
     }
   }
-  const composerWarning = !slotAvailable
+  const composerWarning = maintenance
+    ? active
+      ? "系统维护中，当前为只读模式：暂不支持发送消息，仍可停止当前任务或处理待确认审批与提问。"
+      : "系统维护中，当前为只读模式，暂不支持发送消息或发起新对话。"
+    : !slotAvailable
     ? accountSelection.slotMode === "auto"
       ? "当前没有可用的 Claude 账号，请等待账号释放或联系管理员。"
       : occupied
@@ -310,6 +316,7 @@ export default function Chat(props: Props) {
         onInspector={props.onInspector}
         onProjectRefresh={props.onProjectRefresh}
       />
+      {overview.maintenance?.enabled && <MaintenanceBanner maintenance={overview.maintenance} />}
       <div className="chat-timeline">
       <div
         className="chat-scroll"
@@ -354,6 +361,8 @@ export default function Chat(props: Props) {
                   {suggestions.map(({ icon: Icon, title, text }) => (
                     <button
                       key={title}
+                      disabled={maintenance}
+                      title={maintenance ? "系统维护中，暂不支持发起新对话" : undefined}
                       onClick={() => {
                         setDraft(text);
                         composerRef.current?.focus();
@@ -383,7 +392,7 @@ export default function Chat(props: Props) {
                   tools={props.tools}
                   username={overview.user.username}
                   engine={session?.engine}
-                  onFork={session ? props.onFork : undefined}
+                  onFork={session && !maintenance ? props.onFork : undefined}
                 />
               </>
             )}
@@ -412,14 +421,14 @@ export default function Chat(props: Props) {
       {project && !props.loading && <ConversationOutline key={`${project.id}:${session?.id || "new"}`} messages={props.messages} turns={props.turns} scrollRef={scrollRef} onNavigate={() => setStickToBottom(false)} />}
       </div>
       {project && commands.help}
-      {project && session?.archived_at && <ArchivedNotice session={session} onRestore={props.onRestore} />}
+      {project && session?.archived_at && <ArchivedNotice session={session} onRestore={props.onRestore} readOnly={maintenance} />}
       {project && !session?.archived_at && (
         <ChatComposer
           ref={composerRef}
           projectId={project.id}
           commands={commands.commands}
           onToggleMode={() => {
-            if (!active && !permissionSaving && !slotSaving && !behaviorSaving)
+            if (!maintenance && !active && !permissionSaving && !slotSaving && !behaviorSaving)
               void changeBehavior({ ...behavior, agentMode: behavior.agentMode === "plan" ? "normal" : "plan" });
           }}
           draft={draft}
@@ -445,8 +454,9 @@ export default function Chat(props: Props) {
           connected={props.streamConnected}
           active={active}
           available={slotAvailable}
+          readOnly={maintenance}
           locked={submitting || props.sending}
-          sendDisabled={(!draft.trim() && !images.length) || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
+          sendDisabled={maintenance || (!draft.trim() && !images.length) || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
           warning={[composerWarning, storageError].filter(Boolean).join(" ") || undefined}
           showScrollToBottom={!stickToBottom}
           onScrollToBottom={() => setStickToBottom(true)}
@@ -456,7 +466,7 @@ export default function Chat(props: Props) {
             slotId={slotId}
             selection={accountSelection}
             engine={session?.engine}
-            disabled={active || permissionSaving || behaviorSaving}
+            disabled={maintenance || active || permissionSaving || behaviorSaving}
             saving={slotSaving}
             onChange={(value) => void changeSlot(value)}
           />
@@ -465,12 +475,12 @@ export default function Chat(props: Props) {
             engine={currentEngine}
             session={session}
             permissionMode={permissionMode}
-            permissionDisabled={active || slotSaving || behaviorSaving || !slotAvailable}
+            permissionDisabled={maintenance || active || slotSaving || behaviorSaving || !slotAvailable}
             permissionSaving={permissionSaving}
             permissionOpenRequest={commands.permissionRequest}
             onPermissionChange={(mode) => void changePermission(mode)}
             behavior={behavior}
-            behaviorDisabled={active || slotSaving || permissionSaving || !slotAvailable}
+            behaviorDisabled={maintenance || active || slotSaving || permissionSaving || !slotAvailable}
             behaviorSaving={behaviorSaving}
             behaviorOpenRequest={commands.behaviorRequest}
             orchestrationLock={session?.parent_session_id
@@ -481,7 +491,7 @@ export default function Chat(props: Props) {
                   : { scope: "toggle", reason: "Codex 对话在发送第一条消息后不能关闭编排，但可在协作编排与 Super Agent 之间切换。" }
                 : undefined}
             roster={{ profiles: overview.agentProfiles ?? [], session }}
-            onRollover={session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined}
+            onRollover={!maintenance && session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined}
             onBehaviorChange={(value) => void changeBehavior(value)}
             questionDefaults={overview.questionDefaults}
             onQuestionsChange={props.onQuestionsChange}
@@ -493,7 +503,7 @@ export default function Chat(props: Props) {
             accountKey={accountKey}
             slotId={catalogSlot?.id || ""}
             accountAvailable={catalogSlot?.status === "IDLE" && catalogSlot.engine === currentEngine}
-            disabled={active || slotSaving || permissionSaving || behaviorSaving || !slotAvailable}
+            disabled={maintenance || active || slotSaving || permissionSaving || behaviorSaving || !slotAvailable}
             value={selection}
             preference={overview.agentDefaults?.[currentEngine]}
             onChange={setSelection}

@@ -8,7 +8,7 @@ import {
 import { errorText } from "./api";
 import { loadSiteSettings } from "./site/store";
 import type { Notice } from "./components/AppNotices";
-import type { PoolEvent, SlotUsage, ToolEvent, Turn } from "./types";
+import type { MaintenanceState, PoolEvent, SlotUsage, ToolEvent, Turn } from "./types";
 import { receiveSlotUsage } from "./useSlotUsage";
 const streamStallTimeout = 60_000;
 interface EventOptions {
@@ -18,6 +18,7 @@ interface EventOptions {
   refreshApprovals: () => Promise<void>;
   reloadMessages: (id: string) => Promise<void>;
   receiveTurn: (turn: Turn) => void;
+  receiveMaintenance: (maintenance: MaintenanceState) => void;
   notify: (message: string, kind?: Notice["kind"]) => void;
   setStreamConnected: Dispatch<SetStateAction<boolean>>;
   setStreaming: Dispatch<SetStateAction<string>>;
@@ -31,6 +32,7 @@ export function useWorkspaceEvents({
   refreshApprovals,
   reloadMessages,
   receiveTurn,
+  receiveMaintenance,
   notify,
   setStreamConnected,
   setStreaming,
@@ -91,6 +93,11 @@ export function useWorkspaceEvents({
       const payload = data.payload;
       if (data.type === "site-settings") void loadSiteSettings().catch(() => undefined);
       const object = payload && typeof payload === "object" ? payload : {};
+      if (data.type === "maintenance_changed" && object.maintenance && typeof object.maintenance === "object") {
+        const maintenance = object.maintenance as MaintenanceState;
+        receiveMaintenance(maintenance);
+        window.dispatchEvent(new CustomEvent("clinavat:maintenance", { detail: maintenance }));
+      }
       const current = data.sessionId === selectedSessionRef.current;
       if (data.type === "goal" || /^nativeGoal(?:\/|Updated$|Sampling$|$)/.test(data.type))
         window.dispatchEvent(new CustomEvent("clinavat:goal", { detail: { sessionId: data.sessionId, ...object } }));
@@ -203,5 +210,5 @@ export function useWorkspaceEvents({
         refreshTimer.current = undefined;
       }
     };
-  }, [userId, refresh, refreshApprovals, reloadMessages, receiveTurn, notify]);
+  }, [userId, refresh, refreshApprovals, reloadMessages, receiveTurn, receiveMaintenance, notify]);
 }
