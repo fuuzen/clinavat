@@ -9,6 +9,8 @@ import { ensureLocalHost } from '../local-host.js';
 import { localDirectories } from './local-projects.js';
 import { readLegacyRules } from '../runtime/sync-rules.js';
 import { scanSyncCandidates } from '../runtime/sync-scan.js';
+import { TargetPolicyError, type ClassifiedTarget } from '../runtime/target-policy.js';
+import { revokeSockets as revokeTerminalSockets } from '../runtime/terminal.js';
 
 const identifier = z.object({ id: z.uuid() });
 const portInput = z.coerce.number().int().min(1).max(65535);
@@ -26,9 +28,36 @@ const hostInput = z.object({
 const hostPatch = hostInput.partial().extend({ port: portInput.optional() });
 const hostTestInput = hostInput.omit({ name: true }).extend({ hostId: z.uuid().optional() });
 
+const pendingApprovalSaveMessage =
+  '该内网开发机尚未获得管理员审批，已提交审批申请，请联系管理员在「网关 / 内网开发机审批」面板批准后再连接。';
+
 // Connection failures are reported as 422 so reverse proxies pass the SSH output through instead of their own 5xx pages.
 function connectionFailure(error: unknown): HttpError {
   return new HttpError(422, error instanceof Error ? error.message : String(error));
+}
+
+function mapTargetPolicyError(error: TargetPolicyError): HttpError {
+  const statusCode = error.reason === 'dns_failed' ? error.statusCode : 400;
+  return new HttpError(statusCode, error.message);
+}
+
+function firstHopOf(host: Pick<Host, 'host' | 'port' | 'jump_host' | 'jump_port'>): { hop: 'target' | 'jump'; host: string; port: number } {
+  return host.jump_host
+    ? { hop: 'jump', host: host.jump_host, port: host.jump_port! }
+    : { hop: 'target', host: host.host, port: host.port };
+}
+
+async function classifyForSave(context: Context, host: Pick<Host, 'host' | 'port' | 'jump_host' | 'jump_port'>): Promise<ClassifiedTarget | undefined> {
+  const first = firstHopOf(host);
+  try {
+    return await context.targetPolicy.classifyTarget(first.host, first.port);
+  } catch (error) {
+    if (error instanceof TargetPolicyError) {
+      if (error.reason === 'dns_failed') return undefined;
+      throw mapTargetPolicyError(error);
+    }
+    throw error;
+  }
 }
 
 function jumpFields(jump: z.infer<typeof hostInput>['jumpHost']): Pick<Host, 'jump_host' | 'jump_port' | 'jump_username'> {
@@ -49,7 +78,7 @@ async function validateKeys(context: Context, userId: string, keys: (string | un
 }
 
 export function hostRoutes(app: FastifyInstance, context: Context) {
-  const { store, ssh, events } = context;
+  const { store, ssh, events, sshRelay, devHostApprovals } = context;
   app.get('/api/hosts', async request => {
     if (request.user.role === 'admin') ensureLocalHost(store, request.user.id);
     return store.all("SELECT * FROM dev_hosts WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at", request.user.id, request.user.role);
@@ -62,15 +91,27 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         port: input.port, username: input.username, status: 'DISCONNECTED',
         kind: 'ssh', created_at: new Date().toISOString(), ...jumpFields(input.jumpHost),
       };
+      const classified = await classifyForSave(context, host);
       await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
       try {
-        await ssh.addHost(request.user.id, host, input.privateKey, input.jumpHost?.privateKey);
+        await ssh.addHost(request.user.id, host, input.privateKey, input.jumpHost?.privateKey,
+          classified ? { useRelay: classified.kind === 'private' } : undefined);
         store.run('INSERT INTO dev_hosts(id,user_id,name,host,port,username,jump_host,jump_port,jump_username) VALUES(?,?,?,?,?,?,?,?,?)',
           host.id, host.user_id, host.name, host.host, host.port, host.username,
           host.jump_host ?? null, host.jump_port ?? null, host.jump_username ?? null);
       } catch (error) {
         await ssh.deleteHost(request.user.id, host).catch(() => undefined);
         throw new HttpError(400, `无法保存 SSH 配置：${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (classified?.kind === 'private') {
+        const first = firstHopOf(host);
+        const approval = devHostApprovals.requestOrGet({
+          userId: request.user.id, devHostId: host.id, hop: first.hop,
+          hostname: first.host, pinnedIp: classified.pinnedIp, port: classified.port,
+        });
+        if (approval.status !== 'approved') {
+          return reply.code(201).send({ ...host, pendingApproval: true, approval, message: pendingApprovalSaveMessage });
+        }
       }
       return reply.code(201).send(host);
     });
@@ -90,13 +131,15 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         username: input.username ?? previous.username,
         ...(input.jumpHost === undefined ? {} : jumpFields(input.jumpHost)),
       };
-      const changed = !!input.privateKey || !!input.jumpHost?.privateKey ||
-        (['host', 'port', 'username', 'jump_host', 'jump_port', 'jump_username'] as const)
-          .some(field => (host[field] ?? null) !== (previous[field] ?? null));
+      const targetChanged = (['host', 'port', 'jump_host', 'jump_port'] as const)
+        .some(field => (host[field] ?? null) !== (previous[field] ?? null));
+      const changed = targetChanged || !!input.privateKey || !!input.jumpHost?.privateKey
+        || (['username', 'jump_username'] as const).some(field => (host[field] ?? null) !== (previous[field] ?? null));
       if (!changed) {
         store.run('UPDATE dev_hosts SET name=? WHERE id=?', host.name, id);
         return hostFor(context, id, request.user.id);
       }
+      const classified = targetChanged ? await classifyForSave(context, host) : undefined;
       for (const project of projects) await assertProjectIdle(context, project.id);
       await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
       try {
@@ -106,8 +149,12 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
           events.emit(request.user.id, { type: 'project', payload: { id: project.id, sync_status: 'PAUSED' } });
           context.connections.revokeResource(`project:${project.id}`);
         }
+        await sshRelay.revoke({ userId: request.user.id, devHostId: id }, 'host_updated');
+        revokeTerminalSockets({ userId: request.user.id, devHostId: id }, '开发机连接配置已修改');
         await ssh.disconnectHost(request.user.id, previous);
-        await ssh.addHost(request.user.id, host, input.privateKey, input.jumpHost?.privateKey);
+        await ssh.addHost(request.user.id, host, input.privateKey, input.jumpHost?.privateKey,
+          classified ? { useRelay: classified.kind === 'private' } : undefined);
+        if (targetChanged) devHostApprovals.revokeByHost(request.user.id, id, '开发机目标地址或端口已变更');
         store.run("UPDATE dev_hosts SET name=?,host=?,port=?,username=?,jump_host=?,jump_port=?,jump_username=?,status='DISCONNECTED' WHERE id=?",
           host.name, host.host, host.port, host.username, host.jump_host ?? null,
           host.jump_port ?? null, host.jump_username ?? null, id);
@@ -115,19 +162,34 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
         await ssh.addHost(request.user.id, previous).catch(() => undefined);
         throw new HttpError(502, `SSH 配置更新失败，项目同步已暂停，可检查后重试：${error instanceof Error ? error.message : String(error)}`);
       }
-      return hostFor(context, id, request.user.id);
+      const updated = hostFor(context, id, request.user.id);
+      if (targetChanged && classified?.kind === 'private') {
+        const first = firstHopOf(updated);
+        const approval = devHostApprovals.requestOrGet({
+          userId: request.user.id, devHostId: updated.id, hop: first.hop,
+          hostname: first.host, pinnedIp: classified.pinnedIp, port: classified.port,
+        });
+        if (approval.status !== 'approved') {
+          return { ...updated, pendingApproval: true, approval, message: pendingApprovalSaveMessage };
+        }
+      }
+      return updated;
     });
   });
-  app.post('/api/hosts/:id/connect', async request => {
+  app.post('/api/hosts/:id/connect', async (request, reply) => {
     const { id } = identifier.parse(request.params);
     return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
-      if (host.kind === 'local') return { status: 'CONNECTED', fingerprint: '' };
+      if (host.kind === 'local') return { ok: true, status: 'CONNECTED', fingerprint: '' };
       try {
         const result = await ssh.connect(request.user.id, host);
+        if (result.pendingApproval) {
+          return reply.code(403).send({ error: result.message, ...result });
+        }
         store.run("UPDATE dev_hosts SET status='CONNECTED' WHERE id=?", id);
         return result;
       } catch (error) {
+        if (error instanceof TargetPolicyError) throw mapTargetPolicyError(error);
         store.run("UPDATE dev_hosts SET status='ERROR' WHERE id=?", id);
         throw connectionFailure(error);
       }
@@ -144,10 +206,13 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
       host: input.host, port: input.port, username: input.username, ...jumpFields(input.jumpHost),
     };
     try {
-      return { status: 'CONNECTED', ...await ssh.probe(request.user.id, host, {
+      return await ssh.probe(request.user.id, host, {
         privateKey: input.privateKey, jumpPrivateKey: input.jumpHost?.privateKey, savedHostId: saved?.id,
-      }) };
-    } catch (error) { throw connectionFailure(error); }
+      });
+    } catch (error) {
+      if (error instanceof TargetPolicyError) throw mapTargetPolicyError(error);
+      throw connectionFailure(error);
+    }
   });
   app.get('/api/hosts/:id/directories', async request => {
     const { id } = identifier.parse(request.params);
@@ -176,6 +241,9 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
       const host = hostFor(context, id, request.user.id);
       if (host.kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能删除');
       if (store.get('SELECT id FROM projects WHERE dev_host_id=?', id)) throw new HttpError(409, '请先删除开发机下的项目');
+      await sshRelay.revoke({ userId: request.user.id, devHostId: id }, 'host_deleted');
+      revokeTerminalSockets({ userId: request.user.id, devHostId: id }, '开发机已删除');
+      devHostApprovals.revokeByHost(request.user.id, id, '开发机已删除');
       await ssh.deleteHost(request.user.id, host);
       store.run('DELETE FROM dev_hosts WHERE id=?', id);
       return { ok: true };

@@ -360,6 +360,10 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     }));
   }
 
+  async ensureWorkspace(userId: string): Promise<void> {
+    await this.attach({ userId, paths: [] });
+  }
+
   async binary(_scope: ExecutionScope, name: ExecutionBinary): Promise<string> { return name; }
 
   private command(id: string, cwd: string, binary: string, args: string[]): string[] {

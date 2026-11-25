@@ -263,7 +263,11 @@ export function resourceRoutes(app: FastifyInstance, context: Context) {
         if (!['WATCHING', 'LOCAL'].includes(current.sync_status)) throw new HttpError(409, '请先恢复项目同步');
         const unwatchProject = context.connections.watchResource(`project:${id}`, () => socket.close(1008, '项目或连接配置已变更'));
         socket.once('close', unwatchProject);
-        await attachTerminal(socket, request.user.id, hostFor(context, current.dev_host_id, request.user.id), current, ssh, workspaces);
+        await attachTerminal(socket, request.user.id, hostFor(context, current.dev_host_id, request.user.id), current, ssh, workspaces, {
+          policy: context.targetPolicy,
+          approvals: context.devHostApprovals,
+          requirePrivateApproval: config.executionHost === 'lxd',
+        });
       }).catch(error => {
         socket.send(JSON.stringify({ type: 'error', message: error instanceof Error ? error.message : String(error) })); socket.close();
       });

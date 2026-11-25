@@ -94,6 +94,17 @@ export class DevHostApprovalStore {
     );
   }
 
+  /** Synchronously checks whether a target has an active or pending private approval record. */
+  hasPrivateRecord(userId: string, hostname: string, port: number, devHostId?: string, hop?: DevHostApprovalHop): boolean {
+    return !!this.store.get(
+      `SELECT 1 FROM dev_host_approvals
+       WHERE user_id=? AND status IN ('pending','approved')
+         AND ((hostname=? AND port=?) OR (? IS NOT NULL AND dev_host_id=? AND hop=?))
+       LIMIT 1`,
+      userId, hostname, port, devHostId ?? null, devHostId ?? null, hop ?? null,
+    );
+  }
+
   requestOrGet(input: DevHostApprovalRequestInput): DevHostApproval {
     const devHostId = input.devHostId ?? null;
     return this.store.transaction(() => {

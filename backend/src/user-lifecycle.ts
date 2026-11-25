@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { updateSlot } from './accounts/assignments.js';
 import { withResourceLocks, type Context } from './context.js';
 import { HttpError, type Host, type Project, type User } from './models.js';
+import { revokeSockets as revokeTerminalSockets } from './runtime/terminal.js';
 
 /** Ends the user's sign-ins and the event streams and terminals opened with them; `keep` spares the caller's own. */
 export function signOut(context: Context, userId: string, keep?: string): void {
@@ -41,8 +42,13 @@ function withUserLocks<T>(context: Context, userId: string, operation: () => Pro
  * workspace machine. Suspension keeps every file so the user can come back; deletion removes mirrors and keys too.
  */
 async function reclaim(context: Context, user: User, remove: boolean): Promise<void> {
-  const { store, agents, config, ssh, workspaces, connections } = context;
+  const { store, agents, config, ssh, workspaces, connections, sshRelay, devHostApprovals } = context;
   signOut(context, user.id);
+  const revokeReason = remove ? 'user_deleted' : 'user_suspended';
+  const revokeNote = remove ? '用户账号已删除' : '用户账号已停用';
+  await sshRelay.revoke({ userId: user.id }, revokeReason);
+  revokeTerminalSockets({ userId: user.id }, revokeNote);
+  devHostApprovals.revokeByUser(user.id, revokeNote);
   const sessions = store.all<{ id: string }>('SELECT id FROM sessions WHERE user_id=?', user.id).map(session => session.id);
   await Promise.all(sessions.filter(id => agents.isBusy(id)).map(id => agents.stop(id).catch(() => undefined)));
   await agents.reclaimWhere({ userId: user.id });

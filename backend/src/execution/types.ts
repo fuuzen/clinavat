@@ -56,6 +56,8 @@ export interface ExecutionHost {
   binary(scope: ExecutionScope, name: ExecutionBinary): Promise<string>;
   spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams>;
   run(binary: string, args: string[], options: ExecutionRunOptions): Promise<CommandResult>;
+  /** Ensures the user's workspace machine is booted and ready to run commands (no-op in process mode). */
+  ensureWorkspace(userId: string): Promise<void>;
   /** Fails while any process still uses the slot home; with a session, only that session's processes count. */
   assertReleased(home: string, sessionId?: string): Promise<void>;
   /**

@@ -2,6 +2,9 @@ import type { Config } from './config.js';
 import type { Store } from './database.js';
 import type { EventBus } from './events.js';
 import type { SshManager } from './runtime/ssh.js';
+import type { SshTargetPolicy } from './runtime/target-policy.js';
+import type { DevHostApprovalStore } from './runtime/dev-host-approvals.js';
+import type { SshRelayServer } from './runtime/ssh-relay.js';
 import type { WorkspaceManager } from './runtime/workspace.js';
 import type { AgentManager } from './agent/manager.js';
 import type { AgentConfig } from './agent/types.js';
@@ -21,6 +24,9 @@ import { HttpError, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
   config: Config & AgentConfig; store: Store; events: EventBus; ssh: SshManager;
+  targetPolicy: SshTargetPolicy;
+  devHostApprovals: DevHostApprovalStore;
+  sshRelay: SshRelayServer;
   workspaces: WorkspaceManager; agents: AgentManager;
   connections: ConnectionRegistry;
   turns: ConversationStore;

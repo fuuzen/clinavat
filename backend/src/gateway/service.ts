@@ -209,24 +209,36 @@ export class GatewayService {
 
   /** Development host addresses, so the admin can approve them for the direct list. */
   async devHosts(devDirect: string[], lanDirect: string[]) {
-    const hosts = this.store.all<{ id: string; name: string; host: string; jump_host: string | null; username: string }>(
-      `SELECT h.id,h.name,h.host,h.jump_host,u.username FROM dev_hosts h JOIN users u ON u.id=h.user_id
+    const hosts = this.store.all<{
+      id: string; user_id: string; name: string; host: string; port: number;
+      jump_host: string | null; jump_port: number | null; username: string;
+    }>(
+      `SELECT h.id,h.user_id,h.name,h.host,h.port,h.jump_host,h.jump_port,u.username FROM dev_hosts h JOIN users u ON u.id=h.user_id
        WHERE h.kind='ssh' ORDER BY u.username,h.name`);
-    return Promise.all(hosts.map(async host => ({
-      id: host.id, name: host.name, owner: host.username,
-      // Behind a jump host only the jump host is reached from the pool machine.
-      endpoints: await Promise.all([host.jump_host ?? host.host].map(async name => {
-        const addresses = isIPv4(name) ? [name]
-          : await lookup(name, { all: true, family: 4 }).then(items => items.map(item => item.address), () => []);
-        return {
-          host: name, resolved: addresses.length > 0,
+    return Promise.all(hosts.map(async host => {
+      const firstHost = host.jump_host ?? host.host;
+      const firstPort = host.jump_host ? host.jump_port! : host.port;
+      const addresses = isIPv4(firstHost) ? [firstHost]
+        : await lookup(firstHost, { all: true, family: 4 }).then(items => items.map(item => item.address), () => []);
+      const approval = this.store.get<{ status: string }>(
+        `SELECT status FROM dev_host_approvals
+         WHERE user_id=? AND port=? AND (dev_host_id=? OR hostname=? OR pinned_ip=?)
+         ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, requested_at DESC LIMIT 1`,
+        host.user_id, firstPort, host.id, firstHost, addresses[0] ?? '',
+      );
+      return {
+        id: host.id, name: host.name, owner: host.username,
+        approvalStatus: approval?.status ?? null,
+        // Behind a jump host only the jump host is reached from the pool machine.
+        endpoints: [{
+          host: firstHost, resolved: addresses.length > 0,
           addresses: addresses.map(address => ({
             address,
             covered: devDirect.some(cidr => cidrContains(cidr, address)) ? 'dev'
               : lanDirect.some(cidr => cidrContains(cidr, address)) ? 'lan' : null,
           })),
-        };
-      })),
-    })));
+        }],
+      };
+    }));
   }
 }

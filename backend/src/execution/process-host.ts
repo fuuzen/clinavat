@@ -40,6 +40,8 @@ export class ProcessExecutionHost implements ExecutionHost {
     });
   }
 
+  async ensureWorkspace(): Promise<void> { /* Host processes run directly on the Hub machine. */ }
+
   assertReleased(home: string, sessionId?: string, workspaceCgroups?: ReadonlySet<string>): Promise<void> {
     return assertSlotProcessesStopped(home, sessionId, workspaceCgroups);
   }

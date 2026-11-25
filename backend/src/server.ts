@@ -13,6 +13,10 @@ import { ConversationStore } from './conversation.js';
 import { loadImages, storedImages } from './message-images.js';
 import { ConnectionRegistry } from './connections.js';
 import { SshManager } from './runtime/ssh.js';
+import { SshTargetPolicy } from './runtime/target-policy.js';
+import { DevHostApprovalStore } from './runtime/dev-host-approvals.js';
+import { SshRelayServer } from './runtime/ssh-relay.js';
+import { revokeSockets as revokeTerminalSockets } from './runtime/terminal.js';
 import { WorkspaceManager } from './runtime/workspace.js';
 import { describeSkippedLinks, recordSkippedLinks } from './sync-links.js';
 import { AgentManager } from './agent/manager.js';
@@ -84,9 +88,38 @@ for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('
   await execution.assertReleased(slot.home_dir);
   if (slot.engine === 'claude') await ensureClaudeSlotIdentity(config.dataDir, slot.id, slot.home_dir);
 }
-const ssh = new SshManager(config);
+const targetPolicy = new SshTargetPolicy({
+  vmBridge: config.vmBridge,
+  gatewayHost: config.gateway?.host,
+  extraDeny: config.sshRelayDeny,
+});
+const devHostApprovals = new DevHostApprovalStore(store);
+const ssh = new SshManager(config, {
+  execution,
+  policy: targetPolicy,
+  approvals: devHostApprovals,
+  vmBridge: config.vmBridge,
+  sshRelayPort: config.sshRelayPort,
+});
 const credentials = new AccountCredentials(config.dataDir, store, execution, new SlotTokens(config.dataDir, ssh.keys),
   slotId => onSlotActivity(slotId));
+const sshRelay = new SshRelayServer({
+  vmBridge: config.vmBridge,
+  port: config.sshRelayPort,
+  store,
+  machines,
+  credentials,
+  approvals: devHostApprovals,
+  policy: targetPolicy,
+  logger: app.log,
+});
+ssh.setRelay(sshRelay);
+credentials.onBeforeSlotRevoke((slotId, reason) => sshRelay.revoke({ slotId }, reason).then(() => undefined));
+if (execution instanceof LxdExecutionHost) {
+  execution.onBeforeMachineRevoke = async (address, reason) => {
+    await sshRelay.revoke({ srcIp: address }, reason);
+  };
+}
 await credentials.recover();
 const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
@@ -292,7 +325,7 @@ app.addHook('onSend', async (_request, reply) => {
 });
 registerAuth(app, store, config, ssh, connections, siteAccess);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
+const context = { config: agentConfig, store, events, ssh, targetPolicy, devHostApprovals, sshRelay, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
   usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined };
 const worktrees = new Worktrees(context);
 Object.assign(context, { worktrees });
@@ -319,8 +352,10 @@ app.get('/api/health', async () => {
 app.addHook('preClose', async () => {
   connections.close();
   events.close();
+  revokeTerminalSockets({}, '服务正在关闭');
   await agents.close();
   await credentials.close();
+  await sshRelay.stop();
 });
 app.addHook('onClose', async () => { await ssh.close(); store.close(); });
 let shuttingDown = false;
@@ -330,6 +365,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
   void app.close().catch(error => { app.log.error(error); process.exitCode = 1; });
 });
 try {
+  if (config.executionHost === 'lxd') await sshRelay.start();
   await app.listen({ host: config.host, port: config.port });
   // Prepares the key and logs in once, so a broken path shows in the admin panel before anyone needs it.
   void hostCommands?.check().then(status => {
