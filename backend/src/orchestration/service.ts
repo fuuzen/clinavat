@@ -1,7 +1,7 @@
 import type { Context } from '../context.js';
 import { projectFor, sessionFor, withResourceLocks } from '../context.js';
 import { HttpError, type Project, type Session, type User } from '../models.js';
-import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
+import { agentEngines, type AgentEngine } from '../agent/engines.js';
 import { canInspectProject, orchestrationModeOf, orchestrates } from '../agent/orchestration-tools.js';
 import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
@@ -15,6 +15,7 @@ import { ProjectMemory } from './memory.js';
 import { ReportDelivery, reportSource } from './reports.js';
 import { Discussions, type DiscussionInput } from './discussions.js';
 import { AgentRoster } from './roster.js';
+import { buildEngineSlotSummaries, refreshSlotUsage, type SlotUsageRefreshResult } from './slot-usage.js';
 import { AgentTasks } from './tasks.js';
 import { hubTools, isToolName, toolInputs, type ToolName } from './tools.js';
 
@@ -131,8 +132,11 @@ export class Orchestrator implements OrchestrationHost {
     const superAgent = orchestrationModeOf(master) === 'super';
     switch (tool) {
       case 'list_agents': {
-        toolInputs.list_agents.parse(args ?? {});
-        return json(this.list(user, master));
+        const input = toolInputs.list_agents.parse(args ?? {});
+        const refreshResult = input.refreshUsage?.length
+          ? await refreshSlotUsage(this.context, user.id, input.refreshUsage, signal)
+          : undefined;
+        return json(this.list(user, master, refreshResult));
       }
       case 'start_agent': {
         this.assertNotInMaintenance('派生新的子智能体');
@@ -417,26 +421,19 @@ export class Orchestrator implements OrchestrationHost {
     }
   }
 
-  private list(user: User, master: Session) {
+  private list(user: User, master: Session, refreshResult?: SlotUsageRefreshResult) {
+    const view = this.view(master.id);
     return {
-      engines: agentEngines.map(engine => ({
-        engine, label: engineProfiles[engine].label, automaticSlot: engineProfiles[engine].automaticSlot,
-        slots: engineSlots(this.context, user.id, engine).map(({ slot, usable, inUseByOther }) => ({
-          id: slot.id, label: slot.label, usable, ...(inUseByOther ? { inUseByOtherUser: true } : {}),
-          ...(slot.status !== 'IDLE' ? { status: slot.status } : {}),
-          models: this.context.config.catalogs.read(slot.id)?.models.map(model => ({
-            id: model.id, efforts: model.reasoningEfforts.map(effort => effort.value), ...(model.isDefault ? { default: true } : {}),
-          })) ?? 'not read yet: omit model to use the default',
-        })),
-      })).filter(engine => engine.slots.length),
+      engines: buildEngineSlotSummaries(this.context, user.id),
+      ...(refreshResult ? { refreshResult } : {}),
       // Start one with start_agent's profile; the master may still override any field.
       roster: this.roster.effective(master, this.availableEngines(user.id)),
-      children: this.view(master.id).agents.filter(child => !child.archived)
-        .map(({ name, engine, model, access, status, running, ephemeral, worktree }) => ({
-          name, engine, model, access, status, running, ...(ephemeral ? { ephemeral: true } : {}),
+      children: view.agents.filter(child => !child.archived)
+        .map(({ name, engine, slotId, model, access, status, running, ephemeral, worktree }) => ({
+          name, engine, slotId, model, access, status, running, ...(ephemeral ? { ephemeral: true } : {}),
           ...(worktree && worktree.state !== 'clean' ? { worktree: worktree.state } : {}),
         })),
-      archivedChildren: this.view(master.id).agents.filter(child => child.archived).length,
+      archivedChildren: view.agents.filter(child => child.archived).length,
       tasks: this.board.view(master.id),
       limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
     };

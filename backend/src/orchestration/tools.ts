@@ -11,7 +11,10 @@ const wave = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'wave: 
   .describe('Optional batch barrier ID (e.g. "p1-impl"). Normal completed reports in the same wave wait until all running tasks of that wave finish and arrive together in one message; errors and interruptions penetrate immediately.');
 
 export const toolInputs = {
-  list_agents: z.object({}),
+  list_agents: z.object({
+    refreshUsage: z.array(z.string().trim().min(1).max(64)).max(32).optional()
+      .describe('Optional list of slot IDs to probe for fresh quota usage (e.g. ["claude-1", "codex-1"]), or ["all"] to probe all probeable slots you can access. Prefer explicit slot IDs to avoid waking idle slot VMs; subject to maintenance mode, concurrency and 15s per-slot throttle.'),
+  }),
   inspect: inspectInput,
   start_agent: z.object({
     wave,
@@ -128,7 +131,7 @@ export const toolInputs = {
 export type ToolName = keyof typeof toolInputs;
 
 const descriptions: Record<ToolName, string> = {
-  list_agents: 'Lists the CLIs, account slots and models you can start child agents with, the children of this conversation with their state, and the current limits.',
+  list_agents: 'Lists the CLIs, account slots (with quota usage, reset countdowns and VM exclusivity hints) and models you can start child agents with, the children of this conversation with their slot/model/state, and the current limits. Pass refreshUsage with specific slot IDs (or ["all"]) to probe fresh quota on demand.',
   inspect: 'Lists a bounded tree of visible project paths or reads a permitted project text file within the current Super Agent reading mode and turn budget.',
   start_agent: 'Starts a child agent in a new conversation of this project and sends it its first task. Returns at once; when the child finishes, its report arrives as a new message unless notify is false.',
   message_agent: 'Sends another message to a child agent you started; its next report arrives like the first.',
