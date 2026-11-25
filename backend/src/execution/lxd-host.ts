@@ -36,6 +36,8 @@ export interface LxdServices {
   reportSkippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
   /** The CPU, memory and root disk the administrator set for this kind of machine. */
   resources(kind: MachineKind): MachineResources;
+  /** Disconnects host-relayed network streams before a machine hands over or retires. */
+  onBeforeMachineRevoke?: (address: string, reason: string) => Promise<void>;
 }
 
 export interface Machine {
@@ -76,6 +78,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   private readonly barriers: SyncBarriers;
   /** Why an instance last refused its resources, until a later attempt succeeds. */
   private readonly resourceErrors = new Map<string, string>();
+  onBeforeMachineRevoke?: (address: string, reason: string) => Promise<void>;
 
   constructor(private readonly config: LxdConfig, private readonly local: ProcessExecutionHost, private readonly services: LxdServices) {
     this.barriers = new SyncBarriers({
@@ -272,10 +275,16 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   private slotHome(slotId: string): string { return join(this.config.dataDir, 'slots', slotId); }
 
+  private async revokeMachine(kind: MachineKind, owner: string, reason: string): Promise<void> {
+    const address = this.services.plan.get(kind, owner)?.address;
+    if (address) await (this.onBeforeMachineRevoke ?? this.services.onBeforeMachineRevoke)?.(address, reason);
+  }
+
   /** Ends the previous user's presence in a slot machine before another user's files are mounted. */
   private async handOver(machine: Machine): Promise<void> {
     const live = await this.exec(machine, ['bash', '-c', liveRunsScript, 'clinavat-live']);
     if (live.code !== 0 || live.stdout.trim()) throw new Error('槽位虚拟机中上一位用户的进程尚未结束，已暂停交接');
+    await this.revokeMachine(machine.kind, machine.owner, 'handover');
     this.barriers.close(machine);
     const cleaned = await this.exec(machine, ['bash', '-c', handoverScript, 'clinavat-handover', String(this.uid), this.controlDirectory()]);
     if (cleaned.code !== 0) throw new Error(`无法清理槽位虚拟机：${cleaned.stderr.trim().slice(0, 300)}`);
@@ -452,6 +461,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     await this.load();
     const name = machineName(kind, owner);
     const operation = async () => {
+      await this.revokeMachine(kind, owner, remove ? 'retire-remove' : 'retire-stop');
       const result = await this.lxc([remove ? 'delete' : 'stop', '--force', this.target(name)], this.config.vmStartTimeoutMs);
       if (result.code !== 0 && !/not found|already stopped|not running/i.test(result.stderr)) {
         throw new Error(`LXD 操作失败：${(result.stderr || result.stdout).trim().slice(0, 500)}`);

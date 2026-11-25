@@ -55,6 +55,20 @@ export class Store {
         jump_host TEXT, jump_port INTEGER, jump_username TEXT,
         kind TEXT NOT NULL DEFAULT 'ssh' CHECK(kind IN ('ssh','local'))
       );
+      CREATE TABLE IF NOT EXISTS dev_host_approvals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        dev_host_id TEXT,
+        hop TEXT NOT NULL CHECK(hop IN ('target','jump')),
+        hostname TEXT NOT NULL,
+        pinned_ip TEXT NOT NULL,
+        port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),
+        status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','revoked')),
+        requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+        decided_at TEXT,
+        decided_by TEXT,
+        note TEXT
+      );
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
         dev_host_id TEXT NOT NULL REFERENCES dev_hosts(id), name TEXT NOT NULL,
@@ -206,6 +220,9 @@ export class Store {
       CREATE INDEX IF NOT EXISTS turns_session ON session_turns(session_id,started_at);
       CREATE INDEX IF NOT EXISTS slot_access_user ON slot_user_access(user_id,slot_id);
       CREATE UNIQUE INDEX IF NOT EXISTS local_host_user ON dev_hosts(user_id) WHERE kind='local';
+      CREATE INDEX IF NOT EXISTS dev_host_approvals_user_target ON dev_host_approvals(user_id,pinned_ip,port,status);
+      CREATE INDEX IF NOT EXISTS dev_host_approvals_host ON dev_host_approvals(user_id,dev_host_id,status);
+      CREATE INDEX IF NOT EXISTS dev_host_approvals_status ON dev_host_approvals(status,requested_at);
       CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
     `);
     this.addColumn('execution_machines', 'timezone', 'TEXT');

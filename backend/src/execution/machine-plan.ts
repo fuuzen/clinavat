@@ -31,6 +31,12 @@ export class MachinePlan {
     return row && { name: row.name, address: row.address, hostname: row.hostname, machineId: row.machine_id, timezone: row.timezone };
   }
 
+  byAddress(ip: string): { kind: MachineKind; ownerId: string; name: string; address: string } | null {
+    const row = this.store.get<{ kind: MachineKind; owner_id: string; name: string; address: string }>(
+      'SELECT kind,owner_id,name,address FROM execution_machines WHERE address=?', ip);
+    return row ? { kind: row.kind, ownerId: row.owner_id, name: row.name, address: row.address } : null;
+  }
+
   /** Returns the machine's identity, allocating one on first use. */
   ensure(kind: MachineKind, ownerId: string, name: string): MachineIdentity {
     return this.store.transaction(() => {

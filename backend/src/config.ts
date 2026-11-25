@@ -46,6 +46,16 @@ const environment = z.object({
   CLINAVAT_GATEWAY_HOST: z.string().trim().regex(/^[A-Za-z0-9.:-]*$/, 'CLINAVAT_GATEWAY_HOST 必须是主机名或 IP').default(''),
   CLINAVAT_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(22),
   CLINAVAT_GATEWAY_USER: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('root'),
+  CLINAVAT_SSH_RELAY_PORT: z.coerce.number().int().min(1).max(65535).default(22100),
+  CLINAVAT_SSH_RELAY_DENY: z.string().trim().default('').refine(value => !value || value.split(',').every(entry => {
+    const trimmed = entry.trim();
+    if (!trimmed) return true;
+    const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(trimmed);
+    if (!match) return false;
+    const octets = match.slice(1, 5).map(Number);
+    const prefix = match[5] === undefined ? 32 : Number(match[5]);
+    return octets.every(octet => octet >= 0 && octet <= 255) && prefix >= 0 && prefix <= 32;
+  }), 'CLINAVAT_SSH_RELAY_DENY 必须是逗号分隔的 IPv4 或 CIDR 列表'),
 }).parse(process.env);
 // The parsed config is the only holder of the master key; a later {...process.env} cannot hand it to a child.
 delete process.env.CLINAVAT_MASTER_KEY;
@@ -90,6 +100,8 @@ export const config = {
   gateway: environment.CLINAVAT_GATEWAY_HOST ? {
     host: environment.CLINAVAT_GATEWAY_HOST, port: environment.CLINAVAT_GATEWAY_PORT, username: environment.CLINAVAT_GATEWAY_USER,
   } : undefined,
+  sshRelayPort: environment.CLINAVAT_SSH_RELAY_PORT,
+  sshRelayDeny: environment.CLINAVAT_SSH_RELAY_DENY.split(',').map(entry => entry.trim()).filter(Boolean),
 };
 
 export type Config = typeof config;

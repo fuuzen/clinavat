@@ -39,12 +39,41 @@ export class AccountCredentials {
   private userPreparations = new Map<string, Promise<void>>();
   private pauses = new Map<string, Promise<void>>();
   private failedReleases = new Set<LeaseRelease>();
+  private slotEpochs = new Map<string, number>();
+  private recovered = false;
+  private beforeSlotRevokeHooks = new Set<(slotId: string, reason: string) => Promise<void> | void>();
 
   /** Asks idle resident CLIs on a slot to exit so that another user can take it. */
   reclaimIdle: (slotId: string) => Promise<void> = async () => undefined;
 
   constructor(private dataDir: string, private store: Store, private execution: ExecutionHost,
     readonly tokens: SlotTokens, private onSlotActivity?: (slotId: string) => void) {}
+
+  isRecovered(): boolean { return this.recovered; }
+
+  slotAuthState(slotId: string): { userId: string | null; epoch: number } {
+    const epoch = this.slotEpochs.get(slotId) ?? 0;
+    if (!this.recovered) return { userId: null, epoch };
+    const lease = this.leases.get(slotId);
+    const active = lease && !lease.parked && !lease.finishing && !lease.failure && lease.journal.phase === 'active';
+    return { userId: active ? lease.journal.userId : null, epoch };
+  }
+
+  onBeforeSlotRevoke(cb: (slotId: string, reason: string) => Promise<void> | void): () => void {
+    this.beforeSlotRevokeHooks.add(cb);
+    return () => { this.beforeSlotRevokeHooks.delete(cb); };
+  }
+
+  private bumpEpoch(slotId: string): number {
+    const next = (this.slotEpochs.get(slotId) ?? 0) + 1;
+    this.slotEpochs.set(slotId, next);
+    return next;
+  }
+
+  private async runBeforeSlotRevoke(slotId: string, reason: string): Promise<void> {
+    this.bumpEpoch(slotId);
+    for (const hook of [...this.beforeSlotRevokeHooks]) await hook(slotId, reason);
+  }
 
   isUserBusy(userId: string): boolean { return [...this.leases.values()].some(lease => !lease.parked && lease.journal.userId === userId); }
   /** Includes parked slots; call `releaseParked` first when the change must not keep the last user's state. */
@@ -60,7 +89,7 @@ export class AccountCredentials {
   async releaseParked(slotId: string): Promise<void> {
     const lease = this.leases.get(slotId);
     if (!lease?.parked) return;
-    try { await this.vacate(lease); }
+    try { await this.vacate(lease, 'release-parked'); }
     catch (error) {
       throw new HttpError(409, `槽位的用户状态回收尚未完成：${error instanceof Error ? error.message : '请稍后重试'}`);
     }
@@ -68,7 +97,7 @@ export class AccountCredentials {
 
   /** Leaves no parked slot behind a stopped Hub; a failure stays in the journal for `recover`. */
   async close(): Promise<void> {
-    await Promise.allSettled([...this.leases.values()].filter(lease => lease.parked).map(lease => this.vacate(lease)));
+    await Promise.allSettled([...this.leases.values()].filter(lease => lease.parked).map(lease => this.vacate(lease, 'close')));
   }
 
   // Call only after the session's run has ended; active leases never enter this retry set.
@@ -166,7 +195,11 @@ export class AccountCredentials {
       // The same user returns, possibly from another project: the slot still holds everything prepare would restore.
       const parked = lease;
       parked.parked = false;
-      parked.ready = parked.ready.then(() => this.writeJournal(parked.journal, 'active'));
+      parked.journal.phase = 'preparing';
+      parked.ready = parked.ready.then(async () => {
+        await this.writeJournal(parked.journal, 'active');
+        this.bumpEpoch(journal.slotId);
+      });
       this.onSlotActivity?.(journal.slotId);
     }
     const active = lease;
@@ -198,8 +231,10 @@ export class AccountCredentials {
       const journal = JSON.parse(content) as SlotJournal;
       this.validateJournal(journal);
       if (journal.slotId !== slotId) throw new Error('槽位运行恢复日志归属无效');
+      await this.runBeforeSlotRevoke(slotId, 'recover');
       await this.settle(journal);
     }
+    this.recovered = true;
   }
 
   private release(release: LeaseRelease): Promise<void> {
@@ -232,9 +267,11 @@ export class AccountCredentials {
     if (!lease.count) {
       if (lease.journal.phase === 'active' && !lease.failure) {
         lease.parked = true;
-        lease.ready = this.writeJournal(lease.journal, 'parked');
+        lease.journal.phase = 'parked';
+        lease.ready = this.runBeforeSlotRevoke(lease.journal.slotId, 'park')
+          .then(() => this.writeJournal(lease.journal, 'parked'));
         await lease.ready;
-      } else await this.vacate(lease);
+      } else await this.vacate(lease, 'vacate');
     }
     if (sessionId) {
       const session = this.sessions.get(sessionId);
@@ -246,17 +283,23 @@ export class AccountCredentials {
     }
   }
 
-  private vacate(lease: SlotLease): Promise<void> {
+  private vacate(lease: SlotLease, reason = 'vacate'): Promise<void> {
     const { slotId } = lease.journal;
-    lease.finishing ??= lease.ready.catch(() => undefined).then(() => this.settle(lease.journal)).then(() => {
-      if (this.leases.get(slotId) === lease) this.leases.delete(slotId);
-      if (lease.parked) this.onSlotActivity?.(slotId);
-    }, (error: unknown) => {
-      lease.finishing = undefined;
-      // A partly saved slot must not be handed back to its last user as if it were still prepared.
-      lease.failure = error instanceof Error ? error : new Error('槽位用户状态回收失败');
-      throw lease.failure;
-    });
+    if (!lease.finishing) {
+      this.bumpEpoch(slotId);
+      lease.finishing = lease.ready.catch(() => undefined)
+        .then(() => this.runBeforeSlotRevoke(slotId, reason))
+        .then(() => this.settle(lease.journal))
+        .then(() => {
+          if (this.leases.get(slotId) === lease) this.leases.delete(slotId);
+          if (lease.parked) this.onSlotActivity?.(slotId);
+        }, (error: unknown) => {
+          lease.finishing = undefined;
+          // A partly saved slot must not be handed back to its last user as if it were still prepared.
+          lease.failure = error instanceof Error ? error : new Error('槽位用户状态回收失败');
+          throw lease.failure;
+        });
+    }
     return lease.finishing;
   }
 
@@ -340,6 +383,7 @@ export class AccountCredentials {
     try { await preparation; }
     finally { if (this.userPreparations.get(key) === tail) this.userPreparations.delete(key); }
     await this.writeJournal(journal, 'active');
+    this.bumpEpoch(journal.slotId);
   }
 
   private async settle(journal: SlotJournal): Promise<void> {
