@@ -89,9 +89,10 @@ sudo ~/.local/lib/clinavat/deploy/lxd/host-commands.sh apply --hub-user <Hub 用
 ```
 
 - 在 `/etc/ssh/sshd_config` **末尾**写入带标记的 `Match Address <虚拟机网段>` 块，只允许该网段用密钥登录（`AuthenticationMethods publickey`）。`Match` 块一直延续到下一个 `Match` 或文件末尾，所以要放在最后，之后手动修改该文件时也要保持它在最后。修改前会备份为 `sshd_config.clinavat-backup`；`sshd -t` 不通过时自动还原，通过后重新加载 sshd。
-- 在出站规则 `clinavat-egress` 中放行网桥地址的 SSH 端口。重新运行 `setup.sh` 会重写出站规则，脚本随后会再加上这一条。
+- 在出站规则 `clinavat-egress` 中放行网桥地址的 SSH 端口和 Hub SSH 中继端口（`apply-relay` 可单独补齐中继端口规则而不改动 `sshd_config`）。重新运行 `setup.sh` 会重写出站规则，脚本随后会再加上这些规则。
+- 在运行 `firewalld` 的宿主机（如 Fedora/RHEL）上，`apply` 和 `apply-relay` 还会自动在网桥所属 zone（如 `cv-users`）同时定点写入 runtime 与 `--permanent` 放行规则，不触发全局 `firewall-cmd --reload`，确保重载或重启后不失效且不影响其他运行时规则。
 - 不修改 sshd 监听的地址。默认监听所有地址即可；只监听特定地址时，自己加一行 `ListenAddress <网桥地址>`。使用 `ssh.socket` 时（Ubuntu 22.10 起），还要执行 `systemctl daemon-reload` 和 `systemctl restart ssh.socket`。
-- 最后执行 `check`。它也可以单独运行，检查监听地址、按虚拟机来源计算的 sshd 生效配置、出站规则、ufw（启用时提示放行命令），以及 Hub 是否已写入密钥。
+- 最后执行 `check`。它也可以单独运行，检查监听地址、按虚拟机来源计算的 sshd 生效配置、出站规则、`firewalld`（启用时校验网桥 zone 的 runtime 与 `--permanent` 双态放行规则）、`ufw`（启用时提示放行命令），以及 Hub 是否已写入密钥。
 
 手动核对（以默认网段为例）：
 
@@ -164,6 +165,7 @@ sudo deploy/lxd/setup.sh --storage lvm:<卷组>/<精简池> --hub-user <Hub 用�
 
 - 使用已有卷组时，先手动建好精简池：`lvcreate --type thin-pool -L 40G -n clinavat-thin <卷组>`。
 - 宿主机需要安装并运行 OpenSSH 服务器：脚本最后运行 `host-commands.sh apply`，让虚拟机只能用密钥登录 Hub 用户，供本机项目执行命令，见[宿主机命令入口](#宿主机命令入口)。
+- 在运行 `firewalld` 的宿主机（如 Fedora/RHEL）上，`setup.sh` 会在 `clinavat-users` 尚未绑定任何 zone 时创建最小权限 zone `cv-users`（`target=DROP`、放行 `dhcp`/`dns`）并绑定该网桥；若网桥已绑定至现有 zone（如管理员自定义的 zone），则保持原 zone 配置不变。仅在新建 `cv-users` 或目标 zone 尚未载入 runtime 时，`setup.sh` 会执行一次 `firewall-cmd --reload`（会重置无关的仅 runtime 规则）；日常 `host-commands.sh apply` / `apply-relay` 直接定点写入 runtime 与 `--permanent`，不触发全局 reload。此外，新建的 `cv-users` 默认 `target=DROP`，在全新 `firewalld` 宿主机上若虚拟机需要跨 zone 转发流量，需另行配置相应的 `firewalld` 转发 policy。
 - 脚本把 LXD 的两个 socket 都收回给 root。**`lxd` 组成员等同于 root**，智能体命令又以 Hub 用户运行，所以 Hub 用户不能留在这个组里。此后管理 LXD 需要 `sudo lxc`。
 - 脚本结束时打印一条 `lxc remote add` 命令，以 Hub 用户执行。snap 版 `lxc` 固定把客户端证书放在 `~/snap/lxd/common/config`，备份数据目录时要一起备份。
 - 调用 `lxc launch` 时必须关闭标准输入（`</dev/null`），否则它会一直等待从标准输入读取配置。

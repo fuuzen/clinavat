@@ -8,11 +8,14 @@
 #   sudo deploy/lxd/host-commands.sh check --hub-user <user> [--port 22] [--relay-port 22100]
 #   sudo deploy/lxd/host-commands.sh apply-relay [--relay-port 22100]
 #
-# apply lets the VM network log in with keys only, opens the sshd and Hub SSH relay ports in the egress ACL, then
-# runs check. apply-relay only ensures the Hub SSH relay ACL rule exists (idempotent, without touching sshd_config).
-# It never changes where sshd listens, so a mistake cannot lock out other logins. The Hub itself keeps the key and its
-# entry in the Hub user's authorized_keys, and logs in once at start; the admin panel shows the result.
+# apply lets the VM network log in with keys only, opens the sshd and Hub SSH relay ports in the egress ACL and
+# active firewalld zone, then runs check. apply-relay only ensures the Hub SSH relay ACL and firewalld rules exist
+# (idempotent, without touching sshd_config). It never changes where sshd listens, so a mistake cannot lock out
+# other logins. The Hub itself keeps the key and its entry in the Hub user's authorized_keys, and logs in once at
+# start; the admin panel shows the result.
 set -euo pipefail
+
+SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 NETWORK=clinavat-users
 ACL=clinavat-egress
@@ -132,6 +135,8 @@ ensure_relay_acl() {
   fi
 }
 
+source "$SOURCE/firewalld.sh"
+
 check_ufw_port() {
   local target_port="$1" label="$2" status
   if command -v ufw >/dev/null && status="$(ufw status 2>/dev/null)" && grep -q '^Status: active' <<<"$status"; then
@@ -188,6 +193,8 @@ check() {
   else
     problem "egress ACL $ACL does not allow $bridge:$relay_port (Hub SSH relay); run: sudo $0 apply-relay --relay-port $relay_port"
   fi
+  firewalld_check_port "$port" "host commands (sshd)"
+  firewalld_check_port "$relay_port" "Hub SSH relay"
   check_ufw_port "$port" "host commands (sshd)"
   check_ufw_port "$relay_port" "Hub SSH relay"
   home="$(getent passwd "$hub_user" | cut -d: -f6)"
@@ -215,10 +222,13 @@ case "$command" in
       ok "egress ACL $ACL allows $bridge:$port"
     fi
     ensure_relay_acl
+    firewalld_ensure_port "$port" "host commands (sshd)"
+    firewalld_ensure_port "$relay_port" "Hub SSH relay"
     check ;;
   apply-relay)
     echo "== apply-relay: allow guests on $subnet to reach Hub SSH relay $bridge:$relay_port"
     ensure_relay_acl
+    firewalld_ensure_port "$relay_port" "Hub SSH relay"
     check_ufw_port "$relay_port" "Hub SSH relay" ;;
-  *) sed -n '2,14p' "$0"; exit 64 ;;
+  *) sed -n '2,15p' "$0"; exit 64 ;;
 esac

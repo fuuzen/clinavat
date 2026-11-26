@@ -175,6 +175,9 @@ exists profile device get workspace eth0 network --project "$PROJECT" || \
   lxc profile device add workspace eth0 nic --project "$PROJECT" network="$NETWORK" name=eth0 \
     security.port_isolation=true security.mac_filtering=true security.ipv4_filtering=true
 
+source "$SOURCE/firewalld.sh"
+firewalld_ensure_zone
+
 # After the ACL: editing it above replaces every rule, including the one for this host's sshd.
 echo "== Host commands"
 "$SOURCE/host-commands.sh" apply --hub-user "$hub_user" --relay-port "$relay_port"
