@@ -26,7 +26,7 @@ import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScop
 import type { SkippedLinks } from '../runtime/sync-status.js';
 
 export interface LxdConfig {
-  dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
+  dataDir: string; workspaceDir?: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
   lxdWorkspaceImage: string; vmStartTimeoutMs: number; vmBusPorts: number;
 }
 
@@ -186,6 +186,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     if (address) await (this.onBeforeMachineRevoke ?? this.services.onBeforeMachineRevoke)?.(address, reason);
   }
 
+  /** Ends the previous user's presence in a slot machine before another user's files are mounted. */
   private async handOver(machine: Machine): Promise<void> {
     const live = await this.exec(machine, ['bash', '-c', liveRunsScript, 'clinavat-live']);
     if (live.code !== 0 || live.stdout.trim()) throw new Error('槽位虚拟机中上一位用户的进程尚未结束，已暂停交接');
@@ -204,7 +205,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     return this.serialized(machine, async () => {
       await this.boot(machine);
       if (machine.kind === 'slot' && scope.userId && machine.occupant && machine.occupant !== scope.userId) await this.handOver(machine);
-      await attachMounts(this.mountRunner, this.config.dataDir, machine, scope);
+      await attachMounts(this.mountRunner, { dataDir: this.config.dataDir, workspaceDir: this.config.workspaceDir }, machine, scope);
       if (machine.kind === 'slot' && scope.userId) { machine.occupant = scope.userId; this.barriers.ensure(machine, scope.userId); }
       return machine;
     });

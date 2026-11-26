@@ -15,7 +15,7 @@ import {
 } from './ssh-relay-client.js';
 import { relayBindHost, type SshRelayHop, type SshRelayServer } from './ssh-relay.js';
 import { isPrivateIpv4, type SshTargetPolicy } from './target-policy.js';
-import { assertHostOwner, assertRemotePath, remoteBash, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
+import { assertHostOwner, assertRemotePath, assertSshHost, remoteBash, shellQuote, type DevHost, type RuntimeConfig } from './types.js';
 
 const pendingApprovalProbeMessage =
   '该内网开发机尚未获得管理员审批，已提交审批申请，请联系管理员在「网关 / 内网开发机审批」面板批准后再测试。';
@@ -137,6 +137,7 @@ export class SshManager {
     options?: { useRelay?: boolean },
   ): Promise<void> {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     const jump = this.jumpHost(host);
     if (jumpPrivateKey && !jump) throw new Error('请先配置跳板机，再导入其私钥');
     await Promise.all([privateKey, jumpPrivateKey].filter((key): key is string => !!key)
@@ -178,6 +179,7 @@ export class SshManager {
 
   async connect(userId: string, host: DevHost): Promise<HostConnectionResult> {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     const jump = this.jumpHost(host);
     const first = this.firstHop(host);
     const classified = this.policy ? await this.policy.classifyTarget(first.endpoint.host, first.endpoint.port) : undefined;
@@ -232,6 +234,7 @@ export class SshManager {
   /** Tests connection settings that may not be saved yet, without touching the host's saved configuration or known_hosts. */
   async probe(userId: string, host: DevHost, keys: HostProbeKeys): Promise<HostConnectionResult> {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     const jump = this.jumpHost(host);
     const first = this.firstHop(host);
     const classified = this.policy ? await this.policy.classifyTarget(first.endpoint.host, first.endpoint.port) : undefined;
@@ -307,6 +310,7 @@ export class SshManager {
 
   async exec(userId: string, host: DevHost, command: string, timeout = 30_000, maxBytes?: number) {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     const first = this.firstHop(host);
     const classified = this.policy ? await this.policy.classifyTarget(first.endpoint.host, first.endpoint.port) : undefined;
     if (this.isLxd && classified?.kind === 'private' && this.approvals
@@ -360,6 +364,7 @@ export class SshManager {
 
   async knownHostKeys(userId: string, host: DevHost): Promise<Buffer[]> {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     const target = host.port === 22 ? host.host : `[${host.host}]:${host.port}`;
     const result = await checkedCommand(this.config.sshKeygenBinary ?? 'ssh-keygen', ['-F', target, '-f', this.knownHostsPath(userId)]);
     return result.stdout.split('\n').filter(line => line && !line.startsWith('#') && !line.startsWith('@')).map(line => {
@@ -370,6 +375,7 @@ export class SshManager {
 
   async terminalIdentity(userId: string, host: DevHost): Promise<Buffer> {
     assertHostOwner(userId, host);
+    assertSshHost(host);
     return readFile(await this.keys.identityPath(userId, host.id));
   }
 

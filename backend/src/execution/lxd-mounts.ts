@@ -9,6 +9,7 @@ import type { ExecutionScope } from './types.js';
 
 export interface MountedDisk { device: string; source: string; target: string; readonly: boolean }
 export interface MountSpec { source: string; target: string; readonly: boolean }
+export interface LxdMountRoots { dataDir: string; workspaceDir?: string }
 export interface LxdMountRunner {
   target(name: string): string;
   checkedLxc(args: string[], timeout?: number): Promise<CommandResult>;
@@ -42,8 +43,16 @@ export const machineName = (kind: MachineKind, owner: string) => kind === 'works
 export const slotHome = (dataDir: string, slotId: string) => join(dataDir, 'slots', slotId);
 export const userDirectory = (dataDir: string, userId: string) => join(dataDir, 'users', userId);
 
-/** Validates a custom guest mount target differing from its host source. */
-export function validateCustomMountTarget(target: string): string {
+function stripTrailingSlashes(path: string): string {
+  const normalized = posix.normalize(path);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+}
+
+/**
+ * Validates a custom guest mount target differing from its host source.
+ * Rejects non-normalized paths, Linux system prefixes, and Hub-managed roots (`dataDir` / `workspaceDir`).
+ */
+export function validateCustomMountTarget(target: string, protectedRoots: readonly string[] = []): string {
   if (!target || /[\0\r\n]/.test(target) || !posix.isAbsolute(target)) {
     throw new Error(`挂载目标路径无效：${target}`);
   }
@@ -60,13 +69,31 @@ export function validateCustomMountTarget(target: string): string {
       throw new Error(`挂载目标路径不能位于系统保留目录 ${prefix} 下：${target}`);
     }
   }
+  for (const root of protectedRoots) {
+    if (!root || !posix.isAbsolute(root)) continue;
+    const cleanRoot = stripTrailingSlashes(root);
+    if (cleanRoot === '/') continue;
+    // Block both mounting inside a Hub-managed tree and mounting an ancestor that would shadow it.
+    if (normalized === cleanRoot || normalized.startsWith(`${cleanRoot}/`) || cleanRoot.startsWith(`${normalized}/`)) {
+      throw new Error(`挂载目标路径不能覆盖或落入托管目录 ${cleanRoot}：${target}`);
+    }
+  }
   return normalized;
 }
 
-function assertAllowedSlotPath(slotsRoot: string, ownSlotDir: string | undefined, candidate: string): void {
+/**
+ * Ensures a mount source neither exposes all slots by mounting `slots/` or an ancestor of it,
+ * nor mounts another slot's home into this machine.
+ */
+function assertAllowedSlotPath(slotsDir: string, ownSlotDir: string | undefined, candidate: string): void {
   const resolved = resolve(candidate);
-  if (!resolved.startsWith(slotsRoot)) return;
-  if (!ownSlotDir || (resolved !== ownSlotDir && !resolved.startsWith(ownSlotDir + sep))) {
+  const resolvedSlots = resolve(slotsDir);
+  if (resolved === resolvedSlots || resolvedSlots.startsWith(resolved === sep ? sep : resolved + sep)) {
+    throw new Error('挂载源目录不能包含全部槽位目录');
+  }
+  if (!resolved.startsWith(resolvedSlots + sep)) return;
+  const own = ownSlotDir ? resolve(ownSlotDir) : undefined;
+  if (!own || (resolved !== own && !resolved.startsWith(own + sep))) {
     throw new Error('槽位目录只能在该槽位的虚拟机中使用');
   }
 }
@@ -88,11 +115,22 @@ export function parseLoadedMounts(
   return { mounts, occupant };
 }
 
-export function planScopeMounts(dataDir: string, kind: MachineKind, scope: ExecutionScope): MountSpec[] {
+export function planScopeMounts(
+  roots: LxdMountRoots,
+  kind: MachineKind,
+  scope: ExecutionScope,
+  extraProtectedTargets: readonly string[] = [],
+): MountSpec[] {
+  const { dataDir, workspaceDir } = roots;
   const user = scope.userId ? userDirectory(dataDir, scope.userId) : undefined;
   const keys = scope.userId ? join(dataDir, 'run', 'keys', scope.userId) : undefined;
-  const slotsRoot = join(resolve(dataDir), 'slots') + sep;
-  const ownSlotDir = scope.slotId ? resolve(slotHome(dataDir, scope.slotId)) : undefined;
+  const slotsDir = join(resolve(dataDir), 'slots');
+  const ownSlotDir = scope.slotId ? join(slotsDir, scope.slotId) : undefined;
+  const protectedTargets = [...new Set([
+    resolve(dataDir),
+    ...(workspaceDir ? [resolve(workspaceDir)] : []),
+    ...extraProtectedTargets,
+  ])];
 
   const explicitMounts: MountSpec[] = [
     ...scope.paths.map(path => ({ source: path, target: path, readonly: false })),
@@ -100,8 +138,8 @@ export function planScopeMounts(dataDir: string, kind: MachineKind, scope: Execu
     ...(scope.mounts ?? []).map(mount => ({ source: mount.source, target: mount.target ?? mount.source, readonly: !!mount.readonly })),
   ];
   for (const item of explicitMounts) {
-    assertAllowedSlotPath(slotsRoot, ownSlotDir, item.source);
-    if (item.target !== item.source) validateCustomMountTarget(item.target);
+    assertAllowedSlotPath(slotsDir, ownSlotDir, item.source);
+    if (item.target !== item.source) validateCustomMountTarget(item.target, protectedTargets);
   }
 
   const defaults: MountSpec[] = [
@@ -129,23 +167,36 @@ export function planScopeMounts(dataDir: string, kind: MachineKind, scope: Execu
   return [...planned.values()];
 }
 
-export async function attachMounts(runner: LxdMountRunner, dataDir: string, machine: Machine, scope: ExecutionScope): Promise<void> {
-  const specs = planScopeMounts(dataDir, machine.kind, scope);
-  const logicalSlotsRoot = join(resolve(dataDir), 'slots') + sep;
-  const realSlotsRoot = (await realpath(join(resolve(dataDir), 'slots')).catch(() => join(resolve(dataDir), 'slots'))) + sep;
-  const slotDir = scope.slotId ? resolve(slotHome(dataDir, scope.slotId)) : undefined;
-  const ownRealSlot = slotDir ? await realpath(slotDir).catch(() => slotDir) : undefined;
+export async function attachMounts(runner: LxdMountRunner, roots: LxdMountRoots, machine: Machine, scope: ExecutionScope): Promise<void> {
+  const logicalDataDir = resolve(roots.dataDir);
+  const realDataDir = await realpath(logicalDataDir).catch(() => logicalDataDir);
+  const logicalWorkspaceDir = roots.workspaceDir ? resolve(roots.workspaceDir) : undefined;
+  const realWorkspaceDir = logicalWorkspaceDir ? await realpath(logicalWorkspaceDir).catch(() => logicalWorkspaceDir) : undefined;
+  const specs = planScopeMounts(roots, machine.kind, scope, [
+    realDataDir,
+    ...(realWorkspaceDir ? [realWorkspaceDir] : []),
+  ]);
+
+  // Resolve realpath from `slots/` (or `dataDir`) before joining `slotId` so a not-yet-created slot directory
+  // under a symlinked `dataDir` still matches its canonical parent path.
+  const logicalSlotsDir = join(logicalDataDir, 'slots');
+  const realSlotsDir = await realpath(logicalSlotsDir).catch(() => join(realDataDir, 'slots'));
+  const ownLogicalSlot = scope.slotId ? join(logicalSlotsDir, scope.slotId) : undefined;
+  const ownRealSlot = scope.slotId ? join(realSlotsDir, scope.slotId) : undefined;
 
   for (const { source, target, readonly } of specs) {
     await mkdir(source, { recursive: true, mode: 0o700 });
     // LXD refuses a source reached through a symlink, such as the data directory's run link.
     const realSource = await realpath(source);
-    assertAllowedSlotPath(logicalSlotsRoot, slotDir, realSource);
-    assertAllowedSlotPath(realSlotsRoot, ownRealSlot, realSource);
+    assertAllowedSlotPath(logicalSlotsDir, ownLogicalSlot, realSource);
+    assertAllowedSlotPath(realSlotsDir, ownRealSlot, realSource);
 
     const existing = machine.mounts.get(target);
     if (existing) {
-      if (existing.source === realSource && (existing.readonly === readonly || !existing.readonly)) continue;
+      if (existing.source !== realSource) {
+        throw new Error(`挂载目标路径 ${target} 已被其他目录占用，拒绝覆盖现有挂载`);
+      }
+      if (existing.readonly === readonly || !existing.readonly) continue;
       await runner.checkedLxc(['config', 'device', 'remove', runner.target(machine.name), existing.device]);
       machine.mounts.delete(target);
     }
@@ -167,14 +218,8 @@ export async function attachMounts(runner: LxdMountRunner, dataDir: string, mach
 }
 
 export function buildInitArgs(options: {
-  target: (name: string) => string;
-  machine: Machine;
-  container: boolean;
-  image: string;
-  vmBusPorts: number;
-  resources: MachineResources;
-  uid: number;
-  gid: number;
+  target: (name: string) => string; machine: Machine; container: boolean; image: string;
+  vmBusPorts: number; resources: MachineResources; uid: number; gid: number;
 }): string[] {
   const { target, machine, container, image, vmBusPorts, resources, uid, gid } = options;
   const idmap = uid === gid ? `both ${uid} ${uid}` : `uid ${uid} ${uid}\ngid ${gid} ${gid}`;
@@ -191,10 +236,7 @@ export function buildInitArgs(options: {
 }
 
 export async function ensureNetworkAddress(
-  runner: LxdMountRunner,
-  machine: Machine,
-  row: InstanceRow | undefined,
-  identity: MachineIdentity,
+  runner: LxdMountRunner, machine: Machine, row: InstanceRow | undefined, identity: MachineIdentity,
 ): Promise<void> {
   // The gateway chooses the egress by this address.
   if (row?.devices?.eth0?.['ipv4.address'] === identity.address) return;
@@ -204,19 +246,15 @@ export async function ensureNetworkAddress(
 }
 
 export async function rebindRuntimeMounts(
-  runner: LxdMountRunner,
-  dataDir: string,
-  machine: Machine,
-  devices: Record<string, Record<string, string>> | undefined,
-  running: boolean,
+  runner: LxdMountRunner, dataDir: string, machine: Machine,
+  devices: Record<string, Record<string, string>> | undefined, running: boolean,
 ): Promise<void> {
   const runtime = resolve(dataDir, 'run') + sep;
   for (const [name, device] of Object.entries(devices ?? {})) {
     if (device.type !== 'disk' || !device.path) continue;
     const sourcePath = device.source ?? device.path;
     const hostPath = resolve(device.path).startsWith(runtime)
-      ? device.path
-      : resolve(sourcePath).startsWith(runtime) ? sourcePath : undefined;
+      ? device.path : resolve(sourcePath).startsWith(runtime) ? sourcePath : undefined;
     if (!hostPath) continue;
     // systemd recreates the runtime tree when the Hub stops; surviving guests still hold its old directory inodes.
     await mkdir(hostPath, { recursive: true, mode: 0o700 });
@@ -271,21 +309,11 @@ export function parseManagedInstances(stdout: string): (InstanceRow & { kind: Ma
 }
 
 export async function prepareStoppedInstance(options: {
-  runner: LxdMountRunner;
-  dataDir: string;
-  machine: Machine;
-  row: InstanceRow | undefined;
-  identity: MachineIdentity;
-  container: boolean;
-  image: string;
-  vmBusPorts: number;
-  vmStartTimeoutMs: number;
-  resources: MachineResources;
-  uid: number;
-  gid: number;
+  runner: LxdMountRunner; dataDir: string; machine: Machine; row: InstanceRow | undefined;
+  identity: MachineIdentity; container: boolean; image: string; vmBusPorts: number; vmStartTimeoutMs: number;
+  resources: MachineResources; uid: number; gid: number;
   fitResources: (row: InstanceRow, kind: MachineKind) => Promise<void>;
-  onResourceError: (message: string) => void;
-  quotaError: (error: Error) => Error;
+  onResourceError: (message: string) => void; quotaError: (error: Error) => Error;
 }): Promise<void> {
   const { runner, dataDir, machine, row, identity, container, image, vmBusPorts, vmStartTimeoutMs, resources, uid, gid } = options;
   if (!row) {
@@ -296,25 +324,25 @@ export async function prepareStoppedInstance(options: {
   if (row && (row.config?.[kindKey] !== machine.kind || row.config?.[ownerKey] !== machine.owner)) {
     await runner.checkedLxc(['config', 'set', runner.target(machine.name), `${kindKey}=${machine.kind}`, `${ownerKey}=${machine.owner}`]);
   }
+  // Bus ports and addresses can only change while stopped; older instances catch up on their next start.
   if (row && !container && Number(row.expanded_config?.['limits.max_bus_ports'] ?? 0) < vmBusPorts) {
     await runner.checkedLxc(['config', 'set', runner.target(machine.name), `limits.max_bus_ports=${vmBusPorts}`]);
   }
+  // Settings saved while the instance was running catch up here; a refusal keeps old resources and surfaces in admin panel.
   if (row) await options.fitResources(row, machine.kind).catch((error: Error) => { options.onResourceError(error.message); });
   await ensureNetworkAddress(runner, machine, row, identity);
   await rebindRuntimeMounts(runner, dataDir, machine, row?.devices, false);
 }
 
 export async function assertGuestsReleased(
-  machines: Iterable<Machine>,
-  home: string,
-  sessionId: string | undefined,
-  releasedScript: string,
+  machines: Iterable<Machine>, home: string, sessionId: string | undefined, releasedScript: string,
   exec: (machine: Machine, command: string[]) => Promise<CommandResult>,
 ): Promise<void> {
   for (const machine of machines) {
     if (!machine.mounts.has(home)) continue;
     const result = await exec(machine, ['bash', '-c', releasedScript, 'clinavat-released', home, sessionId ?? '']);
     if (result.code !== 0) {
+      // A stopped guest has no processes; anything else cannot be proven safe for a hand-off.
       if (/not running/i.test(result.stderr)) continue;
       throw new Error(`无法确认虚拟机是否已释放槽位：${result.stderr.trim().slice(0, 300)}`);
     }

@@ -7,7 +7,7 @@ import { attachLocalTerminal } from './local-terminal.js';
 import { remoteCommand } from './remote-paths.js';
 import { SshManager } from './ssh.js';
 import { dialAuthorizedTcp, type SshTargetPolicy } from './target-policy.js';
-import { assertHostOwner, type DevHost, type WorkspaceProject } from './types.js';
+import { assertHostOwner, assertSshHost, type DevHost, type WorkspaceProject } from './types.js';
 import { WorkspaceManager } from './workspace.js';
 
 export interface TerminalRevokeFilter {
@@ -63,11 +63,13 @@ export async function attachTerminal(
 ): Promise<void> {
   assertHostOwner(userId, host);
   if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
+  if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
   if (host.kind === 'local' || project.execution_mode === 'local') {
     if (host.kind !== 'local' || project.execution_mode !== 'local') throw new Error('本机项目与开发机类型不匹配');
     await attachLocalTerminal(socket, project, workspaces);
     return;
   }
+  assertSshHost(host);
 
   const client = new Client();
   const jumpHost = ssh.jumpHost(host);
