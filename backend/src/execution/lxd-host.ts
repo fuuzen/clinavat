@@ -1,19 +1,23 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, realpath } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { childEnvironment, runCommand } from '../runtime/process.js';
-import { shellQuote } from '../runtime/types.js';
 import { SyncBarriers } from './barriers.js';
 import {
   daemonScript, flushProgram, freezeScript, handoverScript, liveRunsScript, prepareScript, relayProgram, releasedScript, runScript,
   serviceScript, thawScript,
 } from './guest-scripts.js';
+import {
+  assertGuestsReleased, attachMounts, formatLoginCommand, machineName, parseLoadedMounts, parseManagedInstances,
+  prepareStoppedInstance, rebindRuntimeMounts, removeNonSlotMounts, revokeMachineMounts,
+  type InstanceRow, type LxdMountRunner, type Machine,
+} from './lxd-mounts.js';
+export { machineName, type Machine } from './lxd-mounts.js';
 import type { MachineKind, MachinePlan } from './machine-plan.js';
 import type { ProcessExecutionHost } from './process-host.js';
 import {
-  describeResources, parseProjectQuota, planResources, quotaError, type MachineResourceHost, type MachineResources, type ResourceRow,
+  describeResources, parseProjectQuota, planResources, quotaError, type MachineResourceHost, type MachineResources,
 } from './machine-resources.js';
 import { delegateSuspension } from './suspension.js';
 import { defaultTimezone, guestEnvironment, saveSlotTimezone, timezoneScript, missingTimezoneData } from './timezones.js';
@@ -22,45 +26,19 @@ import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScop
 import type { SkippedLinks } from '../runtime/sync-status.js';
 
 export interface LxdConfig {
-  dataDir: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
+  dataDir: string; workspaceDir?: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
   lxdWorkspaceImage: string; vmStartTimeoutMs: number; vmBusPorts: number;
 }
 
 /** What the VM host needs from the rest of the Hub to place and serve machines. */
 export interface LxdServices {
   plan: MachinePlan;
-  /** The project directory of a user's sync session, or undefined when the user has no such session. */
   syncProject(userId: string, syncName: string): string | undefined;
   mutagenEnvironment(userId: string): Promise<NodeJS.ProcessEnv>;
-  /** Records the links a sync skips after a command; returns a notice about new ones for the command's output. */
   reportSkippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
-  /** The CPU, memory and root disk the administrator set for this kind of machine. */
   resources(kind: MachineKind): MachineResources;
-  /** Disconnects host-relayed network streams before a machine hands over or retires. */
   onBeforeMachineRevoke?: (address: string, reason: string) => Promise<void>;
 }
-
-export interface Machine {
-  name: string;
-  kind: MachineKind;
-  /** The slot ID or user ID the machine belongs to. */
-  owner: string;
-  mounts: Set<string>;
-  prepared: boolean;
-  queue: Promise<unknown>;
-  /** A slot machine's current user, whose files are mounted; cleared by the next hand-over. */
-  occupant?: string;
-}
-interface InstanceRow extends ResourceRow {
-  name: string; state?: { pid?: number };
-}
-
-const ownerKey = 'user.clinavat.owner';
-const kindKey = 'user.clinavat.kind';
-const deviceName = (path: string) => `m-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`;
-// LXD names allow neither underscores nor arbitrary length, which slot IDs do.
-export const machineName = (kind: MachineKind, owner: string) => kind === 'workspace' ? `u-${owner}`
-  : `s-${createHash('sha256').update(owner).digest('hex').slice(0, 16)}`;
 
 /**
  * Runs processes in LXD virtual machines through the Hub's restricted client. CLI processes run in the slot's own
@@ -76,11 +54,12 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   private readonly uid = process.getuid!();
   private readonly gid = process.getgid!();
   private readonly barriers: SyncBarriers;
-  /** Why an instance last refused its resources, until a later attempt succeeds. */
+  private readonly mountRunner: LxdMountRunner;
   private readonly resourceErrors = new Map<string, string>();
   onBeforeMachineRevoke?: (address: string, reason: string) => Promise<void>;
 
   constructor(private readonly config: LxdConfig, private readonly local: ProcessExecutionHost, private readonly services: LxdServices) {
+    this.mountRunner = { target: name => this.target(name), checkedLxc: (args, timeout) => this.checkedLxc(args, timeout) };
     this.barriers = new SyncBarriers({
       relay: machine => this.service(machine, 'relay', ['python3', '-I', '-c', relayProgram, '/run/clinavat-relay/barrier.sock']),
       worker: async userId => {
@@ -97,29 +76,22 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
   }
 
   private target(name: string): string { return `${this.config.lxdRemote}:${name}`; }
-
-  private async lxc(args: string[], timeout = 60_000, maxBytes?: number) {
+  private controlDirectory(): string { return join(this.config.dataDir, 'run', 'cm'); }
+  private lxc(args: string[], timeout = 60_000, maxBytes?: number) {
     return runCommand(this.config.lxcBinary, [...args, '--project', this.config.lxdProject], { env: childEnvironment(), timeout, maxBytes });
   }
-
   private async checkedLxc(args: string[], timeout?: number) {
     const result = await this.lxc(args, timeout);
     if (result.code !== 0) throw new Error(`LXD 操作失败：${(result.stderr || result.stdout).trim().slice(0, 500)}`);
     return result;
   }
 
-  private userDirectory(userId: string): string { return join(this.config.dataDir, 'users', userId); }
-
   /** Mounts survive Hub restarts, so slot occupancy starts from what LXD reports. */
   private load(): Promise<void> {
     this.loaded ??= (async () => {
       for (const row of await this.managedInstances()) {
-        const { kind, owner } = row;
-        const mounts = Object.values(row.devices ?? {}).filter(device => device.type === 'disk' && device.path && device.path !== '/').map(device => device.path!);
-        const users = join(this.config.dataDir, 'users') + sep;
-        const occupant = kind === 'slot' ? mounts.find(path => path.startsWith(users) && path.endsWith(`${sep}engine-state`))
-          ?.slice(users.length).split(sep)[0] : undefined;
-        this.machines.set(row.name, { name: row.name, kind, owner, mounts: new Set(mounts), prepared: false, queue: Promise.resolve(), occupant });
+        const { mounts, occupant } = parseLoadedMounts(this.config.dataDir, row.kind, row.devices);
+        this.machines.set(row.name, { name: row.name, kind: row.kind, owner: row.owner, mounts, prepared: false, queue: Promise.resolve(), occupant });
       }
     })();
     return this.loaded;
@@ -127,12 +99,11 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   private machine(kind: MachineKind, owner: string): Machine {
     const name = machineName(kind, owner);
-    let machine = this.machines.get(name);
-    if (!machine) {
-      machine = { name, kind, owner, mounts: new Set(), prepared: false, queue: Promise.resolve() };
-      this.machines.set(name, machine);
-    }
-    return machine;
+    const existing = this.machines.get(name);
+    if (existing) return existing;
+    const created: Machine = { name, kind, owner, mounts: new Map(), prepared: false, queue: Promise.resolve() };
+    this.machines.set(name, created);
+    return created;
   }
 
   /** Lifecycle and device changes for one machine run one at a time; LXD rejects concurrent instance updates. */
@@ -142,14 +113,9 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     return next;
   }
 
-  /** Instances the Hub created, recognized by the kind and owner it records on them. */
-  private async managedInstances(): Promise<(InstanceRow & { kind: MachineKind; owner: string })[]> {
-    const result = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json'], 60_000);
-    return (JSON.parse(result.stdout) as InstanceRow[]).flatMap(row => {
-      const kind = row.config?.[kindKey];
-      const owner = row.config?.[ownerKey];
-      return (kind === 'workspace' || kind === 'slot') && owner && row.name === machineName(kind, owner) ? [{ ...row, kind, owner }] : [];
-    });
+  private async managedInstances() { return parseManagedInstances((await this.checkedLxc(['list', `${this.config.lxdRemote}:`, '--format', 'json'], 60_000)).stdout); }
+  private async instance(name: string): Promise<InstanceRow | undefined> {
+    return (JSON.parse((await this.checkedLxc(['list', `${this.config.lxdRemote}:`, `^${name}$`, '--format', 'json'])).stdout) as InstanceRow[])[0];
   }
 
   private async fitResources(row: InstanceRow, kind: MachineKind): Promise<void> {
@@ -159,16 +125,10 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     this.resourceErrors.delete(row.name);
   }
 
-  private async instance(name: string): Promise<InstanceRow | undefined> {
-    const shown = await this.checkedLxc(['list', `${this.config.lxdRemote}:`, `^${name}$`, '--format', 'json']);
-    return (JSON.parse(shown.stdout) as InstanceRow[])[0];
-  }
-
   private async boot(machine: Machine): Promise<void> {
     const row = await this.instance(machine.name);
     if (row?.status === 'Running' && machine.prepared) return;
-    const start = () => this.start(machine, row);
-    const next = this.startQueue.then(start, start);
+    const next = this.startQueue.then(() => this.start(machine, row), () => this.start(machine, row));
     this.startQueue = next.catch(() => undefined);
     await next;
   }
@@ -180,38 +140,15 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     if (row && (row.type === 'container') !== container) {
       throw new Error(`实例 ${machine.name} 的类型与当前版本不符（工作区应为容器、槽位应为虚拟机），请删除后由 Hub 重新创建`);
     }
-    const resources = this.services.resources(machine.kind);
-    if (!row) {
-      const idmap = this.uid === this.gid ? `both ${this.uid} ${this.uid}` : `uid ${this.uid} ${this.uid}\ngid ${this.gid} ${this.gid}`;
-      await this.checkedLxc(['init', ...(container
-        // Its profile isolates root and the remaining uid range. Only the Hub's uid/gid are mapped directly for
-        // ordinary bind mounts: LXD forbids shift=true when a project restricts source paths.
-        // The default profile carries VM-only settings.
-        ? [this.target(this.config.lxdWorkspaceImage), this.target(machine.name), '--profile', 'workspace']
-        // Agents run arbitrary code: a slot gets its own kernel.
-        : [this.target(this.config.lxdImage), this.target(machine.name), '--vm', '-c', `limits.max_bus_ports=${vmBusPorts}`]),
-        '-c', `limits.cpu=${resources.cpu}`, '-c', `limits.memory=${resources.memoryMiB}MiB`, '-d', `root,size=${resources.diskGiB}GiB`,
-        '-c', `raw.idmap=${idmap}`, '-c', `${kindKey}=${machine.kind}`, '-c', `${ownerKey}=${machine.owner}`], vmStartTimeoutMs)
-        .catch((error: Error) => { throw quotaError(error); });
-    }
-    if (row && (row.config?.[kindKey] !== machine.kind || row.config?.[ownerKey] !== machine.owner)) {
-      await this.checkedLxc(['config', 'set', this.target(machine.name), `${kindKey}=${machine.kind}`, `${ownerKey}=${machine.owner}`]);
-    }
     if (row?.status !== 'Running') {
-      // Bus ports and addresses can only change while stopped; older instances catch up on their next start.
-      if (row && !container && Number(row.expanded_config?.['limits.max_bus_ports'] ?? 0) < vmBusPorts) {
-        await this.checkedLxc(['config', 'set', this.target(machine.name), `limits.max_bus_ports=${vmBusPorts}`]);
-      }
-      // Settings saved while the instance was running catch up here; a VM disk that would shrink keeps its size.
-      // A refusal, such as a full project quota, leaves the old resources and is shown in the admin panel.
-      if (row) await this.fitResources(row, machine.kind).catch((error: Error) => { this.resourceErrors.set(machine.name, error.message); });
-      // The gateway chooses the egress by this address.
-      if (row?.devices?.eth0?.['ipv4.address'] !== identity.address) {
-        await this.checkedLxc(row?.devices?.eth0
-          ? ['config', 'device', 'set', this.target(machine.name), 'eth0', `ipv4.address=${identity.address}`]
-          : ['config', 'device', 'override', this.target(machine.name), 'eth0', `ipv4.address=${identity.address}`]);
-      }
-      await this.rebindRuntimeMounts(machine, row?.devices, false);
+      await prepareStoppedInstance({
+        runner: this.mountRunner, dataDir: this.config.dataDir, machine, row, identity, container,
+        image: container ? this.config.lxdWorkspaceImage : this.config.lxdImage, vmBusPorts, vmStartTimeoutMs,
+        resources: this.services.resources(machine.kind), uid: this.uid, gid: this.gid,
+        fitResources: (current, kind) => this.fitResources(current, kind),
+        onResourceError: message => { this.resourceErrors.set(machine.name, message); },
+        quotaError,
+      });
       await this.checkedLxc(['start', this.target(machine.name)], vmStartTimeoutMs);
       machine.prepared = false;
     } else if (row.devices?.eth0?.['ipv4.address'] !== identity.address) {
@@ -227,54 +164,23 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
       this.controlDirectory(), identity.hostname ?? '', identity.machineId ?? '']);
     if (prepared.code !== 0) throw new Error(`虚拟机初始化失败：${prepared.stderr.trim().slice(0, 500)}`);
     if (!container) await this.applyTimezone(machine, identity.timezone);
-    if (row?.status === 'Running') await this.rebindRuntimeMounts(machine, row.devices, true);
+    if (row?.status === 'Running') await rebindRuntimeMounts(this.mountRunner, this.config.dataDir, machine, row.devices, true);
     machine.prepared = true;
   }
 
-  private async rebindRuntimeMounts(machine: Machine, devices: InstanceRow['devices'], running: boolean): Promise<void> {
-    const runtime = resolve(this.config.dataDir, 'run') + sep;
-    for (const [name, device] of Object.entries(devices ?? {})) {
-      if (device.type !== 'disk' || !device.path || !resolve(device.path).startsWith(runtime)) continue;
-      // systemd recreates the runtime tree when the Hub stops; surviving guests still hold its old directory inodes.
-      await mkdir(device.path, { recursive: true, mode: 0o700 });
-      const source = await realpath(device.path);
-      if (!running) {
-        await this.checkedLxc(['config', 'device', 'set', this.target(machine.name), name, `source=${source}`]);
-        continue;
-      }
-      await this.checkedLxc(['config', 'device', 'remove', this.target(machine.name), name]);
-      machine.mounts.delete(device.path);
-      const options = Object.entries({ ...device, source }).filter(([key]) => key !== 'type').map(([key, value]) => `${key}=${value}`);
-      await this.checkedLxc(['config', 'device', 'add', this.target(machine.name), name, 'disk', ...options]);
-      machine.mounts.add(device.path);
-    }
-  }
-
-  private controlDirectory(): string { return join(this.config.dataDir, 'run', 'cm'); }
-
   private exec(machine: Machine, command: string[], options: { env?: NodeJS.ProcessEnv; timeout?: number; maxBytes?: number; input?: string } = {}) {
-    return runCommand(this.config.lxcBinary, this.execArguments(machine, command, options.env), {
-      env: childEnvironment(), timeout: options.timeout ?? 60_000, maxBytes: options.maxBytes, input: options.input,
-    });
+    return runCommand(this.config.lxcBinary, this.execArguments(machine, command, options.env),
+      { env: childEnvironment(), timeout: options.timeout ?? 60_000, maxBytes: options.maxBytes, input: options.input });
   }
-
   private execArguments(machine: Machine, command: string[], env: NodeJS.ProcessEnv = {}): string[] {
-    // A caller may have built its environment before the administrator changed the slot's timezone.
     const environment = machine.kind === 'slot' ? { ...env, TZ: this.services.plan.get('slot', machine.owner)?.timezone ?? defaultTimezone() } : env;
     const variables = Object.entries(environment).filter(([, value]) => value !== undefined).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
     return ['exec', this.target(machine.name), '--project', this.config.lxdProject, '--mode', 'non-interactive', ...variables, '--', ...command];
   }
-
-  /** A long-lived helper as the unprivileged user; its stdio is the Hub's channel to it. */
   private service(machine: Machine, name: string, command: string[], env: NodeJS.ProcessEnv = guestEnvironment(this.services.plan)): ChildProcessWithoutNullStreams {
-    return spawn(this.config.lxcBinary, this.execArguments(machine,
-      ['bash', '-c', serviceScript, 'clinavat-service', name, String(this.uid), String(this.gid), ...command], env), {
-      env: childEnvironment(), detached: true, stdio: ['pipe', 'pipe', 'pipe'],
-    }) as ChildProcessWithoutNullStreams;
+    return spawn(this.config.lxcBinary, this.execArguments(machine, ['bash', '-c', serviceScript, 'clinavat-service', name, String(this.uid), String(this.gid), ...command], env),
+      { env: childEnvironment(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams;
   }
-
-  private slotHome(slotId: string): string { return join(this.config.dataDir, 'slots', slotId); }
-
   private async revokeMachine(kind: MachineKind, owner: string, reason: string): Promise<void> {
     const address = this.services.plan.get(kind, owner)?.address;
     if (address) await (this.onBeforeMachineRevoke ?? this.services.onBeforeMachineRevoke)?.(address, reason);
@@ -288,13 +194,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     this.barriers.close(machine);
     const cleaned = await this.exec(machine, ['bash', '-c', handoverScript, 'clinavat-handover', String(this.uid), this.controlDirectory()]);
     if (cleaned.code !== 0) throw new Error(`无法清理槽位虚拟机：${cleaned.stderr.trim().slice(0, 300)}`);
-    // Only the slot's own directories stay: its home and its usage probe directory.
-    const kept = [this.slotHome(machine.owner), join(this.config.dataDir, 'run', 'usage-probes', machine.owner)];
-    for (const path of [...machine.mounts]) {
-      if (kept.includes(path)) continue;
-      await this.checkedLxc(['config', 'device', 'remove', this.target(machine.name), deviceName(path)]);
-      machine.mounts.delete(path);
-    }
+    await removeNonSlotMounts(this.mountRunner, this.config.dataDir, machine);
     machine.occupant = undefined;
   }
 
@@ -302,39 +202,11 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     if (!scope.slotId && !scope.userId) throw new Error('执行范围缺少用户或槽位');
     await this.load();
     const machine = scope.slotId ? this.machine('slot', scope.slotId) : this.machine('workspace', scope.userId);
-    const user = scope.userId ? this.userDirectory(scope.userId) : undefined;
-    const keys = scope.userId ? join(this.config.dataDir, 'run', 'keys', scope.userId) : undefined;
-    for (const path of scope.paths) {
-      // A slot's home belongs only to its own machine.
-      if (resolve(path).startsWith(join(resolve(this.config.dataDir), 'slots') + sep)
-        && (!scope.slotId || !resolve(path).startsWith(this.slotHome(scope.slotId)))) throw new Error('槽位目录只能在该槽位的虚拟机中使用');
-    }
-    const writable = machine.kind === 'slot'
-      ? [...(user ? [join(user, 'engine-state')] : []), ...scope.paths]
-      : [join(user!, 'mutagen'), ...scope.paths];
-    const readOnly = [...(user ? [join(user, '.ssh'), keys!] : []), ...(machine.kind === 'workspace' ? [join(user!, 'mutagen-ssh')] : []),
-      ...(scope.readOnlyPaths ?? [])];
     return this.serialized(machine, async () => {
       await this.boot(machine);
       if (machine.kind === 'slot' && scope.userId && machine.occupant && machine.occupant !== scope.userId) await this.handOver(machine);
-      for (const [paths, readonly] of [[[...new Set(writable)], false], [[...new Set(readOnly)], true]] as const) {
-        for (const path of paths) {
-          if (machine.mounts.has(path)) continue;
-          await mkdir(path, { recursive: true, mode: 0o700 });
-          // LXD refuses a source reached through a symlink, such as the data directory's run link.
-          await this.checkedLxc(['config', 'device', 'add', this.target(machine.name), deviceName(path), 'disk',
-            `source=${await realpath(path)}`, `path=${path}`, ...(readonly ? ['readonly=true'] : [])]).catch((error: Error) => {
-            if (/not allowed|restricted/i.test(error.message)) throw new Error(`${error.message}（目录不在 LXD 项目的挂载白名单中，本机项目目录请用 egress-bindings.sh prepare-containers --local-root 加入）`);
-            throw /\bport|pci/i.test(error.message)
-              ? new Error(`${error.message}（虚拟机设备端口可能已用尽：每个挂载目录各占一个。调高 limits.max_bus_ports 后需重启该虚拟机）`) : error;
-          });
-          machine.mounts.add(path);
-        }
-      }
-      if (machine.kind === 'slot' && scope.userId) {
-        machine.occupant = scope.userId;
-        this.barriers.ensure(machine, scope.userId);
-      }
+      await attachMounts(this.mountRunner, { dataDir: this.config.dataDir, workspaceDir: this.config.workspaceDir }, machine, scope);
+      if (machine.kind === 'slot' && scope.userId) { machine.occupant = scope.userId; this.barriers.ensure(machine, scope.userId); }
       return machine;
     });
   }
@@ -343,7 +215,6 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   private async applyTimezone(machine: Machine, timezone: string | null, initializing = true): Promise<void> {
     const result = await this.exec(machine, ['bash', '-c', timezoneScript, 'clinavat-timezone', timezone ?? defaultTimezone()]);
-    // Keep older images without tzdata bootable when no explicit zone was saved.
     if (initializing && timezone === null && result.code === missingTimezoneData) return;
     if (result.code !== 0) throw new Error(`槽位虚拟机时区设置失败：${(result.stderr || result.stdout).trim().slice(0, 500)}`);
   }
@@ -360,17 +231,11 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     }));
   }
 
-  async ensureWorkspace(userId: string): Promise<void> {
-    await this.attach({ userId, paths: [] });
-  }
-
+  async ensureWorkspace(userId: string): Promise<void> { await this.attach({ userId, paths: [] }); }
   async binary(_scope: ExecutionScope, name: ExecutionBinary): Promise<string> { return name; }
-
   private command(id: string, cwd: string, binary: string, args: string[]): string[] {
     return ['bash', '-c', runScript, 'clinavat-run', id, String(this.uid), String(this.gid), cwd, binary, ...args];
   }
-
-  // Probes carry no user; a hand-over waits only for user runs.
   private runId(scope: ExecutionScope): string { return `${scope.userId ? 'run' : 'probe'}-${randomBytes(12).toString('hex')}`; }
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
@@ -383,8 +248,6 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     const child = spawn(this.config.lxcBinary, this.execArguments(machine, this.command(id, options.cwd, binary, args), env), {
       env: childEnvironment(), detached: true, stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
-    // The run script reads these lines before the command starts; later writes reach the command itself.
-    // A failed write surfaces as the run's own exit, before the caller attaches its handlers.
     if (secrets.length) child.stdin.on('error', () => undefined);
     for (const [, value] of secrets) child.stdin.write(`${value}\n`);
     delegateSuspension(child, {
@@ -406,7 +269,6 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     const env = { ...guestEnvironment(this.services.plan), ...options.env };
     if (binary === 'mutagen') {
       if (machine.kind !== 'workspace') throw new Error('同步只能在用户的工作区虚拟机中运行');
-      // Autostarted from a run's cgroup, the daemon would be killed when that run ends.
       const started = await this.exec(machine, ['bash', '-c', daemonScript, 'clinavat-daemon', String(this.uid), String(this.gid), binary], { env });
       if (started.code !== 0) throw new Error(`无法启动虚拟机内的同步服务：${started.stderr.trim().slice(0, 300)}`);
     }
@@ -416,12 +278,10 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
 
   async loginCommand(slotId: string, home: string, argv: string[], env: Record<string, string>): Promise<string> {
     const machine = await this.attach({ userId: '', slotId, paths: [home] });
-    const variables = { ...guestEnvironment(this.services.plan), ...env };
-    delete variables.TZ;
-    return [this.config.lxcBinary, 'exec', this.target(machine.name), '--project', this.config.lxdProject, '-t', '--cwd', home,
-      ...Object.entries(variables).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
-      // Login commands can be pasted after a timezone change. Resolve the zone from the guest at execution time.
-      '--', 'setpriv', `--reuid=${this.uid}`, `--regid=${this.gid}`, '--clear-groups', '--', 'env', '-u', 'TZ', ...argv].map(shellQuote).join(' ');
+    return formatLoginCommand({
+      lxcBinary: this.config.lxcBinary, target: this.target(machine.name), project: this.config.lxdProject, home,
+      uid: this.uid, gid: this.gid, env: { ...guestEnvironment(this.services.plan), ...env }, argv,
+    });
   }
 
   async assertReleased(home: string, sessionId?: string): Promise<void> {
@@ -430,34 +290,14 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     const workspaces = await workspaceCgroups(JSON.parse(shown.stdout) as InstanceRow[], this.config.lxdProject,
       name => this.machines.get(name)?.kind === 'workspace');
     await this.local.assertReleased(home, sessionId, workspaces);
-    const holders = [...this.machines.values()].filter(machine => machine.mounts.has(home));
-    for (const machine of holders) {
-      const result = await this.exec(machine, ['bash', '-c', releasedScript, 'clinavat-released', home, sessionId ?? '']);
-      if (result.code !== 0) {
-        // A stopped guest has no processes; anything else cannot be proven safe for a hand-off.
-        if (/not running/i.test(result.stderr)) continue;
-        throw new Error(`无法确认虚拟机是否已释放槽位：${result.stderr.trim().slice(0, 300)}`);
-      }
-      const survivors = result.stdout.trim().split('\n').filter(Boolean);
-      if (survivors.length) throw new Error(`槽位仍被虚拟机内的进程 ${survivors.join(', ')} 使用，已保留用户数据并暂停交接`);
-    }
+    await assertGuestsReleased(this.machines.values(), home, sessionId, releasedScript, (machine, cmd) => this.exec(machine, cmd));
   }
 
-  /**
-   * Unmounts paths that move or change owner. A slot home stays in its own machine: the previous user's files
-   * leave it when the next user takes the slot.
-   */
   async revoke(userId: string, paths: string[]): Promise<void> {
     await this.load();
     for (const machine of this.machines.values()) {
       if (machine.kind === 'workspace' ? machine.owner !== userId : machine.occupant !== userId) continue;
-      await this.serialized(machine, async () => {
-        for (const path of paths) {
-          if (!machine.mounts.has(path) || (machine.kind === 'slot' && path === this.slotHome(machine.owner))) continue;
-          await this.checkedLxc(['config', 'device', 'remove', this.target(machine.name), deviceName(path)]);
-          machine.mounts.delete(path);
-        }
-      });
+      await this.serialized(machine, () => revokeMachineMounts(this.mountRunner, this.config.dataDir, machine, paths));
     }
   }
 
@@ -472,26 +312,21 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
       }
     };
     const machine = this.machines.get(name);
-    if (machine) {
-      await this.serialized(machine, async () => {
-        await operation();
-        this.barriers.close(machine);
-        machine.prepared = false;
-        if (remove) this.machines.delete(name);
-      });
-    } else await operation();
+    if (!machine) { await operation(); return; }
+    await this.serialized(machine, async () => {
+      await operation(); this.barriers.close(machine); machine.prepared = false;
+      if (remove) this.machines.delete(name);
+    });
   }
 
   async resources() {
     await this.load();
     const [rows, project] = await Promise.all([
       this.managedInstances(),
-      // A client restricted to the project may still be refused its state; the quota is then simply not shown.
       this.lxc(['project', 'info', `${this.config.lxdRemote}:${this.config.lxdProject}`, '--format', 'json'], 15_000).catch(() => undefined),
     ]);
     return {
-      machines: rows.map(row => describeResources(row, planResources(this.target(row.name), row, this.services.resources(row.kind)),
-        this.resourceErrors.get(row.name))),
+      machines: rows.map(row => describeResources(row, planResources(this.target(row.name), row, this.services.resources(row.kind)), this.resourceErrors.get(row.name))),
       quota: project?.code === 0 ? parseProjectQuota(project.stdout) : null,
     };
   }

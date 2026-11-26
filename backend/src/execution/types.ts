@@ -5,6 +5,13 @@ import type { MachineKind } from './machine-plan.js';
 export type ExecutionKind = 'process' | 'vm';
 export type ExecutionBinary = 'claude' | 'codex' | 'agy' | 'mutagen' | 'ssh';
 
+export interface ExecutionMount {
+  source: string;
+  /** Absolute POSIX path inside the guest; defaults to `source`. */
+  target?: string;
+  readonly?: boolean;
+}
+
 /**
  * What a process may touch. A VM host mounts each path at the same absolute location in the owner's
  * guest, so database records and native transcripts keep the same paths in both modes.
@@ -17,6 +24,8 @@ export interface ExecutionScope {
   paths: string[];
   /** Files the Hub writes and reads back; a guest must not be able to replace them. */
   readOnlyPaths?: string[];
+  /** Additional mounts that may map a host source directory to a distinct guest target path. */
+  mounts?: ExecutionMount[];
 }
 
 export interface ExecutionSpawnOptions {

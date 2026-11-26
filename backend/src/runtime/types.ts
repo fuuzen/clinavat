@@ -19,7 +19,7 @@ export interface DevHost {
   host: string;
   port: number;
   username: string;
-  kind?: 'ssh' | 'local';
+  kind?: 'ssh' | 'local' | 'client';
   jump_host?: string | null;
   jump_port?: number | null;
   jump_username?: string | null;
@@ -34,6 +34,8 @@ export interface WorkspaceProject {
   sync_name: string;
   path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
+  client_mode?: 'direct' | 'mirrored';
+  vm_path?: string | null;
   sync_rules: string | null;
 }
 
@@ -67,11 +69,21 @@ export function isValidSshUsername(username: string): boolean {
   return /^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}$/.test(username);
 }
 
+export function assertSshHost(host: DevHost): void {
+  if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
+  if (host.kind && host.kind !== 'ssh') throw new Error('仅 SSH 开发机支持此连接方式');
+}
+
 export function assertHostOwner(userId: string, host: DevHost): void {
   assertIdentifier(userId);
   assertIdentifier(host.id);
   if (host.user_id !== userId) throw new Error('无权访问此开发机');
   if (host.kind === 'local') return;
+  if (host.kind === 'client') {
+    if (!/^[^\s\0-\x1f\x7f]{1,253}$/.test(host.host)) throw new Error('开发机地址格式无效');
+    if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535) throw new Error('开发机端口无效');
+    return;
+  }
   if (!isValidSshHost(host.host)) throw new Error('开发机地址格式无效');
   if (!isValidSshUsername(host.username)) throw new Error('SSH 用户名格式无效');
   if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535) throw new Error('SSH 端口无效');

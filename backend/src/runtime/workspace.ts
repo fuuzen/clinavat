@@ -9,7 +9,7 @@ import { SshManager } from './ssh.js';
 import { loadSyncPolicy } from './sync-policy.js';
 import { pruneChangedPaths } from './sync-rules.js';
 import { parseSyncProgress, parseSyncStatus, summarizeSyncFailure, syncBlockers, type SkippedLinks, type SyncProgress } from './sync-status.js';
-import { assertHostOwner, assertIdentifier, assertRemotePath, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
+import { assertHostOwner, assertIdentifier, assertRemotePath, assertSshHost, type DevHost, type RuntimeConfig, type WorkspaceProject } from './types.js';
 import type { ExecutionHost, ExecutionScope } from '../execution/types.js';
 
 interface SessionSummary {
@@ -70,10 +70,12 @@ export class WorkspaceManager {
   async refreshExecutor(project: WorkspaceProject, host: DevHost): Promise<void> {
     this.validate(project);
     assertHostOwner(project.user_id, host);
+    if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
     if ((host.kind === 'local') !== (project.execution_mode === 'local')) throw new Error('本机项目与开发机类型不匹配');
     if (project.execution_mode === 'local') {
       return;
     }
+    assertSshHost(host);
     const environment = await this.ssh.mutagenEnvironment(project.user_id);
     const binDirectory = join(project.local_path, '.bin');
     await mkdir(binDirectory, {recursive: true, mode: 0o700});
@@ -106,11 +108,13 @@ export class WorkspaceManager {
     this.validate(project);
     assertHostOwner(userId, host);
     if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
+    if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
     if (host.kind === 'local' || project.execution_mode === 'local') {
       if (host.kind !== 'local' || project.execution_mode !== 'local') throw new Error('本机项目与开发机类型不匹配');
       await this.checkLocalDirectory(project);
       return;
     }
+    assertSshHost(host);
     if (project.sync_rules === null) throw new Error('项目排除规则尚未迁移，请重新同步');
     await this.ssh.addHost(userId, host);
     const policy = await loadSyncPolicy(this.config, this.ssh, userId, host, project.remote_path, project.sync_rules);
@@ -315,7 +319,9 @@ export class WorkspaceManager {
     this.validate(project);
     assertHostOwner(userId, host);
     if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
+    if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
     if ((host.kind === 'local') !== (project.execution_mode === 'local')) throw new Error('本机项目与开发机类型不匹配');
+    if (project.execution_mode !== 'local') assertSshHost(host);
     await this.flush(project);
     const command = "git rev-parse --abbrev-ref HEAD && printf '\\0' && git status --short && printf '\\0' && git diff --no-ext-diff --no-color HEAD -- .";
     const result = project.execution_mode === 'local'

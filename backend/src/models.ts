@@ -23,15 +23,30 @@ export interface Slot {
 }
 export interface Host {
   id: string; user_id: string; name: string; host: string; port: number; username: string;
-  kind: 'ssh' | 'local';
+  kind: 'ssh' | 'local' | 'client';
   status: string; created_at: string;
   jump_host?: string | null; jump_port?: number | null; jump_username?: string | null;
+}
+export interface ClientDevice {
+  id: string;
+  dev_host_id: string;
+  user_id: string;
+  public_key: string;
+  platform: string;
+  arch: string;
+  os_version: string;
+  default_shell: string;
+  homedir: string;
+  last_seen_at: string | null;
+  created_at: string;
 }
 export interface Project {
   id: string; user_id: string; dev_host_id: string; name: string; remote_path: string;
   local_path: string; sync_name: string; sync_status: string; created_at: string;
   path_mode: 'auto' | 'direct' | 'bwrap' | 'symlink';
   execution_mode: 'direct' | 'bwrap' | 'symlink' | 'local' | null;
+  client_mode?: 'direct' | 'mirrored';
+  vm_path?: string | null;
   sync_rules: string | null;
   sync_skipped_links?: string | null;
   /** Set on a child agent's worktree project: its master project, and where its checkout lives. */

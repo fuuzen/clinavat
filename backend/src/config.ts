@@ -43,6 +43,8 @@ const environment = z.object({
   CLINAVAT_IMAGE_BUILDER_ADDRESS: z.ipv4().default('10.31.0.9'),
   CLINAVAT_VM_BRIDGE: z.string().regex(/^\d+\.\d+\.\d+\.\d+\/\d+$/).default('10.31.0.1/24'),
   CLINAVAT_HOST_SSH_PORT: z.coerce.number().int().min(1).max(65535).default(22),
+  CLINAVAT_CLIENT_SSH_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
+  CLINAVAT_CLIENT_SSH_HOST: z.string().trim().min(1).optional(),
   CLINAVAT_GATEWAY_HOST: z.string().trim().regex(/^[A-Za-z0-9.:-]*$/, 'CLINAVAT_GATEWAY_HOST 必须是主机名或 IP').default(''),
   CLINAVAT_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(22),
   CLINAVAT_GATEWAY_USER: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('root'),
@@ -97,6 +99,8 @@ export const config = {
   /** The host's address on the VM bridge and the bridge's prefix length, as LXD reports `ipv4.address`. */
   vmBridge: environment.CLINAVAT_VM_BRIDGE,
   hostSshPort: environment.CLINAVAT_HOST_SSH_PORT,
+  clientSshPort: environment.CLINAVAT_CLIENT_SSH_PORT,
+  clientSshHost: environment.CLINAVAT_CLIENT_SSH_HOST,
   gateway: environment.CLINAVAT_GATEWAY_HOST ? {
     host: environment.CLINAVAT_GATEWAY_HOST, port: environment.CLINAVAT_GATEWAY_PORT, username: environment.CLINAVAT_GATEWAY_USER,
   } : undefined,

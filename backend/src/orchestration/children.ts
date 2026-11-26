@@ -4,13 +4,19 @@ import type { z } from 'zod';
 import { sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Project, type Session, type Slot, type User } from '../models.js';
 import { workspacePath } from '../agent/environment.js';
-import { engineProfiles, type AgentEngine } from '../agent/engines.js';
+import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
 import { getPermissionMode, permissionModes, type PermissionMode } from '../agent/permissions.js';
 import { availableSlots, slotForUser } from '../accounts/access.js';
 import { assertAutomaticSlot } from '../accounts/selection.js';
 import { selectedSlotId } from '../routes/session-messages.js';
 import { createSession, sessionInput, stopSession, type ChildAgent } from '../routes/sessions.js';
+import type { WorkBoard } from './board.js';
+import { orchestrationConstants } from './limits.js';
+import type { ProjectMemory } from './memory.js';
+import type { ReportDelivery } from './reports.js';
+import type { AgentRoster } from './roster.js';
+import { buildEngineSlotSummaries, type SlotUsageRefreshResult } from './slot-usage.js';
 import type { toolInputs } from './tools.js';
 import type { AgentTasks } from './tasks.js';
 
@@ -27,6 +33,22 @@ export function engineSlots(context: Context, userId: string, engine: AgentEngin
     const user = context.config.credentials.activeUserId(slot.id);
     return { slot, usable: slot.status === 'IDLE' && (!user || user === userId), inUseByOther: !!user && user !== userId };
   });
+}
+
+/** Engines with at least one usable slot for the user, falling back to any configured engine. */
+export function availableEngines(context: Context, userId: string): AgentEngine[] {
+  const usable = agentEngines.filter(engine => engineSlots(context, userId, engine).some(entry => entry.usable));
+  if (usable.length) return usable;
+  return agentEngines.filter(engine => engineSlots(context, userId, engine).length > 0);
+}
+
+export function engineAvailabilitySummary(context: Context, userId: string): string[] {
+  return agentEngines.map(engine => {
+    const slots = engineSlots(context, userId, engine);
+    if (!slots.length) return null;
+    const usable = slots.filter(entry => entry.usable).length;
+    return `${engine} (${usable}/${slots.length} usable)`;
+  }).filter((entry): entry is string => !!entry);
 }
 
 function rankManualSlots(
@@ -311,4 +333,70 @@ export async function reconfigureChild(
     if (updated.reasoning_effort !== current.reasoning_effort) changes.push(`effort=${updated.reasoning_effort ?? 'default'}`);
     return { child: updated, notes: changes.length ? [`Updated child runtime settings before continuing: ${changes.join(', ')}.`] : [] };
   });
+}
+
+export function worktreeView(context: Context, child: Session) {
+  const project = context.store.get<Project>('SELECT * FROM projects WHERE id=?', child.project_id);
+  if (!project?.parent_project_id) return null;
+  return {
+    branch: project.sync_status === 'DORMANT' ? null : project.worktree_branch ?? null,
+    state: project.sync_status === 'DORMANT' ? 'clean' : project.worktree_state ?? 'working',
+    conflicts: project.worktree_conflicts ? JSON.parse(project.worktree_conflicts) as string[] : [],
+  };
+}
+
+export interface OrchestratorViewDeps<TDiscussions> {
+  context: Context;
+  tasks: AgentTasks;
+  board: WorkBoard;
+  memory: ProjectMemory;
+  reports: ReportDelivery;
+  discussions: { view(masterId: string): TDiscussions };
+}
+
+export function buildOrchestratorView<TDiscussions>(deps: OrchestratorViewDeps<TDiscussions>, masterId: string) {
+  const master = deps.context.store.get<Pick<Session, 'project_id'>>('SELECT project_id FROM sessions WHERE id=?', masterId);
+  const pending = deps.tasks.pending(masterId);
+  return {
+    // Participants of discussions show in their discussion's card.
+    agents: deps.tasks.children(masterId).filter(child => !child.discussion_id).map(child => {
+      const latest = deps.tasks.latest(child.id);
+      return {
+        sessionId: child.id, name: child.agent_name ?? child.title, engine: child.engine, model: child.model, slotId: child.slot_id,
+        access: child.agent_access ?? 'write', status: child.status, archived: !!child.archived_at, ephemeral: child.agent_ephemeral === 1,
+        running: deps.tasks.running(child.id).length > 0, directory: child.agent_directory, isolation: child.agent_isolation ?? 'shared',
+        worktree: child.agent_isolation === 'worktree' ? worktreeView(deps.context, child) : null,
+        lastTask: latest ? { status: latest.status, finishedAt: latest.finished_at } : null,
+        pendingReports: pending.filter(task => task.child_session_id === child.id).length,
+      };
+    }),
+    ...deps.board.list(masterId),
+    memories: master ? deps.memory.view(master.project_id) : [],
+    discussions: deps.discussions.view(masterId),
+    pendingReports: pending.length,
+    reportsPaused: pending.length > 0 && deps.reports.atQuota(masterId),
+  };
+}
+
+export function buildAgentListResult<TDiscussions>(
+  deps: OrchestratorViewDeps<TDiscussions> & { roster: AgentRoster },
+  user: User,
+  master: Session,
+  refreshResult?: SlotUsageRefreshResult,
+) {
+  const view = buildOrchestratorView(deps, master.id);
+  return {
+    engines: buildEngineSlotSummaries(deps.context, user.id),
+    ...(refreshResult ? { refreshResult } : {}),
+    // Start one with start_agent's profile; the master may still override any field.
+    roster: deps.roster.effective(master, availableEngines(deps.context, user.id)),
+    children: view.agents.filter(child => !child.archived)
+      .map(({ name, engine, slotId, model, access, status, running, ephemeral, worktree }) => ({
+        name, engine, slotId, model, access, status, running, ...(ephemeral ? { ephemeral: true } : {}),
+        ...(worktree && worktree.state !== 'clean' ? { worktree: worktree.state } : {}),
+      })),
+    archivedChildren: view.agents.filter(child => child.archived).length,
+    ...deps.board.list(master.id),
+    limits: { ...deps.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
+  };
 }
