@@ -1,5 +1,5 @@
-import type { AgentEngine } from '../agent/engines.js';
-import { orchestrationConstants } from './limits.js';
+import type { AgentEngine } from '../../agent/engines.js';
+import { orchestrationConstants } from '../limits.js';
 
 export type DiscussionFormat = 'council' | 'debate' | 'review';
 

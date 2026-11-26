@@ -1,21 +1,22 @@
 import type { Context } from '../context.js';
 import { projectFor, sessionFor, withResourceLocks } from '../context.js';
 import { HttpError, type Project, type Session, type User } from '../models.js';
-import { agentEngines, type AgentEngine } from '../agent/engines.js';
 import { canInspectProject, orchestrationModeOf, orchestrates } from '../agent/orchestration-tools.js';
 import type { AgentContext, AgentEvent, HubToolResult, OrchestrationHost } from '../agent/types.js';
 import { messageInput, sendSessionMessage } from '../routes/session-messages.js';
 import { setSessionArchived, stopSession } from '../routes/sessions.js';
 import { WorkBoard, type WorkItemRow } from './board.js';
-import { assertChildRoom, assertNewName, childDirectory, createChild, engineSlots, reconfigureChild, type Placement } from './children.js';
+import {
+  assertChildRoom, assertNewName, availableEngines, buildAgentListResult, buildOrchestratorView, childDirectory,
+  createChild, engineAvailabilitySummary, reconfigureChild, worktreeView, type Placement,
+} from './children.js';
 import { ProjectInspector } from './inspect.js';
-import { delegationPrompt, reportBlock } from './instructions.js';
-import { orchestrationConstants } from './limits.js';
+import { conflictHandoffPrompt, delegationPrompt, formatOrchestrationBriefing, reportBlock } from './instructions.js';
 import { ProjectMemory } from './memory.js';
 import { ReportDelivery, reportSource } from './reports.js';
-import { Discussions, type DiscussionInput } from './discussions.js';
+import { Discussions, type DiscussionInput } from './discussions/service.js';
 import { AgentRoster } from './roster.js';
-import { buildEngineSlotSummaries, refreshSlotUsage, type SlotUsageRefreshResult } from './slot-usage.js';
+import { refreshSlotUsage } from './slot-usage.js';
 import { AgentTasks } from './tasks.js';
 import { hubTools, isToolName, toolInputs, type ToolName } from './tools.js';
 
@@ -60,37 +61,17 @@ export class Orchestrator implements OrchestrationHost {
   briefing(agent: AgentContext): string {
     const master = this.context.store.get<Session>('SELECT * FROM sessions WHERE id=? AND user_id=?', agent.session.id, agent.user.id);
     if (!master || orchestrationModeOf(master) === 'off') return '';
-    const available = this.availableEngines(master.user_id);
-    const engineSummary = agentEngines.map(engine => {
-      const slots = engineSlots(this.context, master.user_id, engine);
-      if (!slots.length) return null;
-      const usable = slots.filter(entry => entry.usable).length;
-      return `${engine} (${usable}/${slots.length} usable)`;
-    }).filter((entry): entry is string => !!entry);
-    const roster = this.roster.effective(master, available);
-    const children = this.view(master.id).agents.filter(child => !child.archived);
-    const limits = this.context.orchestrationSettings.view();
-    const lines = [
-      '### Current Orchestration Snapshot',
-      `- Engines: ${engineSummary.length ? engineSummary.join(', ') : 'none available'}`,
-      `- Limits: up to ${limits.runningPerMaster} running children (${limits.worktreeWritersPerMaster} parallel worktree writers)`,
-      '- Profiles (pass via `profile` in `start_agent`):',
-      ...roster.map(profile => `  - \`${profile.name}\` [${profile.engine}, ${profile.access}${profile.builtIn ? ', built-in' : ''}]: ${(profile.role ?? 'custom role').replace(/\s+/g, ' ').slice(0, 140)}`),
-      ...this.memory.briefingLines(master.project_id),
-      ...this.board.briefingLines(master.id),
-    ];
-    if (children.length) {
-      lines.push('- Existing children in this conversation:');
-      for (const child of children.slice(-12)) {
-        const worktree = child.worktree?.state && child.worktree.state !== 'clean' ? `, worktree:${child.worktree.state}` : '';
-        lines.push(`  - \`${child.name}\` [${child.engine}, ${child.access}, ${child.running ? 'running' : child.status}${worktree}]`);
-      }
-    }
-    return lines.join('\n');
+    return formatOrchestrationBriefing({
+      engineSummary: engineAvailabilitySummary(this.context, master.user_id),
+      limits: this.context.orchestrationSettings.view(),
+      roster: this.roster.effective(master, availableEngines(this.context, master.user_id)),
+      memoryLines: this.memory.briefingLines(master.project_id),
+      boardLines: this.board.briefingLines(master.id),
+      children: this.view(master.id).agents.filter(child => !child.archived),
+    });
   }
 
   observe(event: AgentEvent): void { this.reports.observe(event); }
-
   clearInspectCache(id: string): void { this.inspector.clearSession(id); }
 
   sessionDeleted(id: string, masterId: string | null): void {
@@ -115,16 +96,17 @@ export class Orchestrator implements OrchestrationHost {
     }
   }
 
-  private availableEngines(userId: string): AgentEngine[] {
-    const usable = agentEngines.filter(engine => engineSlots(this.context, userId, engine).some(entry => entry.usable));
-    if (usable.length) return usable;
-    return agentEngines.filter(engine => engineSlots(this.context, userId, engine).length > 0);
-  }
-
   private assertNotInMaintenance(action: string): void {
     if (this.context.maintenance.isEnabled()) {
       throw new HttpError(503, `系统正在维护中，暂不支持${action}：${this.context.maintenance.blockMessage()}`);
     }
+  }
+
+  private viewDeps() {
+    return {
+      context: this.context, tasks: this.tasks, board: this.board, memory: this.memory,
+      reports: this.reports, discussions: this.discussions, roster: this.roster,
+    };
   }
 
   private async run(tool: Exclude<ToolName, 'inspect'>, user: User, master: Session, args: unknown, signal: AbortSignal,
@@ -136,11 +118,11 @@ export class Orchestrator implements OrchestrationHost {
         const refreshResult = input.refreshUsage?.length
           ? await refreshSlotUsage(this.context, user.id, input.refreshUsage, signal)
           : undefined;
-        return json(this.list(user, master, refreshResult));
+        return json(buildAgentListResult(this.viewDeps(), user, master, refreshResult));
       }
       case 'start_agent': {
         this.assertNotInMaintenance('派生新的子智能体');
-        const input = this.roster.resolve(master, toolInputs.start_agent.parse(args), this.availableEngines(user.id));
+        const input = this.roster.resolve(master, toolInputs.start_agent.parse(args), availableEngines(this.context, user.id));
         if (planning && input.access === 'write') throw new HttpError(409, 'Plan 模式下只能派生只读子智能体');
         assertNewName(this.context, master, input.name);
         const item = input.task ? this.board.resolve(master.id, input.task)
@@ -299,7 +281,7 @@ export class Orchestrator implements OrchestrationHost {
       throw new HttpError(409, `子智能体 ${child.agent_name} 仍有未送达的汇报，请等待送达后再归档`);
     }
     if (child.agent_isolation === 'worktree') {
-      const worktree = this.worktreeView(child);
+      const worktree = worktreeView(this.context, child);
       if (worktree && worktree.state !== 'clean') {
         throw new HttpError(409, `子智能体 ${child.agent_name} 仍有待处理的 worktree 分支修改（${worktree.state}），请先 merge_agent 或 discard_agent`);
       }
@@ -340,14 +322,11 @@ export class Orchestrator implements OrchestrationHost {
     const project = this.worktrees.project(child.project_id);
     if (project.worktree_state !== 'conflict') throw new HttpError(409, '该子智能体没有待处理的合并冲突');
     const files = JSON.parse(project.worktree_conflicts ?? '[]') as string[];
-    const resolution = orchestrationModeOf(master) === 'super'
-      ? `The user asks you to coordinate resolving them. Ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch and resolve the conflicts, then call merge_agent again.`
-      : 'The user asks you to resolve them. Either call merge_agent with onConflict "leave", resolve the markers, commit, and call discard_agent to clean up; '
-        + `or ask ${child.agent_name} with message_agent to merge the latest commit of the project into its branch, then call merge_agent again.`;
-    const text = `Merging the branch ${project.worktree_branch} of ${child.agent_name} into the project stopped on conflicts in: ${files.join(', ') || 'unknown files'}. ${resolution}`;
+    const superAgent = orchestrationModeOf(master) === 'super';
+    const text = conflictHandoffPrompt(project.worktree_branch, child.agent_name, files, superAgent);
     await sendSessionMessage(this.context, user, master.id, messageInput.parse({ content: reportBlock({ name: child.agent_name ?? child.id,
       engine: child.engine, model: child.model, status: 'conflict', task: '合并冲突', text },
-    { superAgent: orchestrationModeOf(master) === 'super' }), mode: 'queue' }), { source: 'report', prompt: content => content });
+    { superAgent }), mode: 'queue' }), { source: 'report', prompt: content => content });
   }
 
   async discard(user: User, masterId: string, childId: string): Promise<void> {
@@ -416,55 +395,7 @@ export class Orchestrator implements OrchestrationHost {
     }
   }
 
-  private list(user: User, master: Session, refreshResult?: SlotUsageRefreshResult) {
-    const view = this.view(master.id);
-    return {
-      engines: buildEngineSlotSummaries(this.context, user.id),
-      ...(refreshResult ? { refreshResult } : {}),
-      // Start one with start_agent's profile; the master may still override any field.
-      roster: this.roster.effective(master, this.availableEngines(user.id)),
-      children: view.agents.filter(child => !child.archived)
-        .map(({ name, engine, slotId, model, access, status, running, ephemeral, worktree }) => ({
-          name, engine, slotId, model, access, status, running, ...(ephemeral ? { ephemeral: true } : {}),
-          ...(worktree && worktree.state !== 'clean' ? { worktree: worktree.state } : {}),
-        })),
-      archivedChildren: view.agents.filter(child => child.archived).length,
-      ...this.board.list(master.id),
-      limits: { ...this.context.orchestrationSettings.view(), waitSeconds: orchestrationConstants.waitSeconds },
-    };
-  }
-
-  view(masterId: string) {
-    const master = this.context.store.get<Pick<Session, 'project_id'>>('SELECT project_id FROM sessions WHERE id=?', masterId);
-    const pending = this.tasks.pending(masterId);
-    return {
-      // Participants of discussions show in their discussion's card.
-      agents: this.tasks.children(masterId).filter(child => !child.discussion_id).map(child => {
-        const latest = this.tasks.latest(child.id);
-        return {
-          sessionId: child.id, name: child.agent_name ?? child.title, engine: child.engine, model: child.model, slotId: child.slot_id,
-          access: child.agent_access ?? 'write', status: child.status, archived: !!child.archived_at, ephemeral: child.agent_ephemeral === 1,
-          running: this.tasks.running(child.id).length > 0, directory: child.agent_directory, isolation: child.agent_isolation ?? 'shared',
-          worktree: child.agent_isolation === 'worktree' ? this.worktreeView(child) : null,
-          lastTask: latest ? { status: latest.status, finishedAt: latest.finished_at } : null,
-          pendingReports: pending.filter(task => task.child_session_id === child.id).length,
-        };
-      }),
-      ...this.board.list(masterId),
-      memories: master ? this.memory.view(master.project_id) : [],
-      discussions: this.discussions.view(masterId),
-      pendingReports: pending.length,
-      reportsPaused: pending.length > 0 && this.reports.atQuota(masterId),
-    };
-  }
-
-  private worktreeView(child: Session) {
-    const project = this.context.store.get<Project>('SELECT * FROM projects WHERE id=?', child.project_id);
-    if (!project?.parent_project_id) return null;
-    return { branch: project.sync_status === 'DORMANT' ? null : project.worktree_branch ?? null,
-      state: project.sync_status === 'DORMANT' ? 'clean' : project.worktree_state ?? 'working',
-      conflicts: project.worktree_conflicts ? JSON.parse(project.worktree_conflicts) as string[] : [] };
-  }
+  view(masterId: string) { return buildOrchestratorView(this.viewDeps(), masterId); }
 
   /** Stops the master and every child that is still working. */
   async stopAll(userId: string, masterId: string): Promise<void> {

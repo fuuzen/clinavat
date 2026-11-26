@@ -101,3 +101,40 @@ export function reportBlock(report: ReportSource, { superAgent = false, stored =
   const text = trimMiddle(report.text, limit, hint, superAgent);
   return `<clinavat_agent_report agent="${attribute(report.name)}" engine="${report.engine}" model="${attribute(report.model ?? 'default')}" status="${report.status}" task="${attribute(report.task.slice(0, 120))}">\n${text}\n</clinavat_agent_report>`;
 }
+
+export interface OrchestrationBriefingData {
+  engineSummary: string[];
+  limits: { runningPerMaster: number; worktreeWritersPerMaster: number };
+  roster: { name: string; engine: AgentEngine; access: string; builtIn?: boolean; role?: string | null }[];
+  memoryLines: string[];
+  boardLines: string[];
+  children: { name: string; engine: AgentEngine; access: string; status: string; running: boolean; worktree?: { state: string } | null }[];
+}
+
+export function formatOrchestrationBriefing(data: OrchestrationBriefingData): string {
+  const lines = [
+    '### Current Orchestration Snapshot',
+    `- Engines: ${data.engineSummary.length ? data.engineSummary.join(', ') : 'none available'}`,
+    `- Limits: up to ${data.limits.runningPerMaster} running children (${data.limits.worktreeWritersPerMaster} parallel worktree writers)`,
+    '- Profiles (pass via `profile` in `start_agent`):',
+    ...data.roster.map(profile => `  - \`${profile.name}\` [${profile.engine}, ${profile.access}${profile.builtIn ? ', built-in' : ''}]: ${(profile.role ?? 'custom role').replace(/\s+/g, ' ').slice(0, 140)}`),
+    ...data.memoryLines,
+    ...data.boardLines,
+  ];
+  if (data.children.length) {
+    lines.push('- Existing children in this conversation:');
+    for (const child of data.children.slice(-12)) {
+      const worktree = child.worktree?.state && child.worktree.state !== 'clean' ? `, worktree:${child.worktree.state}` : '';
+      lines.push(`  - \`${child.name}\` [${child.engine}, ${child.access}, ${child.running ? 'running' : child.status}${worktree}]`);
+    }
+  }
+  return lines.join('\n');
+}
+
+export function conflictHandoffPrompt(branch: string | null | undefined, agentName: string | null, files: string[], superAgent: boolean): string {
+  const resolution = superAgent
+    ? `The user asks you to coordinate resolving them. Ask ${agentName} with message_agent to merge the latest commit of the project into its branch and resolve the conflicts, then call merge_agent again.`
+    : 'The user asks you to resolve them. Either call merge_agent with onConflict "leave", resolve the markers, commit, and call discard_agent to clean up; '
+      + `or ask ${agentName} with message_agent to merge the latest commit of the project into its branch, then call merge_agent again.`;
+  return `Merging the branch ${branch} of ${agentName} into the project stopped on conflicts in: ${files.join(', ') || 'unknown files'}. ${resolution}`;
+}

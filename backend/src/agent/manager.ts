@@ -3,25 +3,27 @@ import { startClaude } from './claude/run.js';
 import { startCodex } from './codex/run.js';
 import { startAntigravity } from './antigravity/run.js';
 import { engineProfiles, type AgentEngine } from './engines.js';
-import { getPermissionMode } from './permissions.js';
 import { UserInputRequests } from './user-input.js';
-import { RunControl } from './run-control.js';
 import { HttpError } from '../models.js';
-import { awaitApproval, shellHash } from './run-context.js';
+import {
+  attachRunCompletion, createActiveRun, createCredentialLeaseTracker, handleStartupFailure, prepareRunServices,
+} from './run-context.js';
 import { RuntimeFailovers } from './runtime-failover.js';
 import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
-import { acceptsResidentContext, buildAgentErrorPayload, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf, settingsKey,
-  summarizeActiveRuns, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
+import {
+  acceptsResidentContext, buildAgentErrorPayload, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf,
+  summarizeActiveRuns, type ActiveRun, type RunContinuation, type RuntimeView,
+} from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
-import type { AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, ApprovalDecision, InputMode, MessageSource, QueuedInput,
-  RunServices, TurnOrigin, TurnOutcome } from './types.js';
+import type {
+  AgentCallbacks, AgentConfig, AgentContext, AgentPrompt, AgentRun, InputMode, MessageSource, QueuedInput,
+  RunServices, TurnOrigin, TurnOutcome,
+} from './types.js';
 import type { CodexGoal, CodexGoalChange } from './codex/goal.js';
 
 const starters: Record<AgentEngine, (services: RunServices, prompt: AgentPrompt, signal: AbortSignal) => Promise<AgentRun>> = {
-  claude: startClaude,
-  codex: startCodex,
-  antigravity: startAntigravity,
+  claude: startClaude, codex: startCodex, antigravity: startAntigravity,
 };
 
 /**
@@ -47,30 +49,17 @@ export class AgentManager {
   /** A CLI process exists for the conversation, even if it is only waiting for the next message. */
   isBusy(sessionId: string): boolean { return this.active.has(sessionId) || this.failovers.has(sessionId); }
   readUsage(slot: UsageSlot) { return readResidentUsage(this.active, this.config, slot); }
-  isProjectBusy(projectId: string): boolean {
-    return this.failovers.matches({ projectId }) || [...this.active.values()].some(state => state.projectId === projectId);
-  }
-  isUserBusy(userId: string): boolean {
-    return this.failovers.matches({ userId }) || [...this.active.values()].some(state => state.userId === userId);
-  }
+  isProjectBusy(projectId: string): boolean { return this.failovers.matches({ projectId }) || [...this.active.values()].some(state => state.projectId === projectId); }
+  isUserBusy(userId: string): boolean { return this.failovers.matches({ userId }) || [...this.active.values()].some(state => state.userId === userId); }
+  activitySummary(): { activeSessions: number; idleResidentSessions: number } { return summarizeActiveRuns(this.active, sessionId => this.failovers.has(sessionId)); }
+  hasBackgroundWork(sessionId: string): boolean { return hasResidentBackgroundWork(this.active.get(sessionId)); }
+  accepts(sessionId: string, context: AgentContext): boolean { return acceptsResidentContext(this.active.get(sessionId), context, this.failovers.has(sessionId)); }
 
   view(sessionId: string): RuntimeView {
     const state = this.active.get(sessionId);
     const switching = this.failovers.view(sessionId);
     if (switching && (this.failovers.has(sessionId) || !state)) return switching;
     return runtimeViewOf(state);
-  }
-
-  activitySummary(): { activeSessions: number; idleResidentSessions: number } {
-    return summarizeActiveRuns(this.active, sessionId => this.failovers.has(sessionId));
-  }
-
-  /** No turn is open, but the process still has work of its own, such as a command agy moved to the background. */
-  hasBackgroundWork(sessionId: string): boolean { return hasResidentBackgroundWork(this.active.get(sessionId)); }
-
-  /** The resident process can take a new turn with these settings without restarting. */
-  accepts(sessionId: string, context: AgentContext): boolean {
-    return acceptsResidentContext(this.active.get(sessionId), context, this.failovers.has(sessionId));
   }
 
   /** `images` are the IDs of the images attached to the first message. */
@@ -80,150 +69,36 @@ export class AgentManager {
     if (context.slot.engine !== context.session.engine) throw new Error('当前账号槽位未启用此引擎');
     if (this.active.has(context.session.id)) throw new Error('当前会话正在运行');
     const input = { text: prompt, images: this.callbacks.loadImages(context.session.id, images) };
-    let startupDone!: () => void;
-    const startup = new Promise<void>((resolve) => { startupDone = resolve; });
     // Turn IDs change on this copy as the process moves from turn to turn.
     context = { ...context, project: { ...context.project }, session: { ...context.session } };
     const sessionId = context.session.id;
     if (!context.session.native_session_id || context.session.command === 'compact') this.config.orchestration?.clearInspectCache(sessionId);
-    const state: ActiveRun = { userId: context.user.id, projectId: context.project.id, slotId: context.slot.id, context,
-      settings: settingsKey(context), abort: new AbortController(), startup, control: new RunControl(),
-      turnActive: true, queue: continuation?.queue ?? this.failovers.takeQueue(sessionId),
-      attemptedSlotIds: continuation?.attemptedSlotIds ?? [], flushes: Promise.resolve() };
+    const queue = continuation?.queue ?? this.failovers.takeQueue(sessionId);
+    const { state, startupDone } = createActiveRun(context, queue, continuation, this.callbacks, run => this.active.get(sessionId) === run);
     this.active.set(sessionId, state);
-    state.control.subscribe(status => {
-      if (state.finishing || state.abort.signal.aborted || !state.turnActive || this.active.get(sessionId) !== state) return;
-      void this.callbacks.updateSession(sessionId, { status: state.halted ? 'error' : status });
-      this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId: context.session.turn_id, status } });
-    });
-    let expectedShellHash: string;
-    let releaseLease: (() => Promise<void>) | undefined;
-    let credentialFailure = false;
-    const releaseCredentials = async () => {
-      const release = releaseLease;
-      releaseLease = undefined;
-      try { await release?.(); }
-      catch (error) {
-        credentialFailure = true;
-        state.credentialError = error instanceof Error ? error : new Error('槽位运行状态回收失败');
-        throw state.credentialError;
-      }
+    const lease = createCredentialLeaseTracker(state);
+    const teardownHooks = {
+      callbacks: this.callbacks, lease, isClosing: () => this.closing,
+      retainQueue: (id: string, items: QueuedInput[]) => this.failovers.retainQueue(id, items),
+      clearActive: (id: string, run: ActiveRun) => { if (this.active.get(id) === run) this.active.delete(id); },
+      emitError: (run: ActiveRun, message: string) => this.emitError(run, message),
+      publish: (run: ActiveRun) => this.publish(run),
     };
     try {
-      await this.config.egress?.assertBound(context.slot.id);
-      releaseLease = await this.config.credentials.acquire(context);
-      if (state.abort.signal.aborted) throw new Error('会话已停止');
-      context.project.host_shell = await this.config.hostShell?.(context) ?? null;
-      expectedShellHash = await shellHash(context);
-      state.verifyShell = async () => {
-        if (state.abort.signal.aborted) throw new Error('会话已停止');
-        if (await shellHash(context) !== expectedShellHash) throw new Error('项目执行环境已被修改，请重新打开项目以恢复');
-        if (state.abort.signal.aborted) throw new Error('会话已停止');
-      };
-      if (context.session.slot_mode === 'auto') await this.callbacks.verifyAutomaticSlot?.(context);
-      if (state.abort.signal.aborted) throw new Error('会话已停止');
-      const services: RunServices = {
-        config: this.config,
-        context,
-        control: state.control,
-        event: (type, payload) => this.callbacks.event({ type, sessionId,
-          payload: payload && typeof payload === 'object' ? { ...payload, turnId: context.session.turn_id } : payload }),
-        update: async (fields) => {
-          await this.callbacks.updateSession(sessionId, fields);
-          Object.assign(context.session, fields);
-        },
-        approve: async (tool, input, requestSignal) => {
-          const signal = requestSignal ? AbortSignal.any([state.abort.signal, requestSignal]) : state.abort.signal;
-          if (signal.aborted) return { decision: 'deny', reason: '审批已取消' };
-          await state.control.waitUntilRunning(signal);
-          const decision: ApprovalDecision = getPermissionMode(context.session) === 'yolo' && context.session.agent_mode !== 'plan'
-            ? { decision: 'allow', reason: 'YOLO：本系统自动批准' }
-            : await awaitApproval(this.callbacks, this.config.approvalTimeoutMs, sessionId, tool, input, signal, state.control);
-          await state.control.waitUntilRunning(signal);
-          return decision;
-        },
-        ask: async (questions, requestSignal) => {
-          const signal = requestSignal ? AbortSignal.any([state.abort.signal, requestSignal]) : state.abort.signal;
-          await state.control.waitUntilRunning(signal);
-          const outcome = await this.questions.request(sessionId, questions, signal, {
-            policy: this.callbacks.questionPolicy(sessionId),
-            schedule: (callback, milliseconds) => state.control.timer(callback, milliseconds),
-            defer: question => this.callbacks.deferQuestion(question),
-          });
-          await state.control.waitUntilRunning(signal);
-          return outcome;
-        },
-        verifyShell: async () => {
-          await state.control.waitUntilRunning(state.abort.signal);
-          await state.verifyShell!();
-          await state.control.waitUntilRunning(state.abort.signal);
-        },
+      const services = await prepareRunServices({
+        config: this.config, callbacks: this.callbacks, questions: this.questions, state,
         turnEnded: outcome => this.turnEnded(state, outcome),
         automaticTurn: origin => this.automaticTurn(state, origin),
         activityChanged: () => { this.publish(state); this.scheduleIdle(state); },
-        recordTokenUsage: update => this.callbacks.recordTokenUsage?.({ userId: context.user.id, slotId: context.slot.id, sessionId,
-          turnId: context.session.turn_id ?? null, engine: context.session.engine }, update),
-      };
-      context.account_identity = await this.config.usage?.captureIdentity(context.slot) ?? null;
-      if (state.abort.signal.aborted) throw new DOMException('会话已停止', 'AbortError');
-      if (context.session.slot_mode === 'auto') {
-        if (!this.callbacks.assertAutomaticSlot) throw new Error('自动账号额度复核尚未配置');
-        this.callbacks.assertAutomaticSlot(context);
-      }
+      }, lease);
       await this.callbacks.updateSession(sessionId, { status: 'running' });
       state.cliStarting = true;
       state.run = await starters[context.session.engine](services, input, state.abort.signal);
       if (state.abort.signal.aborted) state.run.stop();
       this.publish(state);
-      // A turn ends through turnEnded; the process ending only settles a turn the CLI left open.
-      state.completion = state.run.completion.then(() => undefined, (error: unknown) => error).then(async (failure) => {
-        state.finishing = true;
-        clearTimeout(state.idleTimer);
-        state.control.close();
-        try { await releaseCredentials(); } catch (error) { failure = error; }
-        if (failure) state.completionError = failure instanceof Error ? failure : new Error('CLI 运行失败');
-        await state.flushes;
-        const aborted = state.abort.signal.aborted;
-        const message = failure instanceof Error ? failure.message : failure ? 'CLI 运行失败' : '';
-        if (state.turnActive) {
-          state.turnActive = false;
-          const status = aborted && !credentialFailure ? 'interrupted' : failure ? 'error' : 'completed';
-          if (!aborted) await this.callbacks.flushWorkspace(sessionId).catch(() => undefined);
-          await this.callbacks.updateSession(sessionId, { status });
-          if (failure && (!aborted || credentialFailure)) this.emitError(state, message);
-          services.event('turn-state', { status });
-          services.event('done', { stopped: aborted, failed: status === 'error' });
-        } else if (credentialFailure) {
-          await this.callbacks.updateSession(sessionId, { status: 'error' });
-          services.event('error', { message });
-        }
-      }).finally(() => {
-        if (state.queue.length && (!state.abort.signal.aborted || this.closing)) {
-          this.failovers.retainQueue(sessionId, state.queue);
-        }
-        state.abort.abort();
-        state.queue = [];
-        if (this.active.get(sessionId) === state) this.active.delete(sessionId);
-        this.publish(state);
-      });
-      void state.completion.catch(() => undefined);
+      state.completion = attachRunCompletion(state, services, teardownHooks);
     } catch (error) {
-      const interrupted = state.abort.signal.aborted;
-      state.abort.abort();
-      state.control.close();
-      state.run?.stop();
-      await state.run?.completion.catch(() => undefined);
-      let failure = error;
-      try { await releaseCredentials(); } catch (releaseError) { failure = releaseError; }
-      if (!interrupted || this.closing) this.failovers.retainQueue(sessionId, state.queue);
-      if (this.active.get(sessionId) === state) this.active.delete(sessionId);
-      const status = interrupted && !credentialFailure ? 'interrupted' : 'error';
-      await this.callbacks.updateSession(sessionId, { status });
-      if (status === 'error') this.emitError(state, failure instanceof Error ? failure.message : String(failure ?? 'CLI 启动失败'));
-      this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId: context.session.turn_id, status } });
-      this.publish(state);
-      if (interrupted && !credentialFailure) throw new DOMException('会话已停止', 'AbortError');
-      throw failure;
+      await handleStartupFailure(state, error, teardownHooks);
     } finally {
       startupDone();
     }
@@ -321,9 +196,7 @@ export class AgentManager {
     return state;
   }
 
-  private authorization(state: ActiveRun) {
-    return { slotId: state.context.slot.id, credentialRevision: state.context.slot.credential_revision };
-  }
+  private authorization(state: ActiveRun) { return { slotId: state.context.slot.id, credentialRevision: state.context.slot.credential_revision }; }
 
   private beginTurn(state: ActiveRun, turnId: string, prompt: string, images: string[]): void {
     clearTimeout(state.idleTimer);
@@ -365,7 +238,6 @@ export class AgentManager {
       this.callbacks.event({ type: 'error', sessionId, payload: { message: error instanceof Error ? error.message : '工作区同步失败' } });
     });
     if (switching || state.halted) { this.publish(state); return; }
-    // A one-off command such as /compact does not leave a process for ordinary turns.
     if (state.context.session.command) { this.closeRuntime(state); return; }
     const next = !state.closing && !state.abort.signal.aborted && !this.closing ? state.queue.shift() : undefined;
     if (next && !state.closing) {
@@ -376,8 +248,7 @@ export class AgentManager {
       } catch (error) {
         state.queue.unshift(next);
         this.callbacks.event({ type: 'error', sessionId, payload: { message: error instanceof Error ? error.message : '排队消息发送失败' } });
-        this.publish(state);
-        this.scheduleIdle(state);
+        this.publish(state); this.scheduleIdle(state);
       }
       return;
     }
@@ -418,9 +289,7 @@ export class AgentManager {
     state.run?.close();
   }
 
-  private publish(state: ActiveRun): void {
-    this.publishRuntime(state.context.session.id);
-  }
+  private publish(state: ActiveRun): void { this.publishRuntime(state.context.session.id); }
 
   private publishRuntime(sessionId: string): void {
     const queue = this.failovers.has(sessionId) ? this.failovers.queue(sessionId)
