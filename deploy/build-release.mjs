@@ -90,7 +90,10 @@ export async function buildRelease(repository, reference, root = releaseRoot()) 
     await rm(source, { recursive: true, force: true });
     await rm(join(building, 'node_modules'), { recursive: true, force: true });
     // Links keep their own targets; resolved, they would point into the deleted build directory.
-    await cp(building, source, { recursive: true, verbatimSymlinks: true, filter: file => !file.startsWith(join(building, '.git')) });
+    // Only the clone's own .git directory stays behind; .gitignore and .github belong to the source.
+    const gitDirectory = join(building, '.git');
+    await cp(building, source, { recursive: true, verbatimSymlinks: true,
+      filter: file => file !== gitDirectory && !file.startsWith(gitDirectory + sep) });
     if (changes) await writeFile(changes.patch, patch, { mode: 0o600 });
     return { commit, source, staging, changes };
   } finally {
