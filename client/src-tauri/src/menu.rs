@@ -1,17 +1,24 @@
-use tauri::menu::{Menu, MenuItem, Submenu};
-use tauri::{App, Manager, Runtime};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{App, Runtime};
 
-use crate::{hub, MAIN_WINDOW};
+use crate::{hub, windows};
 
 const SWITCH_HUB: &str = "switch-hub";
 const RELOAD: &str = "reload";
+const ZOOM_IN: &str = "zoom-in";
+const ZOOM_OUT: &str = "zoom-out";
+const ZOOM_RESET: &str = "zoom-reset";
 
-/// The desktop way back to the Hub list, which keeps working when a Hub page fails to load.
+/// Desktop menu actions apply to whichever window currently has focus (falling back to the main window).
 pub fn install<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
   let switch_hub = MenuItem::with_id(app, SWITCH_HUB, "切换 Hub…", true, None::<&str>)?;
-  // Only macOS gets a shortcut: elsewhere Ctrl+R belongs to the shell history search in the web terminal.
+  // Only macOS gets shortcuts: elsewhere Ctrl+R / Ctrl+= may conflict with web terminal shortcuts.
   let reload = MenuItem::with_id(app, RELOAD, "重新加载", true, cfg!(target_os = "macos").then_some("Cmd+R"))?;
-  let hub_menu = Submenu::with_items(app, "Hub", true, &[&switch_hub, &reload])?;
+  let separator = PredefinedMenuItem::separator(app)?;
+  let zoom_in = MenuItem::with_id(app, ZOOM_IN, "放大", true, cfg!(target_os = "macos").then_some("Cmd+Equal"))?;
+  let zoom_out = MenuItem::with_id(app, ZOOM_OUT, "缩小", true, cfg!(target_os = "macos").then_some("Cmd+Minus"))?;
+  let zoom_reset = MenuItem::with_id(app, ZOOM_RESET, "实际大小", true, cfg!(target_os = "macos").then_some("Cmd+0"))?;
+  let hub_menu = Submenu::with_items(app, "Hub", true, &[&switch_hub, &reload, &separator, &zoom_in, &zoom_out, &zoom_reset])?;
   #[cfg(target_os = "macos")]
   let menu = {
     // The default menu carries the Edit items that WKWebView needs for copy and paste shortcuts.
@@ -25,10 +32,13 @@ pub fn install<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
   app.on_menu_event(|app, event| match event.id().as_ref() {
     SWITCH_HUB => hub::return_home(app),
     RELOAD => {
-      if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+      if let Some(window) = windows::focused_or_main(app) {
         let _ = window.reload();
       }
     }
+    ZOOM_IN => windows::adjust_zoom(app, Some(0.1)),
+    ZOOM_OUT => windows::adjust_zoom(app, Some(-0.1)),
+    ZOOM_RESET => windows::adjust_zoom(app, None),
     _ => {}
   });
   Ok(())

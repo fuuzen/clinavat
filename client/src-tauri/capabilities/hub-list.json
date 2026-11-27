@@ -1,7 +1,20 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "hub-list",
-  "description": "Only the bundled Hub list page may validate and open Hubs. Hub pages are remote and get no native access.",
+  "description": "Only the bundled Hub list page may validate/open Hubs and control the local desktop daemon. Hub pages are remote and get no native access.",
+  "local": true,
   "windows": ["main"],
-  "permissions": ["allow-normalize-hub-url", "allow-open-hub", "allow-close-hub"]
+  "permissions": [
+    "allow-normalize-hub-url",
+    "allow-open-hub",
+    "allow-close-hub",
+    "allow-daemon-status",
+    "allow-set-hub-daemon-enabled",
+    "allow-reconnect-hub-daemon",
+    "allow-disconnect-hub",
+    "allow-disconnect-all",
+    "allow-sync-known-hubs",
+    "allow-confirm-host-fingerprint",
+    "allow-reject-host-fingerprint"
+  ]
 }
