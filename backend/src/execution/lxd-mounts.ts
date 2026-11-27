@@ -273,9 +273,22 @@ export async function rebindRuntimeMounts(
   }
 }
 
+/** The only directories a slot machine keeps mounted across users: its home and its usage probe directory. */
+export function slotOwnMounts(dataDir: string, slotId: string): string[] {
+  return [slotHome(dataDir, slotId), join(dataDir, 'run', 'usage-probes', slotId)];
+}
+
+/** Checks LXD's device list rather than the Hub's record, which can miss devices added outside it. */
+export function assertOnlySlotMounts(
+  dataDir: string, machine: Machine, devices: Record<string, Record<string, string>> | undefined,
+): void {
+  const kept = new Set(slotOwnMounts(dataDir, machine.owner));
+  const remaining = [...parseLoadedMounts(dataDir, machine.kind, devices).mounts.keys()].filter(target => !kept.has(target));
+  if (remaining.length) throw new Error(`槽位虚拟机仍挂载上一位用户的目录，已停止清理：${remaining.slice(0, 3).join('、')}`);
+}
+
 export async function removeNonSlotMounts(runner: LxdMountRunner, dataDir: string, machine: Machine): Promise<void> {
-  // Only the slot's own directories stay: its home and its usage probe directory.
-  const kept = new Set([slotHome(dataDir, machine.owner), join(dataDir, 'run', 'usage-probes', machine.owner)]);
+  const kept = new Set(slotOwnMounts(dataDir, machine.owner));
   for (const [target, mount] of [...machine.mounts.entries()]) {
     if (kept.has(target)) continue;
     await runner.checkedLxc(['config', 'device', 'remove', runner.target(machine.name), mount.device]);

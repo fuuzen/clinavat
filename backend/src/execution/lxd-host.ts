@@ -9,8 +9,8 @@ import {
   serviceScript, thawScript,
 } from './guest-scripts.js';
 import {
-  assertGuestsReleased, attachMounts, formatLoginCommand, machineName, parseLoadedMounts, parseManagedInstances,
-  prepareStoppedInstance, rebindRuntimeMounts, removeNonSlotMounts, revokeMachineMounts,
+  assertGuestsReleased, assertOnlySlotMounts, attachMounts, formatLoginCommand, machineName, parseLoadedMounts,
+  parseManagedInstances, prepareStoppedInstance, rebindRuntimeMounts, removeNonSlotMounts, revokeMachineMounts, slotOwnMounts,
   type InstanceRow, type LxdMountRunner, type Machine,
 } from './lxd-mounts.js';
 export { machineName, type Machine } from './lxd-mounts.js';
@@ -198,8 +198,9 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     const stopped = await this.exec(machine, ['bash', '-c', handoverStopScript, 'clinavat-handover-stop', String(this.uid)]);
     if (stopped.code !== 0) throw new Error(`无法停止槽位虚拟机中的上一位用户进程：${stopped.stderr.trim().slice(0, 300)}`);
     await removeNonSlotMounts(this.mountRunner, this.config.dataDir, machine);
+    assertOnlySlotMounts(this.config.dataDir, machine, (await this.instance(machine.name))?.devices);
     const cleaned = await this.exec(machine, ['bash', '-c', handoverCleanScript, 'clinavat-handover-clean',
-      String(this.uid), String(this.gid), this.controlDirectory()]);
+      String(this.uid), String(this.gid), this.controlDirectory(), ...slotOwnMounts(this.config.dataDir, machine.owner)]);
     if (cleaned.code !== 0) throw new Error(`无法清理槽位虚拟机：${cleaned.stderr.trim().slice(0, 300)}`);
     machine.occupant = undefined;
   }

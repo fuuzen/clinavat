@@ -149,15 +149,17 @@ rm -f "$markers"/*
 
 /**
  * Clears local files the previous unprivileged user could write outside mounted directories: $1 uid, $2 gid,
- * $3 SSH control directory. Parses /proc/self/mountinfo and compares st_dev so host-mounted directories
- * (e.g. slot homes under /home/clinavat or workspaces under /var/tmp) are never entered or deleted.
+ * $3 SSH control directory, then the host directories the slot keeps mounted. Parses /proc/self/mountinfo and
+ * compares st_dev so host-mounted directories (e.g. slot homes under /home/clinavat or workspaces under /var/tmp)
+ * are never entered or deleted, and refuses to run while any other host directory is still mounted there.
  */
 export const handoverCleanScript = String.raw`set -eu
-uid="$1"; gid="$2"; control="$3"
-python3 -I - "$control" <<'PY'
+uid="$1"; gid="$2"; control="$3"; shift 3
+python3 -I - "$control" "$@" <<'PY'
 import os, re, stat, sys
 
 control = os.path.normpath(sys.argv[1])
+kept_mounts = {os.path.normpath(path) for path in sys.argv[2:]}
 roots = ['/tmp', '/var/tmp', '/dev/shm', '/home/clinavat', control, '/run/clinavat-relay']
 
 def unescape_mount(text):
@@ -200,6 +202,15 @@ def is_host_shared_fs(fstype):
     return fstype in ('virtiofs', '9p', 'cifs', 'smb3') or (
         fstype is not None and (fstype.startswith('fuse') or fstype.startswith('nfs'))
     )
+
+def under_roots(path):
+    return any(path == root or path.startswith(root + '/') for root in map(os.path.normpath, roots))
+
+# The previous user's directories must already be detached; skipping them alone would hide a failed detach.
+leftover = sorted(path for path, fstype in mount_fstypes.items()
+                  if is_host_shared_fs(fstype) and under_roots(path) and path not in kept_mounts)
+if leftover:
+    raise SystemExit('refusing to clean while host directories are still mounted: ' + ', '.join(leftover[:3]))
 
 def clean_dir(directory, root_dev):
     for entry in os.scandir(directory):
