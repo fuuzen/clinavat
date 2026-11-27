@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { childEnvironment, runCommand } from '../runtime/process.js';
 import { SyncBarriers } from './barriers.js';
 import {
-  daemonScript, flushProgram, freezeScript, handoverScript, liveRunsScript, prepareScript, relayProgram, releasedScript, runScript,
+  daemonScript, flushProgram, freezeScript, handoverCleanScript, handoverStopScript, liveRunsScript, prepareScript, relayProgram, releasedScript, runScript,
   serviceScript, thawScript,
 } from './guest-scripts.js';
 import {
@@ -195,9 +195,12 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     if (live.code !== 0 || live.stdout.trim()) throw new Error('槽位虚拟机中上一位用户的进程尚未结束，已暂停交接');
     await this.revokeMachine(machine.kind, machine.owner, 'handover');
     this.barriers.close(machine);
-    const cleaned = await this.exec(machine, ['bash', '-c', handoverScript, 'clinavat-handover', String(this.uid), this.controlDirectory()]);
-    if (cleaned.code !== 0) throw new Error(`无法清理槽位虚拟机：${cleaned.stderr.trim().slice(0, 300)}`);
+    const stopped = await this.exec(machine, ['bash', '-c', handoverStopScript, 'clinavat-handover-stop', String(this.uid)]);
+    if (stopped.code !== 0) throw new Error(`无法停止槽位虚拟机中的上一位用户进程：${stopped.stderr.trim().slice(0, 300)}`);
     await removeNonSlotMounts(this.mountRunner, this.config.dataDir, machine);
+    const cleaned = await this.exec(machine, ['bash', '-c', handoverCleanScript, 'clinavat-handover-clean',
+      String(this.uid), String(this.gid), this.controlDirectory()]);
+    if (cleaned.code !== 0) throw new Error(`无法清理槽位虚拟机：${cleaned.stderr.trim().slice(0, 300)}`);
     machine.occupant = undefined;
   }
 

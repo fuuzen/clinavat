@@ -129,12 +129,11 @@ fi
 `.replaceAll('\\${', '${');
 
 /**
- * Clears a slot machine before another user takes it: $1 uid, $2 SSH control directory. Every process of the
- * unprivileged user ends, and everything it could write outside mounted directories is emptied. Without root it
- * cannot have left anything elsewhere.
+ * Ends every process of the previous unprivileged user and clears run cgroups/markers before non-slot mounts
+ * are detached. Must run before `removeNonSlotMounts` so open descriptors cannot block unmounting.
  */
-export const handoverScript = preamble + String.raw`
-uid="$1"; control="$2"
+export const handoverStopScript = preamble + String.raw`
+uid="$1"
 for group in "$groups"/*; do
   [ -d "$group" ] || continue
   echo 1 > "$group/cgroup.kill" 2>/dev/null
@@ -142,12 +141,104 @@ done
 pkill -KILL -u "$uid" 2>/dev/null
 for _ in $(seq 1 100); do pgrep -u "$uid" >/dev/null || break; sleep 0.05; done
 if pgrep -u "$uid" >/dev/null; then echo "processes of the previous user did not exit" >&2; exit 1; fi
-for group in "$groups"/*; do [ -d "$group" ] && rmdir "$group" 2>/dev/null; done
-rm -f "$markers"/*
-for directory in /tmp /var/tmp /dev/shm /home/clinavat "$control" /run/clinavat-relay; do
-  [ -d "$directory" ] && find "$directory" -mindepth 1 -delete
+for group in "$groups"/*; do
+  if [ -d "$group" ]; then rmdir "$group" 2>/dev/null || true; fi
 done
-exit 0
+rm -f "$markers"/*
+`;
+
+/**
+ * Clears local files the previous unprivileged user could write outside mounted directories: $1 uid, $2 gid,
+ * $3 SSH control directory. Parses /proc/self/mountinfo and compares st_dev so host-mounted directories
+ * (e.g. slot homes under /home/clinavat or workspaces under /var/tmp) are never entered or deleted.
+ */
+export const handoverCleanScript = String.raw`set -eu
+uid="$1"; gid="$2"; control="$3"
+python3 -I - "$control" <<'PY'
+import os, re, stat, sys
+
+control = os.path.normpath(sys.argv[1])
+roots = ['/tmp', '/var/tmp', '/dev/shm', '/home/clinavat', control, '/run/clinavat-relay']
+
+def unescape_mount(text):
+    return re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), text)
+
+mount_fstypes = {}
+with open('/proc/self/mountinfo', 'r', encoding='utf-8') as handle:
+    for line in handle:
+        left, sep, right = line.partition(' - ')
+        if not sep:
+            continue
+        left_parts = left.split(' ')
+        right_parts = right.split(' ')
+        if len(left_parts) < 5 or not right_parts:
+            continue
+        mount_fstypes[os.path.normpath(unescape_mount(left_parts[4]))] = right_parts[0]
+
+mountpoints = set(mount_fstypes)
+protected = set()
+for path in (*mountpoints, control, '/run/clinavat-relay'):
+    current = os.path.normpath(path)
+    while True:
+        protected.add(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+def root_fstype(path):
+    current = os.path.normpath(path)
+    while True:
+        if current in mount_fstypes:
+            return mount_fstypes[current]
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+def is_host_shared_fs(fstype):
+    return fstype in ('virtiofs', '9p', 'cifs', 'smb3') or (
+        fstype is not None and (fstype.startswith('fuse') or fstype.startswith('nfs'))
+    )
+
+def clean_dir(directory, root_dev):
+    for entry in os.scandir(directory):
+        path = os.path.normpath(entry.path)
+        try:
+            metadata = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if path in mountpoints or metadata.st_dev != root_dev:
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            clean_dir(path, root_dev)
+            if path not in protected:
+                try:
+                    os.rmdir(path)
+                except FileNotFoundError:
+                    pass
+        else:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+for raw_root in roots:
+    root = os.path.normpath(raw_root)
+    if not os.path.isabs(root) or root == '/':
+        raise SystemExit(f'refusing to clean invalid path: {raw_root}')
+    try:
+        metadata = os.lstat(root)
+    except FileNotFoundError:
+        continue
+    if not stat.S_ISDIR(metadata.st_mode):
+        continue
+    fstype = root_fstype(root)
+    if is_host_shared_fs(fstype):
+        raise SystemExit(f'refusing to clean host-shared filesystem ({fstype}): {root}')
+    clean_dir(root, metadata.st_dev)
+PY
+install -d -m 700 -o "$uid" -g "$gid" "$control" /run/clinavat-relay
 `;
 
 /** Lists user runs still alive after reaping those whose wrapper died; usage probes do not count. */
