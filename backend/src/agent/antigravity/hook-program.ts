@@ -270,7 +270,8 @@ try:
         if os.environ.get('CLINAVAT_AGY_BTW') == '1':
             print(json.dumps({'decision': 'deny', 'reason': '旁路提问（/btw）为只读问答模式，禁止调用任何工具。请直接基于已有上下文回答。'}))
         else:
-            print('{}')
+            # agy requires a decision and denies without one; "allow" hands the call on to the next hook and the default policy.
+            print(json.dumps({'decision': 'allow'}))
     elif mode == 'stop':
         fields = ('conversationId', 'fullyIdle', 'terminationReason')
         with open(sys.argv[2], 'a') as log:
