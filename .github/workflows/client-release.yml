@@ -1,0 +1,835 @@
+name: Client Release
+
+on:
+  push:
+    branches:
+      - "ci/client-build-test"
+    tags:
+      - "client-v*"
+  workflow_dispatch:
+    inputs:
+      build_desktop:
+        description: "Build desktop clients & clinavat-agent CLI (macOS, Windows, Linux)"
+        type: boolean
+        default: true
+      build_android:
+        description: "Build Android client (universal APK / AAB)"
+        type: boolean
+        default: true
+      build_ios:
+        description: "Build iOS client (arm64 IPA)"
+        type: boolean
+        default: true
+      hub_url:
+        description: "Override packaged default Hub URL (optional)"
+        type: string
+        default: ""
+      hub_name:
+        description: "Override packaged default Hub display name (optional)"
+        type: string
+        default: ""
+      android_cleartext:
+        description: "Allow cleartext HTTP in Android release builds (LAN only)"
+        type: boolean
+        default: false
+      create_release:
+        description: "Publish a GitHub Release with all built artifacts"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  prepare:
+    name: Validate & Resolve Config
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      artifact_version: ${{ steps.resolve.outputs.artifact_version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
+      build_desktop: ${{ steps.resolve.outputs.build_desktop }}
+      build_android: ${{ steps.resolve.outputs.build_android }}
+      build_ios: ${{ steps.resolve.outputs.build_ios }}
+      hub_url: ${{ steps.resolve.outputs.hub_url }}
+      hub_name: ${{ steps.resolve.outputs.hub_name }}
+      identifier: ${{ steps.resolve.outputs.identifier }}
+      android_cleartext: ${{ steps.resolve.outputs.android_cleartext }}
+      ios_export_method: ${{ steps.resolve.outputs.ios_export_method }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - id: resolve
+        name: Validate versions & resolve release parameters
+        env:
+          INPUT_BUILD_DESKTOP: ${{ inputs.build_desktop }}
+          INPUT_BUILD_ANDROID: ${{ inputs.build_android }}
+          INPUT_BUILD_IOS: ${{ inputs.build_ios }}
+          INPUT_HUB_URL: ${{ inputs.hub_url }}
+          INPUT_HUB_NAME: ${{ inputs.hub_name }}
+          INPUT_ANDROID_CLEARTEXT: ${{ inputs.android_cleartext }}
+          INPUT_CREATE_RELEASE: ${{ inputs.create_release }}
+          VAR_HUB_URL: ${{ vars.CLINAVAT_CLIENT_HUB_URL }}
+          VAR_HUB_NAME: ${{ vars.CLINAVAT_CLIENT_HUB_NAME }}
+          VAR_IDENTIFIER: ${{ vars.CLINAVAT_CLIENT_IDENTIFIER }}
+          VAR_ANDROID_CLEARTEXT: ${{ vars.CLINAVAT_ANDROID_CLEARTEXT }}
+          VAR_IOS_EXPORT_METHOD: ${{ vars.APPLE_IOS_EXPORT_METHOD }}
+        run: node client/release-tools.mjs prepare-release
+
+  build-desktop:
+    name: Desktop (${{ matrix.label }})
+    needs: prepare
+    if: needs.prepare.outputs.build_desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            os: macos-15
+            platform_slug: macos
+            arch: arm64
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - label: macOS x64
+            os: macos-15
+            platform_slug: macos
+            arch: x64
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - label: Windows x64
+            os: windows-latest
+            platform_slug: windows
+            arch: x64
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+          - label: Linux x64
+            os: ubuntu-24.04
+            platform_slug: linux
+            arch: x64
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.platform_slug }}-${{ matrix.arch }}
+          workspaces: |
+            client/src-tauri -> target
+            client/daemon -> target
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2t64
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Configure macOS signing & notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            if [ -z "$APPLE_CERTIFICATE_PASSWORD" ]; then
+              echo "::error::APPLE_CERTIFICATE is set without APPLE_CERTIFICATE_PASSWORD."
+              exit 1
+            fi
+            KEYCHAIN_PATH="$RUNNER_TEMP/clinavat-signing.keychain-db"
+            KEYCHAIN_PASS="$(openssl rand -base64 32)"
+            P12_PATH="$RUNNER_TEMP/apple-cert.p12"
+
+            printf '%s' "$APPLE_CERTIFICATE" | tr -d '[:space:]' | base64 --decode > "$P12_PATH"
+            chmod 600 "$P12_PATH"
+
+            security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            security import "$P12_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            rm -f "$P12_PATH"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+            EXISTING_KEYCHAINS=()
+            while IFS= read -r kc; do
+              [ -n "$kc" ] && EXISTING_KEYCHAINS+=("$kc")
+            done < <(security list-keychains -d user | tr -d '"' | sed 's/^[[:space:]]*//')
+            security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
+
+            IDENTITY="$APPLE_SIGNING_IDENTITY_SECRET"
+            if [ -z "$IDENTITY" ]; then
+              IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\([^"]*\)".*/\1/p' | head -n 1)"
+            fi
+            if [ -z "$IDENTITY" ]; then
+              echo "::error::No valid code-signing identity found in imported APPLE_CERTIFICATE."
+              exit 1
+            fi
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+            echo "MACOS_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+            echo "MACOS_FORMAL_SIGNING=true" >> "$GITHUB_ENV"
+          elif [ -n "$APPLE_SIGNING_IDENTITY_SECRET" ]; then
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET" >> "$GITHUB_ENV"
+            echo "MACOS_FORMAL_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            # Ad-hoc signature allows Apple Silicon execution after user Privacy & Security approval.
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "MACOS_FORMAL_SIGNING=false" >> "$GITHUB_ENV"
+          fi
+
+          if [ -n "$APPLE_API_KEY" ] || [ -n "$APPLE_API_ISSUER" ] || [ -n "$APPLE_API_KEY_BASE64" ]; then
+            if [ -z "$APPLE_API_KEY" ] || [ -z "$APPLE_API_ISSUER" ] || [ -z "$APPLE_API_KEY_BASE64" ]; then
+              echo "::error::App Store Connect notarization requires APPLE_API_KEY, APPLE_API_ISSUER, and APPLE_API_KEY_BASE64 together."
+              exit 1
+            fi
+            API_KEY_FILE="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+            printf '%s' "$APPLE_API_KEY_BASE64" | tr -d '[:space:]' | base64 --decode > "$API_KEY_FILE"
+            chmod 600 "$API_KEY_FILE"
+            echo "APPLE_API_KEY_PATH=$API_KEY_FILE" >> "$GITHUB_ENV"
+          elif [ -n "$APPLE_ID" ] || [ -n "$APPLE_PASSWORD" ] || [ -n "$APPLE_TEAM_ID" ]; then
+            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::error::Apple ID notarization requires APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID together."
+              exit 1
+            fi
+          fi
+
+      - name: Configure Windows signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $thumbprint = $env:WINDOWS_CERTIFICATE_THUMBPRINT.Trim()
+          if ($env:WINDOWS_CERTIFICATE_BASE64) {
+            if (-not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+              throw "WINDOWS_CERTIFICATE_BASE64 is set without WINDOWS_CERTIFICATE_PASSWORD."
+            }
+            $pfxPath = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
+            $bytes = [System.Convert]::FromBase64String(($env:WINDOWS_CERTIFICATE_BASE64 -replace '\s+', ''))
+            [System.IO.File]::WriteAllBytes($pfxPath, $bytes)
+            try {
+              $securePass = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+              $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePass
+              if (-not $thumbprint) {
+                $thumbprint = $cert.Thumbprint
+              }
+              "WINDOWS_IMPORTED_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            } finally {
+              Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+            }
+          }
+          if ($thumbprint) {
+            "WINDOWS_CERT_THUMBPRINT=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Write Tauri config overrides
+        env:
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: node client/release-tools.mjs write-tauri-config "${{ runner.temp }}/tauri-override.json"
+
+      - name: Build Tauri app & clinavat-agent (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CI: "true"
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_BUNDLES: ${{ matrix.bundles }}
+          PLATFORM_SLUG: ${{ matrix.platform_slug }}
+          BUILD_ARCH: ${{ matrix.arch }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          # Avoid triggering notarization in tauri-bundler when optional secrets are unset (empty strings).
+          [ -n "${APPLE_ID:-}" ] || unset APPLE_ID
+          [ -n "${APPLE_PASSWORD:-}" ] || unset APPLE_PASSWORD
+          [ -n "${APPLE_TEAM_ID:-}" ] || unset APPLE_TEAM_ID
+          [ -n "${APPLE_API_KEY:-}" ] || unset APPLE_API_KEY
+          [ -n "${APPLE_API_ISSUER:-}" ] || unset APPLE_API_ISSUER
+          [ -n "${APPLE_API_KEY_PATH:-}" ] || unset APPLE_API_KEY_PATH
+
+          CONFIG_ARGS=()
+          if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
+            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
+          fi
+          (
+            cd client
+            npx --no-install tauri build --ci --target "$BUILD_TARGET" --bundles "$BUILD_BUNDLES" "${CONFIG_ARGS[@]}"
+          )
+
+          cargo build --manifest-path client/daemon/Cargo.toml --release --locked --target "$BUILD_TARGET"
+
+          STAGE_DIR="$PWD/dist-artifacts"
+          mkdir -p "$STAGE_DIR"
+          BUNDLE_DIR="$PWD/client/src-tauri/target/$BUILD_TARGET/release/bundle"
+
+          if [ "$PLATFORM_SLUG" = "macos" ]; then
+            DMG_FILE="$(find "$BUNDLE_DIR/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+            [ -n "$DMG_FILE" ] || { echo "::error::Missing .dmg bundle in $BUNDLE_DIR/dmg"; exit 1; }
+            cp "$DMG_FILE" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_macos_${BUILD_ARCH}.dmg"
+          else
+            DEB_FILE="$(find "$BUNDLE_DIR/deb" -maxdepth 1 -type f -name '*.deb' | head -n 1)"
+            APPIMAGE_FILE="$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
+            [ -n "$DEB_FILE" ] || { echo "::error::Missing .deb bundle in $BUNDLE_DIR/deb"; exit 1; }
+            [ -n "$APPIMAGE_FILE" ] || { echo "::error::Missing .AppImage bundle in $BUNDLE_DIR/appimage"; exit 1; }
+            cp "$DEB_FILE" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_linux_${BUILD_ARCH}.deb"
+            cp "$APPIMAGE_FILE" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_linux_${BUILD_ARCH}.AppImage"
+          fi
+
+          DAEMON_BIN="$PWD/client/daemon/target/$BUILD_TARGET/release/clinavat-agent"
+          [ -f "$DAEMON_BIN" ] || { echo "::error::Missing clinavat-agent binary at $DAEMON_BIN"; exit 1; }
+          if [ "$PLATFORM_SLUG" = "macos" ] && [ "${MACOS_FORMAL_SIGNING:-false}" = "true" ]; then
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DAEMON_BIN"
+          fi
+          tar -C "$(dirname "$DAEMON_BIN")" -czf "$STAGE_DIR/clinavat-agent_${ARTIFACT_VERSION}_${PLATFORM_SLUG}_${BUILD_ARCH}.tar.gz" "$(basename "$DAEMON_BIN")"
+
+      - name: Build Tauri app & clinavat-agent (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CI: "true"
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_BUNDLES: ${{ matrix.bundles }}
+          BUILD_ARCH: ${{ matrix.arch }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Invoke tauri.js directly via node so cmd.exe never splits comma-separated bundle targets (msi,nsis).
+          $tauriArgs = @(".\node_modules\@tauri-apps\cli\tauri.js", "build", "--ci", "--target", $env:BUILD_TARGET, "--bundles", $env:BUILD_BUNDLES)
+          if ($env:TAURI_CONFIG_PATH) {
+            $tauriArgs += @("--config", $env:TAURI_CONFIG_PATH)
+          }
+
+          Push-Location client
+          try {
+            & node @tauriArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+          & cargo build --manifest-path client/daemon/Cargo.toml --release --locked --target $env:BUILD_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $stageDir = Join-Path $PWD "dist-artifacts"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          $bundleDir = Join-Path $PWD "client\src-tauri\target\$($env:BUILD_TARGET)\release\bundle"
+
+          $msi = Get-ChildItem -Path (Join-Path $bundleDir "msi") -Filter "*.msi" -File | Select-Object -First 1
+          if (-not $msi) { throw "Missing .msi bundle in $bundleDir\msi" }
+          Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $stageDir "Clinavat_$($env:ARTIFACT_VERSION)_windows_$($env:BUILD_ARCH).msi")
+
+          $nsis = Get-ChildItem -Path (Join-Path $bundleDir "nsis") -Filter "*-setup.exe" -File | Select-Object -First 1
+          if (-not $nsis) {
+            $nsis = Get-ChildItem -Path (Join-Path $bundleDir "nsis") -Filter "*.exe" -File | Select-Object -First 1
+          }
+          if (-not $nsis) { throw "Missing NSIS installer in $bundleDir\nsis" }
+          Copy-Item -LiteralPath $nsis.FullName -Destination (Join-Path $stageDir "Clinavat_$($env:ARTIFACT_VERSION)_windows_$($env:BUILD_ARCH)-setup.exe")
+
+          $daemonBin = Join-Path $PWD "client\daemon\target\$($env:BUILD_TARGET)\release\clinavat-agent.exe"
+          if (-not (Test-Path -LiteralPath $daemonBin)) { throw "Missing clinavat-agent.exe at $daemonBin" }
+          Compress-Archive -LiteralPath $daemonBin -DestinationPath (Join-Path $stageDir "clinavat-agent_$($env:ARTIFACT_VERSION)_windows_$($env:BUILD_ARCH).zip") -Force
+
+      - name: Cleanup macOS temporary signing material
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${MACOS_KEYCHAIN_PATH:-}" ] && [ -f "$MACOS_KEYCHAIN_PATH" ]; then
+            security delete-keychain "$MACOS_KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -f "$APPLE_API_KEY_PATH" ]; then
+            rm -f "$APPLE_API_KEY_PATH"
+          fi
+
+      - name: Cleanup Windows temporary signing certificate
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_IMPORTED_THUMBPRINT) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($env:WINDOWS_IMPORTED_THUMBPRINT)" -Force -ErrorAction SilentlyContinue
+          }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: client-artifact-desktop-${{ matrix.platform_slug }}-${{ matrix.arch }}
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  build-android:
+    name: Android (universal)
+    needs: prepare
+    if: needs.prepare.outputs.build_android == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+          workspaces: client/src-tauri -> target
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Configure Android NDK & build-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          [ -n "$SDK_ROOT" ] || { echo "::error::ANDROID_HOME is not set."; exit 1; }
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          NDK_DIR=""
+          if [ -d "$SDK_ROOT/ndk" ]; then
+            NDK_DIR="$(find "$SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1 || true)"
+          fi
+          if [ -z "$NDK_DIR" ]; then
+            sdkmanager "ndk;27.2.12479018"
+            NDK_DIR="$SDK_ROOT/ndk/27.2.12479018"
+          fi
+
+          BUILD_TOOLS_DIR=""
+          if [ -d "$SDK_ROOT/build-tools" ]; then
+            for dir in $(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -Vr); do
+              if [ -x "$dir/zipalign" ] && [ -x "$dir/apksigner" ]; then
+                BUILD_TOOLS_DIR="$dir"
+                break
+              fi
+            done
+          fi
+          if [ -z "$BUILD_TOOLS_DIR" ]; then
+            sdkmanager "build-tools;35.0.0"
+            BUILD_TOOLS_DIR="$SDK_ROOT/build-tools/35.0.0"
+          fi
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_BUILD_TOOLS_DIR=$BUILD_TOOLS_DIR" >> "$GITHUB_ENV"
+
+      - name: Install client dependencies & prepare Android project
+        env:
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+          CLINAVAT_ANDROID_CLEARTEXT: ${{ needs.prepare.outputs.android_cleartext }}
+        run: |
+          (cd client && npm ci)
+          node client/prepare-mobile.mjs android
+
+      - name: Write Tauri config overrides
+        env:
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+        run: node client/release-tools.mjs write-tauri-config "${{ runner.temp }}/tauri-override.json"
+
+      - name: Build & sign Android artifacts
+        shell: bash
+        env:
+          CI: "true"
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          STAGE_DIR="$PWD/dist-artifacts"
+          mkdir -p "$STAGE_DIR"
+
+          CONFIG_ARGS=()
+          if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
+            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
+          fi
+
+          FORMAL_SIGNING="false"
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] || [ -n "$ANDROID_KEYSTORE_PASSWORD" ] || [ -n "$ANDROID_KEY_ALIAS" ]; then
+            if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ]; then
+              echo "::error::Formal Android signing requires ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, and ANDROID_KEY_ALIAS together."
+              exit 1
+            fi
+            FORMAL_SIGNING="true"
+            KEYSTORE_FILE="$RUNNER_TEMP/android-release.keystore"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_FILE"
+            chmod 600 "$KEYSTORE_FILE"
+            ANDROID_KEYSTORE_PATH="$KEYSTORE_FILE" node client/mobile-release.mjs patch-android-signing
+          fi
+
+          if [ "$FORMAL_SIGNING" = "true" ]; then
+            (
+              cd client
+              npx --no-install tauri android build --ci --apk --aab "${CONFIG_ARGS[@]}"
+            )
+            APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' ! -name '*-unsigned.apk' | head -n 1)"
+            if [ -z "$APK_SRC" ]; then
+              APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
+            fi
+            AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*universal*.aab' | head -n 1)"
+            if [ -z "$AAB_SRC" ]; then
+              AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' | head -n 1)"
+            fi
+            [ -n "$APK_SRC" ] || { echo "::error::Missing signed universal APK"; exit 1; }
+            [ -n "$AAB_SRC" ] || { echo "::error::Missing signed universal AAB"; exit 1; }
+            "$ANDROID_BUILD_TOOLS_DIR/apksigner" verify "$APK_SRC"
+            cp "$APK_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_android_universal.apk"
+            cp "$AAB_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_android_universal.aab"
+          else
+            (
+              cd client
+              npx --no-install tauri android build --ci --apk "${CONFIG_ARGS[@]}"
+            )
+            UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' | head -n 1)"
+            if [ -z "$UNSIGNED_APK" ]; then
+              UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+            fi
+            [ -n "$UNSIGNED_APK" ] || { echo "::error::Missing universal APK"; exit 1; }
+
+            EPHEMERAL_PASS="$(openssl rand -hex 24)"
+            EPHEMERAL_KS="$RUNNER_TEMP/clinavat-selfsigned.p12"
+            ALIGNED_APK="$RUNNER_TEMP/aligned.apk"
+            SIGNED_APK="$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_android_universal_selfsigned.apk"
+
+            keytool -genkeypair -noprompt \
+              -keystore "$EPHEMERAL_KS" \
+              -storetype PKCS12 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 3650 \
+              -alias clinavat-selfsigned \
+              -storepass "$EPHEMERAL_PASS" \
+              -keypass "$EPHEMERAL_PASS" \
+              -dname "CN=Clinavat Self-Signed, O=Clinavat"
+
+            "$ANDROID_BUILD_TOOLS_DIR/zipalign" -p -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+            "$ANDROID_BUILD_TOOLS_DIR/apksigner" sign \
+              --ks "$EPHEMERAL_KS" \
+              --ks-key-alias clinavat-selfsigned \
+              --ks-pass "pass:$EPHEMERAL_PASS" \
+              --key-pass "pass:$EPHEMERAL_PASS" \
+              --out "$SIGNED_APK" \
+              "$ALIGNED_APK"
+            "$ANDROID_BUILD_TOOLS_DIR/apksigner" verify "$SIGNED_APK"
+            rm -f "$EPHEMERAL_KS" "$ALIGNED_APK"
+          fi
+
+      - name: Cleanup Android signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/android-release.keystore" \
+                "$RUNNER_TEMP/clinavat-selfsigned.p12" \
+                client/src-tauri/gen/android/keystore.properties
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: client-artifact-android-universal
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  build-ios:
+    name: iOS (arm64)
+    needs: prepare
+    if: needs.prepare.outputs.build_ios == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-arm64
+          workspaces: client/src-tauri -> target
+
+      - name: Ensure xcodegen is installed
+        shell: bash
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Resolve iOS signing mode
+        shell: bash
+        env:
+          APPLE_IOS_CERTIFICATE: ${{ secrets.APPLE_IOS_CERTIFICATE }}
+          APPLE_IOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_IOS_CERTIFICATE_PASSWORD }}
+          APPLE_IOS_PROVISIONING_PROFILE: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APPLE_IOS_CERTIFICATE" ] || [ -n "$APPLE_IOS_CERTIFICATE_PASSWORD" ] || [ -n "$APPLE_IOS_PROVISIONING_PROFILE" ]; then
+            if [ -z "$APPLE_IOS_CERTIFICATE" ] || [ -z "$APPLE_IOS_CERTIFICATE_PASSWORD" ] || [ -z "$APPLE_IOS_PROVISIONING_PROFILE" ]; then
+              echo "::error::Formal iOS signing requires APPLE_IOS_CERTIFICATE, APPLE_IOS_CERTIFICATE_PASSWORD, and APPLE_IOS_PROVISIONING_PROFILE together."
+              exit 1
+            fi
+            TEAM_ID="$APPLE_TEAM_ID"
+            if [ -z "$TEAM_ID" ]; then
+              PROFILE_FILE="$RUNNER_TEMP/ios.mobileprovision"
+              printf '%s' "$APPLE_IOS_PROVISIONING_PROFILE" | tr -d '[:space:]' | base64 --decode > "$PROFILE_FILE"
+              TEAM_ID="$(security cms -D -i "$PROFILE_FILE" | python3 -c 'import plistlib, sys; d = plistlib.loads(sys.stdin.buffer.read()); print((d.get("TeamIdentifier") or [""])[0])')"
+              rm -f "$PROFILE_FILE"
+            fi
+            if [ -z "$TEAM_ID" ]; then
+              echo "::error::Could not determine Apple Team ID; please set APPLE_TEAM_ID secret."
+              exit 1
+            fi
+            echo "IOS_FORMAL_SIGNING=true" >> "$GITHUB_ENV"
+            echo "RESOLVED_APPLE_TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+          else
+            echo "IOS_FORMAL_SIGNING=false" >> "$GITHUB_ENV"
+            echo "RESOLVED_APPLE_TEAM_ID=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Write Tauri config overrides
+        env:
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+        run: node client/release-tools.mjs write-tauri-config "${{ runner.temp }}/tauri-override.json"
+
+      - name: Build signed iOS IPA
+        if: env.IOS_FORMAL_SIGNING == 'true'
+        shell: bash
+        env:
+          CI: "true"
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+          IOS_CERTIFICATE: ${{ secrets.APPLE_IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE }}
+          APPLE_DEVELOPMENT_TEAM: ${{ env.RESOLVED_APPLE_TEAM_ID }}
+          APPLE_IOS_EXPORT_METHOD: ${{ needs.prepare.outputs.ios_export_method }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          node client/prepare-mobile.mjs ios
+
+          CONFIG_ARGS=()
+          if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
+            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
+          fi
+          (
+            cd client
+            npx --no-install tauri ios build --ci --export-method "$APPLE_IOS_EXPORT_METHOD" "${CONFIG_ARGS[@]}"
+          )
+
+          STAGE_DIR="$PWD/dist-artifacts"
+          mkdir -p "$STAGE_DIR"
+          IPA_SRC="$(find client/src-tauri/gen/apple/build -type f -name '*.ipa' | head -n 1)"
+          [ -n "$IPA_SRC" ] || { echo "::error::Missing signed .ipa output"; exit 1; }
+          cp "$IPA_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_ios_arm64.ipa"
+
+      - name: Prepare unsigned iOS project
+        if: env.IOS_FORMAL_SIGNING != 'true'
+        shell: bash
+        env:
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+          APPLE_DEVELOPMENT_TEAM: "0000000000"
+        run: |
+          set -euo pipefail
+          (cd client && npm run build)
+          node client/prepare-mobile.mjs ios
+          node client/mobile-release.mjs prepare-ios-unsigned
+
+      - name: Build unsigned iOS IPA
+        if: env.IOS_FORMAL_SIGNING != 'true'
+        shell: bash
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "16.4"
+          CLINAVAT_CLIENT_IDENTIFIER: ${{ needs.prepare.outputs.identifier }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CLINAVAT_CLIENT_IDENTIFIER" ]; then
+            export TAURI_CONFIG="$(node -e 'console.log(JSON.stringify({ identifier: process.env.CLINAVAT_CLIENT_IDENTIFIER }))')"
+          fi
+          cargo build \
+            --manifest-path client/src-tauri/Cargo.toml \
+            --release \
+            --locked \
+            --target aarch64-apple-ios \
+            --features tauri/custom-protocol
+
+          mkdir -p "$(dirname "$LIBAPP_DEST")"
+          cp client/src-tauri/target/aarch64-apple-ios/release/libclinavat_client_lib.a "$LIBAPP_DEST"
+
+          ARCHIVE_PATH="$RUNNER_TEMP/Clinavat.xcarchive"
+          xcodebuild archive \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration "$XCODE_CONFIG" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+          APP_BUNDLE="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          [ -n "$APP_BUNDLE" ] || { echo "::error::Missing .app inside $ARCHIVE_PATH/Products/Applications"; exit 1; }
+
+          STAGE_DIR="$PWD/dist-artifacts"
+          IPA_WORK="$RUNNER_TEMP/ipa-payload"
+          mkdir -p "$STAGE_DIR" "$IPA_WORK/Payload"
+          cp -R "$APP_BUNDLE" "$IPA_WORK/Payload/"
+          IPA_OUT="$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_ios_arm64_unsigned.ipa"
+          (cd "$IPA_WORK" && zip -qry "$IPA_OUT" Payload)
+          rm -rf "$IPA_WORK" "$ARCHIVE_PATH"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: client-artifact-ios-arm64
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Aggregate & Release
+    needs: [prepare, build-desktop, build-android, build-ios]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      !contains(fromJSON('["failure", "cancelled"]'), needs.build-desktop.result) &&
+      !contains(fromJSON('["failure", "cancelled"]'), needs.build-android.result) &&
+      !contains(fromJSON('["failure", "cancelled"]'), needs.build-ios.result)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: client-artifact-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt & release notes
+        env:
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+          CLINAVAT_CLIENT_HUB_URL: ${{ needs.prepare.outputs.hub_url }}
+          CLINAVAT_CLIENT_HUB_NAME: ${{ needs.prepare.outputs.hub_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t ASSET_FILES < <(find release-assets -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -printf '%f\n' | LC_ALL=C sort)
+          if [ "${#ASSET_FILES[@]}" -eq 0 ]; then
+            echo "::error::No release artifacts were downloaded."
+            exit 1
+          fi
+          (cd release-assets && sha256sum "${ASSET_FILES[@]}" > SHA256SUMS.txt)
+          node client/release-tools.mjs write-release-notes release-assets "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload consolidated release bundle artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: client-release-${{ needs.prepare.outputs.artifact_version }}
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: needs.prepare.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+          TITLE="Clinavat Client ${ARTIFACT_VERSION}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            gh release edit "$RELEASE_TAG" --title "$TITLE" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            CREATE_ARGS=(
+              release create "$RELEASE_TAG"
+              release-assets/*
+              --title "$TITLE"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+              --target "$GITHUB_SHA"
+            )
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh "${CREATE_ARGS[@]}"
+          fi

@@ -22,7 +22,7 @@
 
 ### 尚未完成项
 
-- **各端安装包构建与签名公证**：macOS 签名与公证、Windows 代码签名（以及杀毒软件白名单测试）、Android keystore 签名、iOS 证书/TestFlight 签名流程与自动化发布流水线。
+- **各端安装包正式签名与公证**：GitHub Actions 跨平台自动构建与发布流水线（支持零证书默认构建）已落地，后续补齐 macOS 签名与公证、Windows 代码签名（以及杀毒软件白名单测试）、Android 正式 keystore 签名、iOS 证书/TestFlight 签名 Secrets 配置。
 - **真实多端实机联调**：在 macOS、Windows、Linux 桌面及 Android / iOS 真机上验证 WebView 导航、下载、剪贴板、拖拽上传、`SameSite=Strict` Cookie、Windows ConPTY 与路径/文件占用边界场景。
 - **独立 CLI 交互对话界面**：`clinavat-agent` 目前提供身份管理、状态探测与守护进程连接；直接在终端内进行交互式对话的 CLI 界面留待后续阶段。
 - **离线延迟清理与同步分级**：删除离线客户端项目时的后台延迟清理队列，以及 Windows 文件占用下的更细粒度同步降级提示。

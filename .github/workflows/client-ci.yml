@@ -1,0 +1,79 @@
+name: Client CI
+
+on:
+  push:
+    branches: [main, "ci/client-build-test"]
+    paths:
+      - "client/**"
+      - ".github/workflows/client-*.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - ".github/workflows/client-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Client Check (Ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            client/src-tauri -> target
+            client/daemon -> target
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install client dependencies & build Hub list
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check helper scripts & version consistency
+        run: |
+          node --check client/prepare-mobile.mjs
+          node --check client/release-tools.mjs
+          node --check client/mobile-release.mjs
+          node client/release-tools.mjs check-versions
+
+      - name: Cargo check daemon & desktop Tauri
+        run: |
+          cargo check --manifest-path client/daemon/Cargo.toml --locked
+          cargo check --manifest-path client/src-tauri/Cargo.toml --locked
+
+      - name: Cargo check Android target isolation
+        run: cargo check --manifest-path client/src-tauri/Cargo.toml --locked --target aarch64-linux-android

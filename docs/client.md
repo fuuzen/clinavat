@@ -182,7 +182,7 @@ iOS 工程不需要额外补丁。构建时会自动合并 `src-tauri/Info.plist
 
 仓库包含两条客户端工作流：
 
-- **`.github/workflows/client-ci.yml`（PR 与 `main` 校验）**：仅在 `client/**` 或 `.github/workflows/client-*.yml` 变更时触发，在 `ubuntu-22.04` 上校验 Hub 列表页构建、`client/prepare-mobile.mjs` 语法、`client/src-tauri` 与 `client/daemon` 的 `cargo check --locked`，以及 `aarch64-linux-android` 目标的 `#[cfg]` 移动端隔离。
+- **`.github/workflows/client-ci.yml`（PR 与 `main` 校验）**：仅在 `client/**` 或 `.github/workflows/client-*.yml` 变更时触发，在 `ubuntu-24.04` 上校验 Hub 列表页构建、`client/prepare-mobile.mjs` / `client/release-tools.mjs` / `client/mobile-release.mjs` 语法、版本一致性、`client/src-tauri` 与 `client/daemon` 的 `cargo check --locked`，以及 `aarch64-linux-android` 目标的 `#[cfg]` 移动端隔离。
 - **`.github/workflows/client-release.yml`（全平台打包与发布）**：支持推送 `client-v*` Tag 自动发布，也支持在 Actions 页面通过 `workflow_dispatch` 按需勾选平台（`build_desktop`、`build_android`、`build_ios`）、覆盖默认 Hub（`hub_url`、`hub_name`）、开启 `android_cleartext` 以及选择是否 `create_release`。
 
 #### 版本一致性与变量配置
