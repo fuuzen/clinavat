@@ -37,6 +37,7 @@ Docker 镜像已内置以上依赖，版本可以通过 `.env` 中的 `CLAUDE_CO
 | `CLINAVAT_VM_START_TIMEOUT_MS` / `CLINAVAT_VM_BUS_PORTS` | 虚拟机开机等待上限和设备端口数，见[容量与默认值](vm-isolation.md#容量与默认值) |
 | `CLINAVAT_VM_ADDRESSES`、`CLINAVAT_WORKSPACE_MEMORY`、`CLINAVAT_LXD_WORKSPACE_IMAGE`、`CLINAVAT_IMAGE_BUILDER_ADDRESS` | 固定地址范围、工作区容器内存初始值与镜像、镜像构建地址，见[容量与默认值](vm-isolation.md#容量与默认值) |
 | `CLINAVAT_VM_BRIDGE`、`CLINAVAT_HOST_SSH_PORT` | 本机项目命令登录的宿主机网桥地址和 sshd 端口，见[宿主机命令入口](vm-isolation.md#宿主机命令入口) |
+| `CLINAVAT_CLIENT_SSH_PORT` / `CLINAVAT_CLIENT_SSH_HOST` | 桌面客户端（Windows/macOS）反向 SSH 通道的监听端口（默认 `2222`）及对外可达主机名/IP（留空时按请求或公开来源推导），见[桌面客户端主动 SSH 接入](#桌面客户端主动-ssh-接入) |
 | `CLINAVAT_GATEWAY_HOST` / `_PORT` / `_USER` | [上游网关](../deploy/gateway/README.md)的 SSH 地址；留空则管理面板不连接网关 |
 | `CLINAVAT_*_BIN` | `claude`、`codex`、`mutagen`、`ssh`、`ssh-keygen` 的可执行文件路径 |
 
@@ -154,6 +155,24 @@ CLINAVAT_COOKIE_SECURE=true
 - 对 SSE 关闭响应缓冲和缓存，并设置足够长的连接超时。
 
 可参考 [上层 Nginx 示例](../deploy/nginx-upstream.conf.example)，按注释替换域名和网关地址后合并到现有 HTTPS 站点，其中的 `map` 需放在 `http` 块。
+
+### 桌面客户端主动 SSH 接入
+
+Windows / macOS 桌面客户端通过反向 SSH 隧道接入 Hub，提供以下两种传输方式：
+
+- **默认：WSS 443 隧道（`/api/client-devices/tunnel`）**（推荐，开箱即用）：复用现有 HTTPS 443 入口，可直接穿透 Cloudflare 与上层 Nginx 反向代理，**无需修改网关端口映射，也无需在宿主机对外放行 `2222` 端口**。请确认上层 Nginx/反向代理已保留 WebSocket 的 `Upgrade` / `Connection` 请求头并设置长读写超时（`proxy_read_timeout 3600s;`、`proxy_send_timeout 3600s;`，参见 [上层 Nginx 示例](../deploy/nginx-upstream.conf.example)）；底层链路通过 15 秒 SSH keepalive 保活。
+- **可选：原生 TCP 直连（默认 `2222`）**：仅在客户端位于同一局域网直连号池机，或公网环境已在网关配置 TCP DNAT 端口映射时使用。如需为客户端下发独立直连主机名/IP，可在环境文件中设置 `CLINAVAT_CLIENT_SSH_HOST`（端口为 `CLINAVAT_CLIENT_SSH_PORT`，默认 `2222`）：
+  1. **网关 DNAT 映射**：在管理面板「网关」的端口映射中新增规则，或在网关上使用 `gwctl.py` 的 `forwards.put` 下发（如 `[{"proto": "tcp", "port": 2222, "to_port": 2222, "note": "client-ssh"}]`，生效后按提示 `confirm`）。**严禁手工编辑 `/etc/clinavat-gw/rendered/guard.nft`**，否则会被控制器识别为配置漂移并在后续渲染时覆盖。
+  2. **Compose 部署提醒**：`compose.yaml` 默认仅发布 Web 入口端口；启用原生 TCP 直连时，需把 `CLINAVAT_CLIENT_SSH_PORT`（与可选的 `CLINAVAT_CLIENT_SSH_HOST`）传入 `hub` 服务，并为 `hub` 补充对应的宿主机端口映射（例如 `${CLINAVAT_CLIENT_SSH_PORT:-2222}:${CLINAVAT_CLIENT_SSH_PORT:-2222}`）。
+  3. **宿主机防火墙放行（显式 opt-in）**：默认的 `host-commands.sh apply` / `check` 不会自动开放外部 `2222` 端口；启用原生 TCP 直连时，由 root 在宿主机按需执行：
+
+```bash
+# 指定外部或内网 zone（如 cv-lan 或 public）；若仅通过网关 DNAT 进入，建议附加 --source 限制来源 CIDR
+sudo bash deploy/lxd/host-commands.sh apply-client-ssh --zone <zone> [--client-ssh-port 2222] [--source 10.10.10.1/32]
+sudo bash deploy/lxd/host-commands.sh check-client-ssh --zone <zone> [--client-ssh-port 2222] [--source 10.10.10.1/32]
+```
+
+> **安全红线**：`cv-users`（firewalld 隔离区）与 `clinavat-egress`（LXD 出站 ACL）是隔离用户虚拟机访问宿主机的边界，**严禁将 `2222`（`CLINAVAT_CLIENT_SSH_PORT`）放行给 `cv-users` 或加入 `clinavat-egress`**。上述 `apply-client-ssh` / `check-client-ssh` 命令仅操作外部/内网 zone，不会修改 `clinavat-egress`，并会自动拒绝 `cv-users`；若宿主机启用 `ufw`，脚本会输出对应的 `sudo ufw allow` 建议命令。
 
 ## 数据与备份
 

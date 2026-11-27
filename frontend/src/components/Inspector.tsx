@@ -6,15 +6,21 @@ import {
   FolderSync,
   GitBranch,
   GitCompareArrows,
+  Laptop,
   Link2Off,
   ListFilter,
   LoaderCircle,
   RefreshCw,
   TerminalSquare,
+  WifiOff,
   X,
 } from "lucide-react";
 import { api, errorText, formatBytes, post } from "../api";
-import type { FileEntry, GitState, Project, ProjectUsage, SkippedLinks } from "../types";
+import { hasMultiWindowSupport, useClientShell } from "../client";
+import type { DevHost, FileEntry, GitState, Project, ProjectUsage, SkippedLinks } from "../types";
+import { broadcastWindowEvent } from "../windows/channel";
+import { openDetachedWindow } from "../windows/launcher";
+import { isClientDirectProject, isClientHost, isClientHostOnline } from "./hosts/client-device";
 import SkippedLinksDialog from "./projects/SkippedLinksDialog";
 import SyncRulesDialog from "./projects/SyncRulesDialog";
 import WorktreeSetupDialog from "./projects/WorktreeSetupDialog";
@@ -33,9 +39,14 @@ function parseSkippedLinks(value: string | null | undefined): SkippedLinks | nul
   }
 }
 
+export type InspectorTabRequest =
+  | { tab: "changes"; id: number }
+  | { tab: "files"; path: string; id: number };
+
 interface Props {
-  tabRequest?: { tab: "changes"; id: number };
+  tabRequest?: InspectorTabRequest;
   project?: Project;
+  host?: DevHost;
   refresh: number;
   onClose: () => void;
   onRefresh: () => void;
@@ -43,6 +54,7 @@ interface Props {
 
 export default function Inspector({
   project,
+  host,
   refresh,
   onClose,
   onRefresh,
@@ -62,20 +74,29 @@ export default function Inspector({
   const [linksOpen, setLinksOpen] = useState(false);
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  const clientShell = useClientShell();
+  const multiWindow = hasMultiWindowSupport(clientShell);
   const projectId = project?.id;
   const skippedLinks = useMemo(() => parseSkippedLinks(project?.sync_skipped_links), [project?.sync_skipped_links]);
   const skippedCount = skippedLinks ? skippedLinks.links.length + skippedLinks.more : 0;
-  const showSyncAction = !!project &&
-    (project.execution_mode !== "local" || project.sync_status === "ERROR");
+  const isClient = isClientHost(host);
+  const clientOnline = isClient && isClientHostOnline(host);
+  const clientDirect = isClientDirectProject(project, host);
+  const usesMirror = !!project && project.execution_mode !== "local" && !clientDirect;
+  const showSyncAction = !!project && (
+    clientDirect
+      ? project.sync_status === "ERROR"
+      : (project.execution_mode !== "local" || project.sync_status === "ERROR")
+  );
   const loadUsage = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || clientDirect) return;
     try {
       const result = await api<ProjectUsage>(`/projects/${projectId}/usage`);
       if (result.mirrorBytes !== null) setUsage(result);
     } catch {
       // Disk usage is informational; failures leave the footer without it.
     }
-  }, [projectId]);
+  }, [projectId, clientDirect]);
   useEffect(() => {
     setUsage(null);
     setRulesDialog(null);
@@ -123,7 +144,12 @@ export default function Inspector({
     if (next !== tab && confirmDiscard()) setTab(next);
   };
   useEffect(() => {
-    if (tabRequest && confirmDiscard()) setTab(tabRequest.tab);
+    if (!tabRequest || !confirmDiscard()) return;
+    setTab(tabRequest.tab);
+    if (tabRequest.tab === "files") {
+      setPath(tabRequest.path.split("/").slice(0, -1).join("/"));
+      setSelected(tabRequest.path);
+    }
   }, [tabRequest]);
   const close = () => {
     if (confirmDiscard() && (!uploading || window.confirm("文件仍在上传，关闭工作区会中断上传。确定关闭吗？"))) onClose();
@@ -136,6 +162,16 @@ export default function Inspector({
     setPath(target.split("/").slice(0, -1).join("/"));
     setSelected(target);
   }, []);
+  const openDetachedPreview = useCallback(
+    (filePath: string, fallback: () => void) => {
+      if (!project) return;
+      openDetachedWindow(
+        { kind: "preview", projectId: project.id, path: filePath, projectName: project.name },
+        { shell: clientShell, onFallback: fallback },
+      );
+    },
+    [project, clientShell],
+  );
   async function sync() {
     if (!project) return;
     setSyncing(true);
@@ -223,6 +259,11 @@ export default function Inspector({
             <Folder size={14} />
             <strong>{project.name}</strong>
           </div>
+          {isClient && !clientOnline && (
+            <div className="inspector-error" role="status">
+              <span><WifiOff size={13} /> 客户端离线，请在桌面客户端确认连接</span>
+            </div>
+          )}
           {error && (
             <div className="inspector-error">
               {error}
@@ -251,11 +292,25 @@ export default function Inspector({
                 >
                   <FilePreview
                     projectId={project.id}
+                    projectName={project.name}
                     path={selected}
                     refresh={refresh + previewReloads}
                     onBack={() => setSelected(null)}
                     onOpen={openLinkedFile}
                     onDirtyChange={setEditorDirty}
+                    onSaved={(saved) => {
+                      broadcastWindowEvent({
+                        type: "file-saved",
+                        projectId: project.id,
+                        path: saved.path,
+                        etag: saved.etag,
+                      });
+                    }}
+                    onDetach={
+                      multiWindow
+                        ? (fallback) => openDetachedPreview(selected, fallback)
+                        : undefined
+                    }
                   />
                 </Suspense>
               ) : (
@@ -264,9 +319,14 @@ export default function Inspector({
                   entries={files}
                   busy={busy}
                   uploading={uploading}
-                  syncedMirror={project.execution_mode !== "local"}
+                  syncedMirror={usesMirror}
                   onNavigate={setPath}
                   onOpen={openFile}
+                  onOpenDetached={
+                    multiWindow
+                      ? (entry) => openDetachedPreview(entry.path, () => openFile(entry))
+                      : undefined
+                  }
                   onUpload={(picked) => void uploads.start(path, picked)}
                 />
               )}
@@ -337,22 +397,27 @@ export default function Inspector({
               )}
             </div>
           )}
-          {(usage || showSyncAction) && (
+          {(usage || showSyncAction || clientDirect) && (
             <footer className="inspector-footer">
-              {usage && (
+              {clientDirect && (
+                <span className="inspector-usage" title="零镜像零同步，文件与命令直接在客户端本机执行">
+                  <Laptop size={12} /> 本机直执（实时）
+                </span>
+              )}
+              {usesMirror && usage && (
                 <span className="inspector-usage" title="号池机上本项目同步镜像占用的磁盘空间">
                   镜像 {formatBytes(usage.mirrorBytes ?? 0)}
                 </span>
               )}
-              {skippedLinks && skippedCount > 0 && (
+              {usesMirror && skippedLinks && skippedCount > 0 && (
                 <button className="inspector-skipped-links" onClick={() => setLinksOpen(true)} title="查看同步时跳过的软链接">
                   <Link2Off size={12} />
                   {skippedCount} 个软链接未同步
                 </button>
               )}
-              {project.execution_mode !== "local" && (
+              {usesMirror && (
                 <button
-                  disabled={syncing || project.sync_status === "CREATING"}
+                  disabled={syncing || project.sync_status === "CREATING" || (isClient && !clientOnline)}
                   onClick={() => setRulesDialog({ append: [] })}
                   title={project.sync_status === "CREATING" ? "同步完成后可用" : "查看和修改本项目的同步排除规则"}
                 >
@@ -368,18 +433,24 @@ export default function Inspector({
               )}
               {showSyncAction && (
                 <button
-                  disabled={syncing || project.sync_status === "CREATING"}
+                  disabled={syncing || project.sync_status === "CREATING" || (isClient && !clientOnline)}
                   onClick={() => void sync()}
-                  title={project.execution_mode === "local" ? "检查本机目录是否可用" : project.sync_status === "CREATING" ? "同步完成后可用" : "强制同步"}
+                  title={
+                    isClient && !clientOnline
+                      ? "客户端离线，请在桌面客户端确认连接"
+                      : project.execution_mode === "local" || clientDirect
+                        ? "检查本机目录是否可用"
+                        : project.sync_status === "CREATING" ? "同步完成后可用" : "强制同步"
+                  }
                 >
                   {syncing ? (
                     <LoaderCircle size={12} className="spin" />
-                  ) : project.execution_mode === "local" ? (
+                  ) : project.execution_mode === "local" || clientDirect ? (
                     <FolderCheck size={12} />
                   ) : (
                     <FolderSync size={12} />
                   )}
-                  {project.execution_mode === "local"
+                  {project.execution_mode === "local" || clientDirect
                     ? syncing ? "检查中" : "检查目录"
                     : syncing ? "同步中" : "立即同步"}
                 </button>

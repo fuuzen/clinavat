@@ -1,33 +1,31 @@
-import { randomUUID } from 'node:crypto';
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess, vmWorkingDirectory } from '../environment.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import { loadAgentModels } from '../model-catalog.js';
 import { codexPermissions, createCodexRequests } from './requests.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { callHubTool, hubToolNamespace, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
+import { callHubTool, hubToolNamespace } from '../orchestration-tools.js';
 import { roleInstructions } from '../session-settings.js';
+import {
+  buildCodexThreadParams, buildCodexTurnSettings, codexDynamicToolsPayload, codexInput,
+  codexNativeToolsState, type CodexInput,
+} from './client-mode.js';
 import { codexServerArguments, createCodexGoalController, initializeCodexServer, type CodexGoalChange } from './goal.js';
 import { CodexSubagents } from './subagents.js';
+import { CodexTurnStream } from './stream.js';
+import { CodexBtwRouter } from '../btw/codex.js';
 import type { AgentPrompt, AgentRun, RunServices } from '../types.js';
 import { parseCodexRead } from '../../accounts/usage-parsers.js';
-
-type CodexInput = { type: 'text'; text: string } | { type: 'image'; url: string };
-
-const codexInput = (prompt: AgentPrompt): CodexInput[] => [
-  ...prompt.images.map(image => ({ type: 'image' as const, url: `data:${image.mediaType};base64,${image.data}` })),
-  ...(prompt.text ? [{ type: 'text' as const, text: prompt.text }] : []),
-];
 
 export async function startCodex(services: RunServices, prompt: AgentPrompt, signal: AbortSignal): Promise<AgentRun> {
   if (services.context.session.goal && services.context.session.agent_mode === 'plan') {
     throw new Error('Goal 自动执行需要普通模式，请切换模式后重试');
   }
-  const { execution } = services.config;
-  const scope = agentScope(services.context);
+  const { execution, workspaceDir } = services.config;
+  const scope = agentScope(services.context, workspaceDir);
   const binary = await execution.binary(scope, 'codex');
-  const root = workingDirectory(services.context);
+  const root = vmWorkingDirectory(services.context, workspaceDir);
   const permissions = codexPermissions(services);
-  const arguments_ = codexServerArguments(services.context);
+  const arguments_ = codexServerArguments(services.context, workspaceDir);
   if (signal.aborted) throw new Error('会话已停止');
   const child = await execution.spawn(binary, arguments_, {
     scope, cwd: root, env: agentEnvironment(execution, services.context, scope),
@@ -36,6 +34,8 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
   const closed = observeProcessClose(child);
   let threadId = '';
   let usageModel = 'unknown';
+  let resolvedModel: string | undefined;
+  let resolvedEffort: string | undefined;
   let turnId = '';
   let activeTurnId = '';
   let diagnostics = '';
@@ -49,48 +49,28 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
   let resumeGoal = false;
   let turnAbort = new AbortController();
   let pauseWaiter: { turnId: string; resolve(): void; reject(error: Error): void } | undefined;
-  let textSize = 0;
-  // Codex reconnects a dropped stream by itself; the attempts stay in the turn's process as one entry.
-  let retry: { id: string; text: string } | undefined;
-  const settleRetry = (outcome: string) => {
-    if (retry) services.event('activity', { id: retry.id, kind: 'notice', text: `${retry.text}（${outcome}）` });
-    retry = undefined;
-  };
   let mutations: Promise<unknown> = Promise.resolve();
   const mutate = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = mutations.then(operation, operation);
     mutations = result.catch(() => undefined);
     return result;
   };
-  const messages = new Map<string, string>();
-  const phases = new Map<string, string>();
-  const currentAnswerIds = new Set<string>();
+  const stream = new CodexTurnStream(services);
   let resolveCompletion!: () => void;
   let rejectCompletion!: (error: Error) => void;
   const completion = new Promise<void>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; })
     .finally(() => closed);
   void completion.catch(() => undefined);
-  const finalAnswer = (failed: boolean) => {
-    const explicitFinal = [...currentAnswerIds].filter(id => phases.get(id) === 'final_answer');
-    const unclassified = [...currentAnswerIds].filter(id => !phases.has(id));
-    const finalIds = explicitFinal.length ? explicitFinal : !failed && !stopped ? unclassified.slice(-1) : [];
-    for (const id of finalIds) services.event('activity', { id, kind: 'text', text: messages.get(id) || '', final: true });
-    const text = finalIds.map(id => messages.get(id)).join('\n\n').trim();
-    return text || (services.context.session.command === 'compact' && !failed && !stopped ? '原生上下文已压缩。网页中的历史消息仍会保留。' : '');
-  };
   const endTurn = (error?: Error) => {
     if (!turnActive || finished) return;
     turnActive = false;
     const wasInterrupted = interruptRequested;
     interruptRequested = false;
-    settleRetry(wasInterrupted ? '已停止重试' : error ? '重试后仍失败' : '已恢复');
+    stream.settleRetry(wasInterrupted ? '已停止重试' : error ? '重试后仍失败' : '已恢复');
     turnAbort.abort();
     requests.close();
-    const output = finalAnswer(!!error);
-    messages.clear();
-    phases.clear();
-    currentAnswerIds.clear();
-    textSize = 0;
+    const output = stream.finalAnswer(!!error, stopped);
+    stream.resetTurn();
     services.turnEnded(wasInterrupted ? { status: 'interrupted', output } : error ? { status: 'error', error: error.message, output } : { status: 'completed', output });
   };
   // Ends the process. A turn still running is left for the manager to record from the rejection.
@@ -104,9 +84,10 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     turnAbort.abort();
     requests.close();
     subagents.close();
+    btw.close(error);
     signal.removeEventListener('abort', abort);
     if (unfinishedTurn && turnActive) {
-      const output = finalAnswer(true);
+      const output = stream.finalAnswer(true, stopped);
       if (output) services.event('activity', { id: 'codex-partial-answer', kind: 'text', text: output, final: true });
     }
     rpc.close();
@@ -116,6 +97,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     else resolveCompletion();
   };
   const onMessage = async (message: RpcMessage) => {
+    if (btw.observe(message)) return;
     const params = message.params ?? {};
     if (goals.observe(message)) return;
     if (message.method === 'item/started' && params.item?.type === 'commandExecution') runningCommands.add(String(params.item.id));
@@ -149,48 +131,22 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     if (message.method === 'item/commandExecution/outputDelta') {
       services.event('tool', { id: params.itemId, tool: 'commandExecution', output: String(params.delta ?? '').slice(0, 128 * 1024), status: 'running', append: true });
     }
-    if (message.method === 'item/agentMessage/delta') {
-      const text = String(params.delta ?? '');
-      if (textSize + text.length > 8 * 1024 * 1024) {
-        await finish(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
-      }
-      const id = String(params.itemId ?? 'partial');
-      currentAnswerIds.add(id);
-      messages.set(id, (messages.get(id) ?? '') + text);
-      textSize += text.length;
-      services.event('activity', { id, kind: 'text', text, append: true });
+    if (message.method === 'item/agentMessage/delta' && !stream.onAgentMessageDelta(params)) {
+      await finish(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
     }
-    if (message.method === 'item/reasoning/summaryTextDelta') {
-      services.event('activity', {
-        id: `${params.itemId}:summary:${params.summaryIndex ?? 0}`, kind: 'reasoning',
-        text: String(params.delta ?? ''), append: true,
-      });
-    }
+    if (message.method === 'item/reasoning/summaryTextDelta') stream.onReasoningDelta(params);
     if (message.method === 'item/started') {
       const item = params.item;
       if (item && typeof item === 'object') requests.record(item);
-      if (item?.type === 'agentMessage' && typeof item.phase === 'string') phases.set(String(item.id), item.phase);
+      stream.onItemStarted(item);
       const tool = item && typeof item === 'object' ? subagents.toolEvent(item, false) : undefined;
       if (tool) services.event('tool', tool);
     }
     if (message.method === 'item/completed') {
       const item = params.item;
       if (item?.id) requests.forget(String(item.id));
-      if (item?.type === 'agentMessage' && typeof item.text === 'string') {
-        const id = String(item.id);
-        currentAnswerIds.add(id);
-        textSize += item.text.length - (messages.get(id)?.length ?? 0);
-        if (textSize > 8 * 1024 * 1024) {
-          await finish(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
-        }
-        messages.set(id, item.text);
-        if (typeof item.phase === 'string') phases.set(id, item.phase);
-        services.event('activity', { id, kind: 'text', text: item.text });
-      }
-      if (item?.type === 'reasoning' && Array.isArray(item.summary)) {
-        item.summary.forEach((text: unknown, index: number) => {
-          if (typeof text === 'string') services.event('activity', { id: `${item.id}:summary:${index}`, kind: 'reasoning', text });
-        });
+      if (!stream.onItemCompleted(item)) {
+        await finish(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
       }
       if (item && typeof item === 'object') {
         subagents.observeCall(item);
@@ -212,10 +168,8 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     }
     if (message.method === 'error') {
       const text = String(params.error?.message ?? 'Codex 运行错误');
-      if (params.willRetry === true && turnActive) {
-        retry = { id: retry?.id ?? `retry:${randomUUID()}`, text };
-        services.event('activity', { id: retry.id, kind: 'notice', text: `${text}（正在重试）` });
-      } else services.event('error', { message: text });
+      if (params.willRetry === true && turnActive) stream.recordRetry(text);
+      else services.event('error', { message: text });
     }
     if (message.method === 'turn/completed') {
       const turn = params.turn ?? {};
@@ -255,6 +209,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
     }
   };
   const rpc = new RpcClient(child, onMessage, (error) => { void finish(error); }, services.control);
+  const btw = new CodexBtwRouter(message => rpc.send(message));
   const goals = createCodexGoalController(rpc, () => threadId, goal => services.event('goal', { goal }));
   const makeRequests = () => createCodexRequests(services, AbortSignal.any([signal, turnAbort.signal]),
     message => rpc.send(message), () => !finished && !stopped);
@@ -286,18 +241,17 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       .then(result => services.config.usage?.observe(services.context.slot, 'codex-read', result,
         services.context.account_identity)).catch(() => undefined);
     const selection = services.context.session;
-    const shell = nativeReadsEnabled(services.context);
-    const tools = services.config.orchestration?.toolsFor(services.context) ?? [];
+    const dynamicTools = codexDynamicToolsPayload(services.config, services.context);
     const models = await loadAgentModels(services.config, services.context);
     const model = selection.model || models.find(item => item.isDefault)?.id;
     const effort = selection.reasoning_effort || models.find(item => item.id === model)?.defaultReasoningEffort;
+    resolvedModel = model;
+    resolvedEffort = effort;
     await services.verifyShell();
-    const shared = { cwd: root, sandbox: permissions.sandbox, approvalPolicy: permissions.approvalPolicy,
-      approvalsReviewer: permissions.approvalsReviewer,
-      developerInstructions: conversationInstructions(services.context, 'codex', services.config.orchestration?.briefing?.(services.context)) + roleInstructions(selection.role_preset),
-      ...(model ? { model } : {}),
-      config: { 'features.shell_tool': shell, 'features.unified_exec': shell, 'features.multi_agent': !isSuperAgent(services.context), 'features.goals': true,
-        ...(effort ? { model_reasoning_effort: effort } : {}) } };
+    const developerInstructions = await conversationInstructions(
+      services.context, 'codex', services.config.orchestration?.briefing?.(services.context), services.config.workspaces,
+    ) + roleInstructions(selection.role_preset);
+    const shared = buildCodexThreadParams({ context: services.context, root, permissions, developerInstructions, model, effort });
     const nativeId = services.context.session.native_session_id;
     // Each slot indexes the shared history through its own path; native resume resolves that path by ID.
     const { fork_native_id: forkFrom, fork_native_anchor: forkAt } = services.context.session;
@@ -306,29 +260,16 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       // A branch's first run forks its source's thread through the anchored turn.
       : forkFrom ? await rpc.request('thread/fork', { ...shared, threadId: forkFrom, ...(forkAt ? { lastTurnId: forkAt } : {}), excludeTurns: true })
         // A thread keeps the tools it started with, also when resumed; resume does not take them.
-        : await rpc.request('thread/start', { ...shared, ...(tools.length ? { dynamicTools: [{
-          type: 'namespace', name: hubToolNamespace, description: 'Clinavat tools for starting and directing child agents.',
-          tools: tools.map(tool => ({ type: 'function', ...tool })),
-        }] } : {}) });
+        : await rpc.request('thread/start', { ...shared, ...(dynamicTools ? { dynamicTools } : {}) });
     if (!result?.thread?.id) throw new Error('Codex 未返回线程 ID，请确认固定版本的 app-server 协议');
     if (nativeId && result.thread.id !== nativeId) throw new Error('Codex 恢复的会话与当前对话不一致');
     threadId = String(result.thread.id);
     usageModel = typeof result.model === 'string' && result.model ? result.model : model ?? usageModel;
     if (signal.aborted) throw new Error('会话已停止');
     await services.update({ native_session_id: threadId,
-      ...(!nativeId && !forkFrom ? { native_inspect_tools: tools.some(tool => tool.name === 'inspect') ? 1 : 0 } : {}) });
+      ...(!nativeId && !forkFrom ? { native_inspect_tools: codexNativeToolsState(selection, services.context.project, services.context.host) } : {}) });
     await goals.get();
-    const turnSettings = {
-      threadId, cwd: root,
-      approvalPolicy: permissions.approvalPolicy, approvalsReviewer: permissions.approvalsReviewer,
-      sandboxPolicy: permissions.sandboxPolicy,
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-      ...(model ? { collaborationMode: {
-        mode: selection.agent_mode === 'plan' ? 'plan' : 'default',
-        settings: { model, reasoning_effort: effort ?? null, developer_instructions: null },
-      } } : {}),
-    };
+    const turnSettings = buildCodexTurnSettings({ threadId, root, permissions, agentMode: selection.agent_mode, model, effort });
     requestTurn = (input: CodexInput[]) => rpc.request('turn/start', {
       ...turnSettings, input,
     }, 120000, false);
@@ -363,7 +304,7 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
         if (!nativePaused) return;
         turnAbort = new AbortController();
         requests = makeRequests();
-        currentAnswerIds.clear();
+        stream.resetAnswer();
         try {
           // An empty input continues the native context without adding a user message or synthetic prompt.
           if (resumeGoal) await goals.set({ action: 'resume' });
@@ -420,13 +361,15 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
         endTurn(error instanceof Error ? error : new Error('Codex 无法开始新一轮'));
       }
     }),
-    steer: async (input) => {
+    steer: async (input, messageId) => {
       const expectedTurnId = activeTurnId;
       if (!turnActive || !expectedTurnId || nativePaused || finished) return false;
+      stream.queueSteer(messageId);
       try {
-        await rpc.request('turn/steer', { threadId, expectedTurnId, input: codexInput(input) }, 30000, false);
+        await rpc.request('turn/steer', { threadId, expectedTurnId, clientUserMessageId: messageId, input: codexInput(input) }, 30000, false);
         return true;
       } catch (error) {
+        stream.cancelSteer(messageId);
         // The turn ended between the check and the request; the caller starts a new turn instead.
         if (activeTurnId !== expectedTurnId) return false;
         throw error;
@@ -439,10 +382,15 @@ export async function startCodex(services: RunServices, prompt: AgentPrompt, sig
       if (activeTurnId) await rpc.request('turn/interrupt', { threadId, turnId: activeTurnId }, 10000);
       else endTurn();
     }),
-    isIdle: () => !turnActive && !runningCommands.size && !subagents.busy(),
+    isIdle: () => !turnActive && !runningCommands.size && !subagents.busy() && !btw.busy(),
     close: () => { void finish(); },
     tasks: () => [],
     stopTask: async () => { throw new Error('Codex 不提供后台任务控制'); },
+    sideQuestion: (question, btwSignal, options) => btw.ask({
+      rpc, mainThreadId: threadId, root, model: resolvedModel, effort: resolvedEffort,
+      question, snapshot: options?.snapshot ?? '', signal: btwSignal, onDelta: options?.onDelta,
+      onActivityChanged: () => services.activityChanged(),
+    }),
     goal: {
     get: () => goals.get(),
     set: (input: CodexGoalChange) => mutate(async () => {

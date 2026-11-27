@@ -86,7 +86,7 @@ fn is_private_ipv6(address: Ipv6Addr) -> bool {
     || address.to_ipv4_mapped().is_some_and(is_private_ipv4)
 }
 
-/// Leaves the current Hub for the bundled Hub list.
+/// Leaves the current Hub for the bundled Hub list and destroys any detached child windows.
 pub fn return_home<R: Runtime>(app: &AppHandle<R>) {
   let state = app.state::<HubState>();
   state.set_current(None);
@@ -94,6 +94,8 @@ pub fn return_home<R: Runtime>(app: &AppHandle<R>) {
   let app = app.clone();
   // Callers include the webview's own navigation hook, so the next navigation starts after it returns.
   tauri::async_runtime::spawn(async move {
+    #[cfg(desktop)]
+    crate::windows::close_all_children_now(&app);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
       let _ = window.navigate(home);
     }
@@ -109,6 +111,8 @@ pub fn normalize_hub_url(url: String) -> Result<String, String> {
 pub async fn open_hub<R: Runtime>(app: AppHandle<R>, state: State<'_, HubState>, url: String) -> Result<String, String> {
   let hub = parse_hub_url(&url)?;
   let window = app.get_webview_window(MAIN_WINDOW).ok_or("找不到客户端主窗口")?;
+  #[cfg(desktop)]
+  crate::windows::close_all_children_now(&app);
   state.set_current(Some(hub.clone()));
   window.navigate(hub.clone()).map_err(|error| error.to_string())?;
   Ok(hub.into())

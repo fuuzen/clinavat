@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { z } from 'zod';
 import { sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Project, type Session, type Slot, type User } from '../models.js';
+import { normalizeRelativePath } from '../client-host/path-utils.js';
+import type { WorkspaceManager } from '../runtime/workspace.js';
 import { workspacePath } from '../agent/environment.js';
 import { agentEngines, engineProfiles, type AgentEngine } from '../agent/engines.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
@@ -100,10 +102,23 @@ export function assertNewName(context: Context, master: Session, name: string): 
 }
 
 /** A project-relative directory that exists in the project; null for the root. */
-export async function childDirectory(project: Project, requested?: string): Promise<string | null> {
+export async function childDirectory(project: Project, requested?: string, workspaces?: WorkspaceManager): Promise<string | null> {
   const value = requested?.trim().replace(/^(\.\/)+/, '').replace(/\/+$/, '');
   if (!value || value === '.') return null;
   if (path.posix.isAbsolute(value) || value.split('/').includes('..')) throw new HttpError(400, 'directory 必须是项目内的相对路径');
+  if (workspaces?.isClientHost(project.dev_host_id)) {
+    let normalized: string;
+    try {
+      normalized = normalizeRelativePath(value, { platform: workspaces.clientPlatform(project.dev_host_id) });
+    } catch (error) {
+      throw new HttpError(400, `目录 ${value} 不可用：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const meta = await workspaces.stat(project, normalized).catch((error: unknown) => {
+      throw new HttpError(400, `无法验证目录 ${normalized}：${error instanceof Error ? error.message : String(error)}`);
+    });
+    if (!meta.exists || meta.kind !== 'directory' || meta.isSymlink) throw new HttpError(400, `项目中没有目录 ${normalized}`);
+    return normalized;
+  }
   const full = await workspacePath(project.local_path, value).catch((error: unknown) => {
     throw new HttpError(400, `目录 ${value} 不可用：${error instanceof Error ? error.message : String(error)}`);
   });

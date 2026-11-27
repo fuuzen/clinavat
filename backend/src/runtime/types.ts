@@ -81,7 +81,7 @@ export function assertHostOwner(userId: string, host: DevHost): void {
   if (host.kind === 'local') return;
   if (host.kind === 'client') {
     if (!/^[^\s\0-\x1f\x7f]{1,253}$/.test(host.host)) throw new Error('开发机地址格式无效');
-    if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535) throw new Error('开发机端口无效');
+    if (!Number.isInteger(host.port) || host.port < 0 || host.port > 65535) throw new Error('开发机端口无效');
     return;
   }
   if (!isValidSshHost(host.host)) throw new Error('开发机地址格式无效');

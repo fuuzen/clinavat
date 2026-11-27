@@ -101,7 +101,36 @@ export class ProjectInspector {
   private async read(agent: AgentContext, project: Project, path: string, budget: TurnBudget, byteLimit: number, force: boolean,
     assertCurrent: () => void): Promise<HubToolResult> {
     const files = this.filesFor(agent);
-    const { handle } = await this.workspaces.rawFile(project, path, { followLinks: false });
+    if (this.workspaces.isClientDirect(project)) {
+      const meta = await this.workspaces.stat(project, path);
+      assertCurrent();
+      if (!meta.exists || meta.kind !== 'file' || meta.isSymlink) throw new HttpError(404, '文件不存在或无法访问');
+      const version = { mtimeMs: meta.mtimeMs ?? 0, size: meta.size ?? 0 };
+      if (!force && sameVersion(files?.get(path), version)) return { text: unchanged };
+      const length = Math.min(version.size, fileLimit);
+      if (budget.bytes + length > byteLimit) throw new HttpError(429, budgetError);
+      const slice = await this.workspaces.readSlice(project, path, fileLimit);
+      assertCurrent();
+      if (budget.bytes + slice.buffer.length > byteLimit) throw new HttpError(429, budgetError);
+      const truncated = slice.size > slice.buffer.length;
+      let content: string;
+      try {
+        if (slice.isBinary || slice.buffer.includes(0)) throw new Error('NUL');
+        content = new TextDecoder('utf-8', { fatal: true }).decode(slice.buffer, { stream: truncated });
+      } catch { throw new HttpError(400, 'inspect 仅支持 UTF-8 文本文件。'); }
+      budget.bytes += slice.buffer.length;
+      if (files) {
+        if (files.size >= 256 && !files.has(path)) files.delete(files.keys().next().value!);
+        files.set(path, { mtimeMs: slice.mtimeMs, size: slice.size });
+      }
+      return { text: JSON.stringify({ path, content, truncated }) };
+    }
+    const raw = await this.workspaces.rawFile(project, path, { followLinks: false });
+    if (!('stat' in raw.handle)) {
+      await raw.handle.close();
+      throw new HttpError(500, '不支持的文件句柄类型');
+    }
+    const { handle } = raw;
     try {
       const version = await handle.stat();
       assertCurrent();

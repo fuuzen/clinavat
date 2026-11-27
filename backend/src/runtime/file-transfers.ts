@@ -1,6 +1,8 @@
 import { chmod, lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join } from 'node:path';
+import { assertPortableFilename } from '../client-host/path-utils.js';
+import { mapClientRpcError } from '../client-host/workspace-adapter.js';
 import { HttpError } from '../models.js';
 import { descriptorPath, placeFile } from './contained-files.js';
 import type { WorkspaceProject } from './types.js';
@@ -69,6 +71,8 @@ function enforce(existing: Stats | undefined, condition: WriteCondition): void {
 /** Filesystem errors carry absolute server paths, so only their kind is reported. */
 export function transferFailure(error: unknown): unknown {
   if (error instanceof HttpError) return error;
+  const mapped = mapClientRpcError(error);
+  if (mapped instanceof HttpError) return mapped;
   const code = (error as NodeJS.ErrnoException).code;
   if (!code) return error instanceof Error ? new HttpError(400, error.message) : error;
   const messages: Record<string, [number, string]> = {
@@ -113,6 +117,9 @@ export class FileTransfers {
     if (this.receiving.has(key)) throw new HttpError(409, '该文件的上一段仍在上传');
     this.receiving.add(key);
     try {
+      if (this.workspaces.isClientDirect(project)) {
+        return await this.receiveClientDirect(project, chunk, body);
+      }
       if (chunk.offset === 0) {
         await this.sweep();
         // Checked before any data is staged, so a conflict surfaces without sending the whole file first.
@@ -127,7 +134,57 @@ export class FileTransfers {
   }
 
   async discard(project: WorkspaceProject, transfer: string): Promise<void> {
+    if (this.workspaces.isClientDirect(project)) return;
     await rm(this.stagedPath(project, transfer), { force: true });
+  }
+
+  private async receiveClientDirect(
+    project: WorkspaceProject, chunk: TransferChunk, body: AsyncIterable<Buffer> | Iterable<Buffer>,
+  ): Promise<{ received: number; file?: WrittenFile }> {
+    const adapter = this.workspaces.clientAdapter;
+    if (!adapter) throw new HttpError(503, '客户端文件服务未就绪');
+    try { assertPortableFilename(this.workspaces.clientPlatform(project.dev_host_id), chunk.path); }
+    catch (error) { throw new HttpError(400, error instanceof Error ? error.message : String(error)); }
+
+    if (chunk.offset === 0 && (chunk.condition.createOnly || chunk.condition.expectedTag)) {
+      const existing = await adapter.stat(project.dev_host_id, project.remote_path, chunk.path);
+      if (existing.exists) {
+        if (existing.kind === 'directory') throw new HttpError(409, '同名目录已存在');
+        if (existing.kind === 'symlink' || existing.isSymlink) throw new HttpError(409, '目标是符号链接，不能写入');
+        if (chunk.condition.createOnly) throw new HttpError(412, '文件已存在');
+        const currentTag = fileTag({ size: existing.size ?? 0, mtime: Math.floor(existing.mtimeMs ?? 0) });
+        if (chunk.condition.expectedTag && currentTag !== chunk.condition.expectedTag) {
+          throw new HttpError(412, '文件已在其他地方被修改');
+        }
+      } else if (chunk.condition.expectedTag) {
+        throw new HttpError(412, '文件已被删除');
+      }
+    }
+
+    const parts: Buffer[] = [];
+    let chunkBytes = 0;
+    for await (const data of body) {
+      chunkBytes += data.length;
+      if (chunkBytes > transferChunkBytes) throw new HttpError(413, '单次上传的数据超过 1 MiB');
+      if (chunk.offset + chunkBytes > chunk.size) throw new HttpError(413, '上传数据超过声明的大小');
+      parts.push(data);
+    }
+    const buffer = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+    const received = chunk.offset + buffer.length;
+    const isFinal = received >= chunk.size;
+    const result = await adapter.writeFile(project.dev_host_id, {
+      root: project.remote_path,
+      path: chunk.path,
+      contentBase64: buffer.toString('base64'),
+      offset: chunk.offset,
+      totalSize: chunk.size,
+      createDirs: true,
+      condition: chunk.offset === 0 ? chunk.condition : undefined,
+      commit: isFinal,
+    });
+    if (!isFinal) return { received };
+    const written = { path: chunk.path, size: result.size, mtime: Math.floor(result.mtimeMs) };
+    return { received, file: { ...written, etag: fileTag(written) } };
   }
 
   private async sweep(): Promise<void> {

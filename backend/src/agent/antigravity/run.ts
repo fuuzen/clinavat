@@ -1,41 +1,80 @@
-import { randomUUID } from 'node:crypto';
+import { lstat, realpath } from 'node:fs/promises';
+import path from 'node:path';
 import { openContained } from '../../runtime/contained-files.js';
 import { antigravityProbe } from '../../accounts/usage-probes.js';
 import { AntigravityPromptRounds, antigravityUsage } from '../../token-usage/meters.js';
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess, vmWorkingDirectory } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
 import { superAntigravityModel } from '../model-catalog.js';
-import { assertWritable, isSuperAgent, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { assertWritable, hasHubMcp, isClientDirect, isSuperAgent } from '../orchestration-tools.js';
 import { isHubToolCall, startToolBridge } from './tool-bridge.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import type { AgentPrompt, AgentRun, RunServices, TurnOutcome } from '../types.js';
 import { prepareAntigravityHome, rewrittenCommandNotice } from './setup.js';
-import { describeToolCall, formContent, formQuestions, toolOutput, toolStatus, type AcpToolCall } from './updates.js';
+import { AntigravityStream, describeToolCall, formContent, formQuestions, toolOutput, toolStatus, type AcpToolCall } from './updates.js';
 
 // How long a CLI told to finish may take before it is stopped.
 const EXIT_GRACE_MS = 10_000;
 // A prompt lasts as long as its turn; the RunControl timer leaves out paused time.
 const PROMPT_TIMEOUT_MS = 7 * 24 * 3_600_000;
-const TEXT_LIMIT = 8 * 1024 * 1024;
 // How long a finished prompt waits for the Stop hook to record whether agy still runs commands in the background.
 const STOP_RECORD_WAIT_MS = 3_000;
 const STOP_READ_LIMIT = 1024 * 1024;
 
 interface ConfigOption { id: string; category?: string; currentValue?: unknown; options?: { value?: unknown }[] }
+interface ActiveAcpPrompt { rounds: AntigravityPromptRounds; steerMessageId?: string; consumed: boolean }
+
+/** Resolves symlinks along existing ancestors while rejecting dangling symlinks. */
+async function resolveExistingRealpath(candidate: string): Promise<string | null> {
+  const missing: string[] = [];
+  let cursor = path.resolve(candidate);
+  while (true) {
+    try {
+      const actual = await realpath(cursor);
+      return missing.length ? path.join(actual, ...missing.reverse()) : actual;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      if ((await lstat(cursor).catch(() => undefined))?.isSymbolicLink()) return null;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return null;
+      missing.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+async function isStrictlyInBrain(brainRoot: string | undefined, cwd: string, target: string): Promise<boolean> {
+  if (!brainRoot || !target || /[\0\r\n]/.test(target)) return false;
+  const lexicalBrain = path.resolve(brainRoot);
+  if ((await lstat(lexicalBrain).catch(() => undefined))?.isSymbolicLink()) return false;
+  const realBrain = await resolveExistingRealpath(lexicalBrain);
+  if (!realBrain) return false;
+  const lexicalTarget = path.resolve(cwd, target);
+  const realTarget = await resolveExistingRealpath(lexicalTarget);
+  if (!realTarget) return false;
+  const inLexical = isWithinRoot(lexicalBrain, lexicalTarget) || isWithinRoot(realBrain, lexicalTarget);
+  return inLexical && isWithinRoot(realBrain, realTarget);
+}
 
 export async function startAntigravity(services: RunServices, prompt: AgentPrompt, signal: AbortSignal): Promise<AgentRun> {
   if (signal.aborted) throw new Error('会话已停止');
-  const { execution } = services.config;
+  const { execution, workspaceDir } = services.config;
   const { context } = services;
-  const scope = agentScope(context);
+  const scope = agentScope(context, workspaceDir);
+  const vmCwd = vmWorkingDirectory(context, workspaceDir);
   const binary = await execution.binary(scope, 'agy');
-  const home = await prepareAntigravityHome(context);
+  const home = await prepareAntigravityHome(context, workspaceDir);
   if (signal.aborted) throw new Error('会话已停止');
-  // A master's tools reach agy as a stdio MCP server, through a bridge back to the Hub.
-  const tools = orchestrates(context) ? await startToolBridge(services, home.toolShim, signal) : undefined;
+  // Hub tools (orchestration and/or client-direct) reach agy as a stdio MCP server, through a bridge back to the Hub.
+  const tools = hasHubMcp(context) ? await startToolBridge(services, home.toolShim, signal) : undefined;
   const child = await home.resetReadBudget().then(() => execution.spawn(binary, ['acp', '--disable-telemetry'], {
-    scope, cwd: workingDirectory(context), env: { ...agentEnvironment(execution, context, scope), ...home.hookEnvironment },
+    scope, cwd: vmCwd, env: { ...agentEnvironment(execution, context, scope), ...home.hookEnvironment },
   })).catch(async (error: unknown) => { tools?.close(); await home.close().catch(() => undefined); throw error; });
   services.control.track(child);
   const closed = observeProcessClose(child);
@@ -50,6 +89,8 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   // Prompts still awaiting their response: a prompt sent while a turn runs steers it and takes over its response.
   let prompts = 0;
   let latestPrompt: AntigravityPromptRounds | undefined;
+  const activePrompts: ActiveAcpPrompt[] = [];
+  let inUserMessageChunk = false;
   let interruptRequested = false;
   let failure = '';
   // The turn began without a prompt, when agy resumed after a background command; its end comes from the Stop hook.
@@ -63,58 +104,42 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
   let exitGrace: NodeJS.Timeout | undefined;
   let turnAbort = new AbortController();
   const runningCommands = new Set<string>();
-  // Text and thinking are split at every tool call; the reply is the text after the last one.
-  let turnKey = randomUUID();
-  let segment = 0;
-  let segmentOpen = false;
-  let thinking = 0;
-  let thinkingOpen = false;
-  let textSize = 0;
-  const texts = new Map<string, string>();
-  let lastTextId: string | undefined;
+  const stream = new AntigravityStream(services);
 
   const fail = (error: Error) => { failure ||= error.message; terminateProcess(child); };
+  const consumeSteerPrompt = (entry: ActiveAcpPrompt | undefined) => {
+    if (!entry?.steerMessageId || entry.consumed || !turnActive) return;
+    entry.consumed = true;
+    stream.steer();
+    services.steered(entry.steerMessageId);
+  };
   const endTurn = (outcome: TurnOutcome['status'], error?: string) => {
     if (!turnActive) return;
     turnActive = false;
     autonomous = false;
     interruptRequested = false;
+    inUserMessageChunk = false;
+    activePrompts.length = 0;
     turnAbort.abort();
-    const output = lastTextId ? texts.get(lastTextId)?.trim() ?? '' : '';
-    if (lastTextId && output) services.event('activity', { id: lastTextId, kind: 'text', text: texts.get(lastTextId), final: true });
-    texts.clear();
-    lastTextId = undefined;
-    textSize = 0;
+    const output = stream.finish();
     services.turnEnded(outcome === 'error' ? { status: 'error', error: error || 'Antigravity 运行失败', output } : { status: outcome, output });
     services.activityChanged();
   };
   const beginTurn = () => {
     turnActive = true;
     turnAbort = new AbortController();
-    turnKey = randomUUID();
+    inUserMessageChunk = false;
+    stream.reset();
     turnStops = stops;
-    segment = thinking = 0;
-    segmentOpen = thinkingOpen = false;
   };
 
   const append = (kind: 'text' | 'reasoning', text: string) => {
-    if (textSize + text.length > TEXT_LIMIT) { fail(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return; }
-    textSize += text.length;
-    if (kind === 'text') {
-      if (!segmentOpen) { segment++; segmentOpen = true; }
-      const id = `${turnKey}:text:${segment}`;
-      texts.set(id, (texts.get(id) ?? '') + text);
-      lastTextId = id;
-      services.event('activity', { id, kind: 'text', text, append: true });
-    } else {
-      if (!thinkingOpen) { thinking++; thinkingOpen = true; }
-      services.event('activity', { id: `${turnKey}:thinking:${thinking}`, kind: 'reasoning', text, append: true });
-    }
+    if (!stream.append(kind, text)) fail(new Error('CLI 文本输出超过 8 MiB，已停止会话'));
   };
 
   const onTool = (call: AcpToolCall) => {
     if (!call.toolCallId) return;
-    segmentOpen = thinkingOpen = false;
+    stream.breakBlocks();
     const status = toolStatus(call.status);
     if (call.name === 'run_command') {
       if (status === 'running') runningCommands.add(call.toolCallId);
@@ -133,6 +158,14 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
 
   const onUpdate = (update: Record<string, any>) => {
     const kind = update?.sessionUpdate;
+    if (kind === 'user_message_chunk') {
+      if (!inUserMessageChunk && turnActive) {
+        consumeSteerPrompt(activePrompts.find(entry => entry.steerMessageId && !entry.consumed));
+      }
+      inUserMessageChunk = true;
+      return;
+    }
+    inUserMessageChunk = false;
     latestPrompt?.observe(kind, update.toolCallId, update.status);
     const content = ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(kind);
     if (content && !turnActive && !closing && !stopped) {
@@ -168,12 +201,21 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       const writes = !leavingPlan && (['edit', 'delete', 'move'].includes(String(params.toolCall?.kind ?? '')) || ['Write', 'Edit'].includes(tool));
       const executes = !leavingPlan && (params.toolCall?.kind === 'execute' || tool === 'Bash');
       // A child confined to a directory may change only paths agy names inside it; a change naming none is refused.
-      const targets = [input.file_path, ...(Array.isArray(params.toolCall?.locations) ? params.toolCall.locations.map((location: { path?: unknown }) => location.path) : [])]
-        .filter((target): target is string => typeof target === 'string');
-      const outside = writes && !!context.session.agent_directory && (!targets.length
+      const rawInput = params.toolCall?.rawInput && typeof params.toolCall.rawInput === 'object'
+        ? params.toolCall.rawInput as Record<string, unknown> : {};
+      const targets = [
+        input.file_path,
+        rawInput.Path, rawInput.TargetFile, rawInput.AbsolutePath, rawInput.FilePath, rawInput.DirectoryPath,
+        ...(Array.isArray(params.toolCall?.locations) ? params.toolCall.locations.map((location: { path?: unknown }) => location.path) : []),
+      ].filter((target): target is string => typeof target === 'string');
+      const brainRoot = home.hookEnvironment.CLINAVAT_AGY_BRAIN_ROOT;
+      const allTargetsInBrain = targets.length > 0
+        && (await Promise.all(targets.map(target => isStrictlyInBrain(brainRoot, vmCwd, target)))).every(Boolean);
+      const outside = writes && !!context.session.agent_directory && !allTargetsInBrain && (!targets.length
         || (await Promise.all(targets.map(target => assertWritable(context, target).then(() => false, () => true)))).some(Boolean));
       const blockedBySuper = isSuperAgent(context) && (writes || executes);
-      const decision = blockedBySuper || (context.session.agent_access === 'read' && writes) || outside ? { decision: 'deny' as const }
+      const blockedByDirect = isClientDirect(context) && (executes || (writes && !allTargetsInBrain));
+      const decision = blockedBySuper || blockedByDirect || (context.session.agent_access === 'read' && writes) || outside ? { decision: 'deny' as const }
         : getPermissionMode(context.session) === 'full-access' && context.session.agent_mode !== 'plan'
           ? { decision: 'allow' as const } : await services.approve(tool, input, requestSignal);
       const optionId = requestSignal.aborted ? undefined : pick(decision.decision === 'allow' ? 'allow_once' : 'reject_once');
@@ -195,32 +237,42 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
     else if (message.method === 'session/update' && message.params?.sessionId === sessionId) onUpdate(message.params.update ?? {});
   }, fail, services.control, { name: 'Antigravity', connection: 'Antigravity ACP', jsonrpc: true });
 
-  const promptEnded = (rounds: AntigravityPromptRounds, result: any, error?: Error) => {
+  const promptEnded = (entry: ActiveAcpPrompt, result: any, error?: Error) => {
     prompts--;
+    const index = activePrompts.indexOf(entry);
+    if (index >= 0) activePrompts.splice(index, 1);
+    const { rounds } = entry;
     const record = result?.usage ? antigravityUsage(model, result.usage) : null;
     // A steer takes over the stream. A late reply from the previous prompt still contributes its billing record.
     if (record) services.recordTokenUsage({ records: [record], contextTokens: rounds === latestPrompt ? rounds.estimate(record) : null });
     if (rounds === latestPrompt) latestPrompt = undefined;
-    if (prompts > 0 || !turnActive) return;
+    if (prompts > 0) {
+      // When the preceding prompt yields, the next queued steer prompt takes over the stream.
+      if (turnActive && index === 0) consumeSteerPrompt(activePrompts[0]);
+      return;
+    }
+    if (!turnActive) return;
     const reason = result?.stopReason;
     if (error) endTurn('error', error.message);
     else if (interruptRequested || reason === 'cancelled') endTurn('interrupted');
     else if (reason === 'end_turn') {
       // agy also ends a turn while a command it moved to the background runs, and resumes when it finishes. Only the Stop
       // hook tells the two apart, so the turn ends once its record is read and the process can say whether it is idle.
-      const key = turnKey;
-      void awaitTurnStop().then(() => { if (turnKey === key && prompts === 0) endTurn('completed'); });
+      const key = stream.turnKey;
+      void awaitTurnStop().then(() => { if (stream.turnKey === key && prompts === 0) endTurn('completed'); });
     }
     else endTurn('error', reason === 'refusal' ? '模型拒绝了这次请求' : `Antigravity 本轮提前结束（${String(reason)}）`);
   };
-  const sendPrompt = (input: AgentPrompt) => {
+  const sendPrompt = (input: AgentPrompt, steerMessageId?: string) => {
     prompts++;
     const rounds = new AntigravityPromptRounds();
+    const entry: ActiveAcpPrompt = { rounds, ...(steerMessageId ? { steerMessageId } : {}), consumed: !steerMessageId };
+    activePrompts.push(entry);
     latestPrompt = rounds;
     const blocks = [...input.images.map(image => ({ type: 'image', mimeType: image.mediaType, data: image.data })),
       ...(input.text ? [{ type: 'text', text: input.text }] : [])];
     void rpc.request('session/prompt', { sessionId, prompt: blocks }, PROMPT_TIMEOUT_MS)
-      .then(result => promptEnded(rounds, result), (error: unknown) => promptEnded(rounds, undefined, error instanceof Error ? error : new Error(String(error))));
+      .then(result => promptEnded(entry, result), (error: unknown) => promptEnded(entry, undefined, error instanceof Error ? error : new Error(String(error))));
   };
 
   // The Stop hook marks every end of agy's loop; it is the only sign that a turn agy began by itself is over.
@@ -294,9 +346,9 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       clientInfo: { name: 'clinavat', title: 'Clinavat', version: '0.1.0' } }, 60_000);
     if (initialized?.protocolVersion !== 1) throw new Error('ACP 协议版本不兼容');
     const planning = context.session.agent_mode === 'plan';
-    const instructions = conversationInstructions(context, 'antigravity', services.config.orchestration?.briefing?.(context)) + (planning
+    const instructions = await conversationInstructions(context, 'antigravity', services.config.orchestration?.briefing?.(context), services.config.workspaces) + (planning
       ? '\nThe user selected Plan mode in the web UI. When the plan is complete, present the whole plan in your final response: the user cannot open files outside the project.' : '');
-    const opening = { cwd: workingDirectory(context), mcpServers: tools ? [tools.server] : [],
+    const opening = { cwd: vmCwd, mcpServers: tools ? [tools.server] : [],
       _meta: { antigravity: { systemPrompt: { append: instructions } } } };
     const nativeId = context.session.native_session_id;
     const session = nativeId ? await rpc.request('session/resume', { ...opening, sessionId: nativeId }, 120_000)
@@ -353,9 +405,9 @@ export async function startAntigravity(services: RunServices, prompt: AgentPromp
       beginTurn();
       sendPrompt(input);
     },
-    steer: async (input) => {
+    steer: async (input, messageId) => {
       if (!turnActive || autonomous || stopped) return false;
-      sendPrompt(input);
+      sendPrompt(input, messageId);
       return true;
     },
     interruptTurn: async () => {

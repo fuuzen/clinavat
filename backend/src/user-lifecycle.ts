@@ -42,10 +42,11 @@ function withUserLocks<T>(context: Context, userId: string, operation: () => Pro
  * workspace machine. Suspension keeps every file so the user can come back; deletion removes mirrors and keys too.
  */
 async function reclaim(context: Context, user: User, remove: boolean): Promise<void> {
-  const { store, agents, config, ssh, workspaces, connections, sshRelay, devHostApprovals } = context;
+  const { store, agents, config, ssh, workspaces, connections, sshRelay, devHostApprovals, clientHostRegistry } = context;
   signOut(context, user.id);
   const revokeReason = remove ? 'user_deleted' : 'user_suspended';
   const revokeNote = remove ? '用户账号已删除' : '用户账号已停用';
+  clientHostRegistry.disconnectUser(user.id, revokeReason);
   await sshRelay.revoke({ userId: user.id }, revokeReason);
   revokeTerminalSockets({ userId: user.id }, revokeNote);
   devHostApprovals.revokeByUser(user.id, revokeNote);
@@ -72,7 +73,7 @@ async function reclaim(context: Context, user: User, remove: boolean): Promise<v
   for (const host of store.all<Host>("SELECT * FROM dev_hosts WHERE user_id=? AND kind='ssh'", user.id)) {
     await (remove ? ssh.deleteHost(user.id, host) : ssh.disconnectHost(user.id, host));
   }
-  store.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE user_id=? AND kind='ssh'", user.id);
+  store.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE user_id=? AND kind IN ('ssh','client')", user.id);
   await workspaces.stopDaemon(user.id).catch(() => undefined);
   const userDirectory = join(config.dataDir, 'users', user.id);
   // Slot machines keep the last user's files mounted until the next user arrives.

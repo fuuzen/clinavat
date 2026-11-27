@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "check": "tsc -b",
+    "prepare:android": "node prepare-mobile.mjs android",
+    "prepare:ios": "node prepare-mobile.mjs ios",
     "tauri": "tauri"
   },
   "dependencies": {

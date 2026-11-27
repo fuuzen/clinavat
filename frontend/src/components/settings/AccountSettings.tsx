@@ -1,26 +1,39 @@
 import {
   CircleUserRound,
   KeyRound,
+  Laptop,
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { statusLabel } from "../../api";
+import { hasClientDeviceIdentity, useClientShell } from "../../client";
 import type { Overview } from "../../types";
 import { useSlotUsage } from "../../useSlotUsage";
 import { CopyButton } from "../Dialogs";
+import ClientDeviceCard from "../hosts/ClientDeviceCard";
+import { isClientHost } from "../hosts/client-device";
 import LimitResetDialog, { limitResetDisabledReason, limitResetOffer, resetCreditsText } from "../usage/LimitReset";
 import SlotUsageMeter from "../usage/SlotUsageMeter";
 import { engineLabel, engineProfiles } from "../../engines";
 
 export default function AccountSettings({
   overview,
+  onRefresh,
+  onNotice,
 }: {
   overview: Overview;
+  onRefresh: () => Promise<void>;
+  onNotice?: (message: string, kind?: "error" | "success") => void;
 }) {
+  const shell = useClientShell();
   const usage = useSlotUsage(overview.slots.length > 0);
   const [resetting, setResetting] = useState("");
   const resettingSlot = overview.slots.find((slot) => slot.id === resetting && slot.can_reset_limits);
+  const clientHosts = overview.hosts.filter(isClientHost);
+  const showClientSection = hasClientDeviceIdentity(shell) || clientHosts.length > 0;
+  const maintenanceEnabled = !!overview.maintenance?.enabled;
+  const maintenanceTip = "系统维护中，当前为只读模式";
   return (
     <>
       <div className="settings-section-heading">
@@ -37,6 +50,34 @@ export default function AccountSettings({
         </div>
         <span className="badge">独立工作空间</span>
       </div>
+      {showClientSection && (
+        <>
+          <div className="settings-section-heading">
+            <Laptop size={17} />
+            <h3>客户端开发机设备</h3>
+          </div>
+          <div className="settings-client-devices">
+            <ClientDeviceCard
+              hosts={overview.hosts}
+              readOnly={maintenanceEnabled}
+              readOnlyReason={maintenanceTip}
+              onRefresh={onRefresh}
+              onNotice={onNotice}
+            />
+            {clientHosts.map((host) => (
+              <ClientDeviceCard
+                key={host.id}
+                host={host}
+                projectCount={overview.projects.filter((project) => project.dev_host_id === host.id && !project.parent_project_id).length}
+                readOnly={maintenanceEnabled}
+                readOnlyReason={maintenanceTip}
+                onRefresh={onRefresh}
+                onNotice={onNotice}
+              />
+            ))}
+          </div>
+        </>
+      )}
       <div className="settings-section-heading">
         <ShieldCheck size={17} />
         <h3>获授权的账号槽位</h3>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { statusLabel } from "../../../api";
+import { errorText, post, statusLabel } from "../../../api";
 import type { AgentBehavior, AgentSelection, PermissionMode, Session } from "../../../types";
 import { rolePresets } from "./BehaviorPicker";
 import { effortName } from "../ReasoningEffortControl";
@@ -8,6 +8,7 @@ import { parseSlashCommand } from "../composer/commands";
 import { engineLabel, engineProfiles, type AgentEngine } from "../../../engines";
 
 const commonCommands = [
+  { name: "btw", description: "旁路提问（不打断当前运行、不计入主上下文）", argumentHint: "问题内容" },
   { name: "help", description: "查看命令和键盘快捷键" },
   { name: "clear", description: "新建对话，保留当前历史" },
   { name: "model", description: "打开模型与思考强度选择" },
@@ -38,7 +39,8 @@ export function useChatCommands(props: {
   onStop: () => void;
   onPause: () => Promise<boolean>;
   onResume: () => Promise<boolean>;
-  onRollover: (note?: string) => Promise<boolean>;
+  onProjectRefresh: () => Promise<void>;
+  onBtw: (question: string) => Promise<boolean>;
   onGoalCommand: (arguments_: string) => Promise<boolean>;
   runStatus?: string;
   onDiff: () => void;
@@ -49,6 +51,15 @@ export function useChatCommands(props: {
   const [permissionRequest, setPermissionRequest] = useState(0);
   const [behaviorRequest, setBehaviorRequest] = useState(0);
   const profile = engineProfiles[props.engine];
+  const rollover = async (note?: string): Promise<boolean> => {
+    if (!props.session) return false;
+    try {
+      await post(`/sessions/${props.session.id}/rollover`, note ? { note } : {});
+      await props.onProjectRefresh();
+      props.onNotice("已完成无感上下文续接，下一条消息将启动全新底层会话", "success");
+      return true;
+    } catch (cause) { props.onNotice(errorText(cause)); return false; }
+  };
   const commands = [
     ...commonCommands.filter((command) => command.name !== "compact" || profile.compact),
     ...(profile.orchestration && !props.session?.parent_session_id ? [{ name: "super", description: "切换到 Super Agent 只读统筹编排模式" }] : []),
@@ -63,12 +74,18 @@ export function useChatCommands(props: {
     const name = match.name.toLowerCase();
     const args = match.arguments.trim();
     const fail = (message: string) => { props.onNotice(message); return "blocked" as const; };
+    if (name === "btw") {
+      if (!args) return fail("请输入旁路问题，例如：/btw 当前改动影响了哪些文件？");
+      if (!props.session) return fail("请先发起或选择一个对话，再使用 /btw 旁路提问。");
+      if (props.session.archived_at) return fail("对话已归档，请先恢复后再提问。");
+      return await props.onBtw(args) ? "handled" : "blocked";
+    }
     if (name === "goal") {
       if (!engineProfiles[props.engine].goal) return fail("Goal 仅适用于 Codex 对话。");
       return await props.onGoalCommand(args) ? "handled" : "blocked";
     }
     if (!commands.some((command) => command.name === name)) return fail(`网页暂不支持 /${name}，输入 /help 查看可用命令。`);
-    if (!["compact", "role", "rollover"].includes(name) && args) return fail(`/${name} 不需要参数。`);
+    if (!["compact", "role", "rollover", "btw"].includes(name) && args) return fail(`/${name} 不需要参数。`);
     if (name === "help") { setHelpOpen(true); return "handled"; }
     if (name === "stop") { props.onStop(); return "handled"; }
     if (name === "pause" || name === "resume") {
@@ -96,7 +113,7 @@ export function useChatCommands(props: {
     }
     if (name === "rollover") {
       if (!props.session) return fail("当前对话尚未开始，请先发送一条消息。");
-      return await props.onRollover(args || undefined) ? "handled" : "blocked";
+      return await rollover(args || undefined) ? "handled" : "blocked";
     }
     if (name === "model") setModelRequest((value) => value + 1);
     if (name === "permissions") setPermissionRequest((value) => value + 1);
@@ -123,5 +140,5 @@ export function useChatCommands(props: {
     {engineProfiles[props.engine].goal && <p>/goal 查看；/goal 目标内容 创建；/goal pause 暂停目标；/goal edit 编辑；/goal resume 继续目标。Goal 暂停控制目标的自动继续。</p>}
     <p>输入 / 选择命令，@ 引用项目文件；Tab 补全，↑ ↓ 选择，Esc 关闭，Shift + Tab 切换模式，Shift + Enter 换行。</p>
   </section>;
-  return { commands, handleCommand, help, modelRequest, permissionRequest, behaviorRequest };
+  return { commands, handleCommand, help, modelRequest, permissionRequest, behaviorRequest, rollover };
 }

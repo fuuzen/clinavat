@@ -19,3 +19,92 @@
 .chat-command-help p { font-size: 11px; color: var(--muted); margin-bottom: 0; }
 .agent-question.deferred { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .agent-question .agent-question-hint { font-size: 12px; color: var(--muted); margin: -4px 0 4px; }
+
+.btw-composer-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--accent);
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+}
+.btw-send-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.btw-panel {
+  margin: 18px 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+  min-width: 0;
+}
+.btw-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border-bottom: 1px solid var(--line);
+}
+.btw-panel-collapsed .btw-panel-header { border-bottom: 0; }
+.btw-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btw-panel-toggle strong { color: var(--text); font-size: 13px; }
+.btw-panel-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+.btw-panel-count { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.btw-panel-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.btw-list { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; max-height: 440px; overflow-y: auto; }
+.btw-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  min-width: 0;
+}
+.btw-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.btw-item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.btw-item-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.btw-status-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 11px; }
+.btw-pill-running { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.btw-pill-completed { color: var(--success, #2e9b63); background: color-mix(in srgb, var(--success, #2e9b63) 12%, transparent); }
+.btw-pill-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.btw-pill-cancelled { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.btw-question { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; font-size: 13px; }
+.btw-question p { margin: 0; color: var(--text); font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
+.btw-q-tag { font-family: var(--mono, monospace); font-size: 11px; color: var(--accent); flex-shrink: 0; }
+.btw-answer { font-size: 13px; line-height: 1.65; min-width: 0; }
+.btw-thinking { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 4px 0; }
+.btw-muted { margin: 0; font-size: 12px; color: var(--muted); }
+.btw-error { margin: 6px 0 0; font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }

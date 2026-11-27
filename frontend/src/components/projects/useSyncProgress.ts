@@ -45,7 +45,7 @@ export function useSyncProgress(
     statuses.current = new Map(projects.map((project) => [project.id, project.sync_status]));
     // Failures arrive as error events from the server with the reason; only completion is announced here.
     for (const project of projects) {
-      if (previous?.get(project.id) === "CREATING" && project.sync_status === "WATCHING")
+      if (previous?.get(project.id) === "CREATING" && (project.sync_status === "WATCHING" || project.sync_status === "READY"))
         notify(`项目「${project.name}」同步完成，可以开始工作了`, "success");
     }
   }, [projects, notify]);

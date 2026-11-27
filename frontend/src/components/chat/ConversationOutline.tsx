@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type { Message, Turn } from "../../types";
-import { useConversationOutline } from "./useConversationOutline";
+import { useConversationOutline, type OutlineStatus } from "./useConversationOutline";
 import "../../styles/conversation-outline.css";
 
 interface Props {
@@ -11,10 +11,12 @@ interface Props {
   onNavigate: () => void;
 }
 
-const statusNames: Record<Turn["status"], string> = {
+const statusNames: Record<OutlineStatus, string> = {
   running: "正在回复…",
   pausing: "正在暂停…",
   paused: "本轮已暂停",
+  steered: "已引导",
+  "pending-steer": "等待接入当前回复…",
   completed: "本轮已完成",
   interrupted: "本轮已停止",
   error: "本轮出错",

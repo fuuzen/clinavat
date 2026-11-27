@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
+import { agentHostInfo, projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type User } from '../models.js';
 import { resolveAgentSelection, validateAgentSelection } from '../agent/model-catalog.js';
 import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
@@ -52,6 +52,32 @@ export function sessionMessageRoutes(app: FastifyInstance, context: Context) {
     if (!image) throw new HttpError(404, '图片不存在或已删除');
     return reply.type(image.media_type).send(Buffer.from(image.data));
   });
+  app.get('/api/sessions/:id/btw', async request => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    return context.btw.list(id);
+  });
+  app.post('/api/sessions/:id/btw', async (request, reply) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const input = z.object({
+      question: z.string().trim().min(1, '请输入旁路提问内容').max(20000),
+      slotId: selectedSlotId.nullable().optional(),
+      model: selectionFields.model,
+      reasoningEffort: selectionFields.reasoningEffort,
+    }).strict().parse(request.body);
+    return reply.code(201).send(await context.btw.ask(request.user, id, input.question, input));
+  });
+  app.post('/api/sessions/:id/btw/:btwId/cancel', async request => {
+    const { id, btwId } = z.object({ id: z.uuid(), btwId: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    return context.btw.cancel(request.user.id, id, btwId);
+  });
+  app.delete('/api/sessions/:id/btw/:btwId', async request => {
+    const { id, btwId } = z.object({ id: z.uuid(), btwId: z.uuid() }).parse(request.params);
+    sessionFor(context, id, request.user.id);
+    context.btw.remove(request.user.id, id, btwId);
+    return { ok: true };
+  });
 }
 
 /** How the Hub sends on a master agent's behalf: who wrote the message, and what the CLI receives for it. */
@@ -80,7 +106,9 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     if (currentRuntime.switching) throw new HttpError(409, '正在切换账号，请等待完成或停止对话');
     if (currentRuntime.settling) throw new HttpError(409, '正在回收账号状态，请等待完成或停止对话');
     const auto = session.slot_mode === 'auto';
-    if (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING') {
+    const host = agentHostInfo(context, project.dev_host_id, user.id);
+    const isClientDirect = host.kind === 'client' && project.client_mode !== 'mirrored';
+    if (!isClientDirect && (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING')) {
       throw new HttpError(409, project.execution_mode === 'local' ? '请先检查本机项目目录是否可访问' : '请先恢复项目同步');
     }
     const resetModel = !auto && input.slotId !== undefined && input.slotId !== session.slot_id;
@@ -113,11 +141,11 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     }
     if (compact && input.images.length) throw new HttpError(400, '/compact 不能附带图片');
     const images = messageImages(store, id, input.images);
-    const renewThread = !compact && codexInspectToolsChanged(session);
+    const renewThread = !compact && codexInspectToolsChanged(session, project, host);
     const runContext = {
       runtime_home: slot.home_dir,
       runtime_kind: 'conversation' as const,
-      user, project, slot,
+      user, project, host, slot,
       session: { ...session, slot_id: slot.id, model: resolved.model, reasoning_effort: resolved.reasoningEffort, permission_mode: permissionMode,
         model_is_explicit: !!model, reasoning_effort_is_explicit: !!reasoningEffort, agent_mode: agentMode, role_preset: rolePreset,
         ...(renewThread ? { native_session_id: null, jsonl_file_path: null, fork_native_id: null, fork_native_anchor: null } : {}),

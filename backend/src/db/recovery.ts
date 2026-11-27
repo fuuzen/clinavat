@@ -21,6 +21,8 @@ export function runStartupRecovery(store: Store): void {
   store.run(`UPDATE agent_tasks SET status='interrupted',finished_at=?,report=COALESCE(report,'服务重新启动，子智能体的执行被中断')
     WHERE status='running'`, interruptedAt);
   store.run(`UPDATE discussions SET status='stopped',finished_at=?,detail='服务重新启动，讨论被中断' WHERE status='running'`, interruptedAt);
+  store.run(`UPDATE session_btw_exchanges SET status='error',error=COALESCE(error,'服务重启，旁路提问已中断'),completed_at=?
+    WHERE status='running'`, interruptedAt);
   store.run("UPDATE dev_hosts SET status='DISCONNECTED' WHERE status='CONNECTED' AND kind IN ('ssh','client')");
   for (const user of store.all<User>("SELECT * FROM users WHERE role='admin'")) ensureLocalHost(store, user.id);
   store.run("UPDATE approvals SET status='expired', reason='服务重新启动' WHERE status='pending'");

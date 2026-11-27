@@ -2,16 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { AlertCircle, LoaderCircle } from "lucide-react";
 import { api, ApiError, errorText, post } from "./api";
 import { loadSiteSettings, useSiteSettings } from "./site/store";
-import type {
-  Approval,
-  DevHost,
-  MaintenanceState,
-  Overview,
-  Project,
-  Session,
-  ToolEvent,
-  Turn,
-} from "./types";
+import type { Approval, DevHost, MaintenanceState, Overview, Project, Session, ToolEvent, Turn } from "./types";
 import { useWorkspaceEvents } from "./useWorkspaceEvents";
 import { useConversationHistory } from "./useConversationHistory";
 import { useSelectedSession } from "./hooks/useSelectedSession";
@@ -19,9 +10,6 @@ import { useSessionBehavior, useSessionPermissions, useSessionQuestions, useSess
 import { useSessionRunControl } from "./useSessionRunControl";
 import { usePendingSends } from "./components/chat/usePendingSends";
 import { createMessageSender } from "./components/chat/send-message";
-import HostDialog from "./components/hosts/HostDialog";
-import ProjectDialog from "./components/projects/ProjectDialog";
-import ProjectMemoryDialog from "./components/projects/ProjectMemoryDialog";
 import { useSyncProgress } from "./components/projects/useSyncProgress";
 import { hostConnectionMessage, type HostConnection } from "./components/hosts/host-connection";
 import Auth from "./components/Auth";
@@ -29,35 +17,18 @@ import Brand from "./components/Brand";
 import ClientHubSwitch from "./components/ClientHubSwitch";
 import Sidebar from "./components/Sidebar";
 import Chat from "./components/Chat";
-import Inspector from "./components/Inspector";
-import DiscussionDialog from "./components/chat/agents/DiscussionDialog";
-import Settings from "./components/Settings";
-import AppNotices, { type Notice } from "./components/AppNotices";
-import { ConfirmDialog, RenameDialog } from "./components/Dialogs";
+import Inspector, { type InspectorTabRequest } from "./components/Inspector";
+import type { Notice } from "./components/AppNotices";
+import AppOverlays, { type AppDialog } from "./windows/AppOverlays";
+import { broadcastWindowEvent, subscribeWindowEvents } from "./windows/channel";
+import { openDetachedWindow } from "./windows/launcher";
+import type { SettingsTab } from "./windows/types";
 
 const AdminPanel = lazy(() => import("./components/admin/AdminPanel"));
 
-type Dialog =
-  | { type: "host"; host?: DevHost }
-  | { type: "project"; host?: DevHost }
-  | {
-      type: "delete";
-      kind: "host" | "project" | "session";
-      id: string;
-      name: string;
-    }
-  | { type: "rename"; session: Session }
-  | { type: "discussion"; project: Project }
-  | { type: "memory"; project: Project }
-  | { type: "settings" }
-  | null;
-
 export default function App() {
   const siteSettings = useSiteSettings();
-  const [auth, setAuth] = useState<{
-    needsSetup: boolean;
-    registrationEnabled: boolean;
-  } | null>(null);
+  const [auth, setAuth] = useState<{ needsSetup: boolean; registrationEnabled: boolean } | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [initialError, setInitialError] = useState("");
@@ -68,27 +39,23 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminVisited, setAdminVisited] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(
-    () => window.innerWidth >= 1280,
-  );
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
   const [streamConnected, setStreamConnected] = useState(false);
   const [inspectorRefresh, setInspectorRefresh] = useState(0);
-  const [inspectorRequest, setInspectorRequest] = useState<{ tab: "changes"; id: number }>();
-  const [dialog, setDialog] = useState<Dialog>(null);
+  const [inspectorRequest, setInspectorRequest] = useState<InspectorTabRequest>();
+  const [memoryRefreshTick, setMemoryRefreshTick] = useState(0);
+  const [dialog, setDialog] = useState<AppDialog>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
   const sendRequestRef = useRef(0);
   const forking = useRef(false);
-  const notify = useCallback(
-    (content: string, kind: Notice["kind"] = "error") => {
-      const id = Date.now() + Math.random();
-      setNotices((current) => [...current.slice(-3), { id, content, kind }]);
-      window.setTimeout(
-        () => setNotices((current) => current.filter((item) => item.id !== id)),
-        7000,
-      );
-    },
-    [],
-  );
+  const overviewRef = useRef<Overview | null>(null);
+  overviewRef.current = overview;
+
+  const notify = useCallback((content: string, kind: Notice["kind"] = "error") => {
+    const id = Date.now() + Math.random();
+    setNotices((current) => [...current.slice(-3), { id, content, kind }]);
+    window.setTimeout(() => setNotices((current) => current.filter((item) => item.id !== id)), 7000);
+  }, []);
   const refresh = useCallback(async () => {
     setOverview(await api<Overview>("/overview"));
   }, []);
@@ -98,8 +65,7 @@ export default function App() {
     project, session, select, openSession, archiveSession, handleSessionDeleted, clearOpenedArchived,
   } = useSelectedSession({ overview, setOverview, sendRequestRef, onNavigate: closeAdmin, refresh, notify });
   const { sending, beginSend, clearPendingSends } = usePendingSends(projectId, sessionId);
-  const { messages, turns, reloadMessages, receiveTurn, resetHistory } =
-    useConversationHistory(selectedSessionRef);
+  const { messages, turns, reloadMessages, receiveTurn, resetHistory } = useConversationHistory(selectedSessionRef);
   const receiveMaintenance = useCallback((maintenance: MaintenanceState) => {
     setOverview((current) => (current ? { ...current, maintenance } : current));
   }, []);
@@ -113,20 +79,32 @@ export default function App() {
     try {
       setApprovals(await api<Approval[]>("/approvals"));
     } catch (cause) {
-      if (!(cause instanceof ApiError && cause.status === 401))
-        notify(errorText(cause));
+      if (!(cause instanceof ApiError && cause.status === 401)) notify(errorText(cause));
     }
   }, [notify]);
+
+  const clearSignedInState = useCallback((resetSelection: boolean) => {
+    broadcastWindowEvent({ type: "logout" });
+    setOverview(null);
+    clearOpenedArchived();
+    setAdminOpen(false);
+    setAdminVisited(false);
+    setDialog(null);
+    resetHistory();
+    setStreaming("");
+    setTools([]);
+    clearPendingSends();
+    if (resetSelection) changeSelection("");
+    else sendRequestRef.current += 1;
+  }, [clearOpenedArchived, resetHistory, clearPendingSends, changeSelection]);
+
   async function initialize() {
     setInitializing(true);
     setInitialError("");
     try {
       // Branding availability must not prevent authentication or workspace access.
       void loadSiteSettings().catch(() => undefined);
-      const status = await api<{
-        needsSetup: boolean;
-        registrationEnabled: boolean;
-      }>("/auth/status");
+      const status = await api<{ needsSetup: boolean; registrationEnabled: boolean }>("/auth/status");
       setAuth(status);
       if (!status.needsSetup) {
         try {
@@ -141,9 +119,8 @@ export default function App() {
       setInitializing(false);
     }
   }
-  useEffect(() => {
-    void initialize();
-  }, []);
+
+  useEffect(() => { void initialize(); }, []);
   useEffect(() => {
     const reload = () => { if (document.visibilityState === "visible") void loadSiteSettings().catch(() => undefined); };
     window.addEventListener("focus", reload);
@@ -162,16 +139,11 @@ export default function App() {
     let disposed = false;
     setLoadingMessages(true);
     void reloadMessages(sessionId)
-      .catch((cause) => {
-        if (!disposed) notify(errorText(cause));
-      })
-      .finally(() => {
-        if (!disposed) setLoadingMessages(false);
-      });
-    return () => {
-      disposed = true;
-    };
+      .catch((cause) => { if (!disposed) notify(errorText(cause)); })
+      .finally(() => { if (!disposed) setLoadingMessages(false); });
+    return () => { disposed = true; };
   }, [sessionId, !!overview, reloadMessages, resetHistory, notify]);
+
   useWorkspaceEvents({
     userId: overview?.user.id,
     selectedSessionRef,
@@ -186,17 +158,37 @@ export default function App() {
     setTools,
     setInspectorRefresh,
   });
+
+  useEffect(() => subscribeWindowEvents((message) => {
+    if (message.type === "overview-changed") void refresh().catch(() => undefined);
+    else if (message.type === "file-saved") setInspectorRefresh((value) => value + 1);
+    else if (message.type === "memory-changed") setMemoryRefreshTick((value) => value + 1);
+    else if (message.type === "open-session") {
+      setAdminOpen(false);
+      openSession(message.sessionId);
+    } else if (message.type === "locate-file") {
+      setAdminOpen(false);
+      const targetProject = overviewRef.current?.projects.find((item) => item.id === message.projectId);
+      if (targetProject && selectedProjectRef.current !== targetProject.id) select(targetProject);
+      setInspectorOpen(true);
+      setInspectorRequest({ tab: "files", path: message.path, id: Date.now() });
+    }
+  }), [refresh, openSession, select, selectedProjectRef]);
+
+  useEffect(() => {
+    const signedOut = () => clearSignedInState(false);
+    window.addEventListener("clinavat:unauthorized", signedOut);
+    return () => window.removeEventListener("clinavat:unauthorized", signedOut);
+  }, [clearSignedInState]);
+
   const send = createMessageSender({
     project, session, userId: overview?.user.id, beginSend, request: sendRequestRef,
     selectedProject: selectedProjectRef, selectedSession: selectedSessionRef, selectSession: setSessionId,
     receiveSession: target => setOverview(previous => previous ? { ...previous, sessions: [target, ...previous.sessions] } : previous),
     clearOutput: () => { setStreaming(""); setTools([]); }, refresh, reloadMessages, notify,
   });
-  async function decide(
-    id: string,
-    decision: "allow" | "deny",
-    reason?: string,
-  ) {
+
+  async function decide(id: string, decision: "allow" | "deny", reason?: string) {
     try {
       await post(`/approvals/${id}`, { decision, reason });
       await refreshApprovals();
@@ -204,12 +196,11 @@ export default function App() {
       notify(errorText(cause));
     }
   }
+
   async function connect(host: DevHost) {
     notify(`正在连接 ${host.name}…`, "success");
     try {
-      const result = await post<HostConnection>(
-        `/hosts/${host.id}/connect`,
-      );
+      const result = await post<HostConnection>(`/hosts/${host.id}/connect`);
       await refresh();
       notify(hostConnectionMessage(host.name, result), result.pendingApproval ? undefined : "success");
     } catch (cause) {
@@ -217,22 +208,18 @@ export default function App() {
       await refresh().catch(() => {});
     }
   }
+
   async function remove() {
     if (dialog?.type !== "delete") return;
-    const endpoint =
-      dialog.kind === "host"
-        ? "hosts"
-        : dialog.kind === "project"
-          ? "projects"
-          : "sessions";
+    const endpoint = dialog.kind === "host" ? "hosts" : dialog.kind === "project" ? "projects" : "sessions";
     await api(`/${endpoint}/${dialog.id}`, { method: "DELETE" });
-    if (dialog.id === projectId) {
-      changeSelection("");
-    }
+    if (dialog.id === projectId) changeSelection("");
     else if (dialog.id === sessionId) changeSelection(projectId);
     await refresh();
+    broadcastWindowEvent({ type: "overview-changed", reason: "hosts" });
     notify("已删除", "success");
   }
+
   async function fork(turn: Turn) {
     if (!project || !session || forking.current) return;
     forking.current = true;
@@ -248,44 +235,32 @@ export default function App() {
       forking.current = false;
     }
   }
+
   async function logout() {
     try {
       await post("/auth/logout");
-      setOverview(null);
-      clearOpenedArchived();
-      setAdminOpen(false);
-      setAdminVisited(false);
-      clearPendingSends();
-      resetHistory();
-      setStreaming("");
-      setTools([]);
-      changeSelection("");
-      setDialog(null);
+      clearSignedInState(true);
     } catch (cause) {
       notify(errorText(cause));
     }
   }
+
   const closeDialog = useCallback(() => setDialog(null), []);
-  useEffect(() => {
-    const signedOut = () => {
-      setOverview(null);
-      clearOpenedArchived();
-      setAdminOpen(false);
-      setAdminVisited(false);
-      setDialog(null);
-      resetHistory();
-      setStreaming("");
-      setTools([]);
-      sendRequestRef.current += 1;
-      clearPendingSends();
-    };
-    window.addEventListener("clinavat:unauthorized", signedOut);
-    return () => window.removeEventListener("clinavat:unauthorized", signedOut);
-  }, [resetHistory, clearPendingSends, clearOpenedArchived]);
+  const openSettings = useCallback((tab?: SettingsTab) => {
+    openDetachedWindow(tab ? { kind: "settings", tab } : { kind: "settings" }, {
+      onFallback: () => setDialog({ type: "settings", tab }),
+    });
+  }, []);
+  const openMemory = useCallback((target: Project) => {
+    openDetachedWindow({ kind: "memory", projectId: target.id, projectName: target.name }, {
+      onFallback: () => setDialog({ type: "memory", project: target }),
+    });
+  }, []);
   const createProject = (host?: DevHost) => {
     if (!overview?.hosts.length) setDialog({ type: "host" });
     else setDialog({ type: "project", host });
   };
+
   if (initializing)
     return (
       <div className="app-loading">
@@ -300,12 +275,7 @@ export default function App() {
         <Brand />
         <AlertCircle size={27} />
         <p>{initialError}</p>
-        <button
-          className="button button-primary"
-          onClick={() => void initialize()}
-        >
-          重新连接服务
-        </button>
+        <button className="button button-primary" onClick={() => void initialize()}>重新连接服务</button>
         <ClientHubSwitch />
       </div>
     );
@@ -317,12 +287,11 @@ export default function App() {
         registrationEnabled={auth?.registrationEnabled || false}
         onAuthenticated={async () => {
           await refresh();
-          setAuth((current) =>
-            current ? { ...current, needsSetup: false } : current,
-          );
+          setAuth((current) => (current ? { ...current, needsSetup: false } : current));
         }}
       />
     );
+
   const showAdmin = adminOpen && overview.user.role === "admin";
   return (
     <div className={`app-shell ${inspectorOpen && !showAdmin ? "with-inspector" : ""}`}>
@@ -338,16 +307,14 @@ export default function App() {
         onEditHost={(host) => setDialog({ type: "host", host })}
         onNewProject={createProject}
         onConnect={(host) => void connect(host)}
-        onDelete={(kind, id, name) =>
-          setDialog({ type: "delete", kind, id, name })
-        }
-        onRename={(selected) =>
-          setDialog({ type: "rename", session: selected })
-        }
+        onRefresh={refresh}
+        onNotice={notify}
+        onDelete={(kind, id, name) => setDialog({ type: "delete", kind, id, name })}
+        onRename={(selected) => setDialog({ type: "rename", session: selected })}
         onArchive={(selected, archived) => void archiveSession(selected, archived)}
         onDiscuss={(target) => setDialog({ type: "discussion", project: target })}
-        onMemory={(target) => setDialog({ type: "memory", project: target })}
-        onSettings={() => setDialog({ type: "settings" })}
+        onMemory={openMemory}
+        onSettings={() => openSettings()}
         adminOpen={showAdmin}
         onAdmin={() => {
           if (overview.user.role !== "admin") return;
@@ -398,91 +365,46 @@ export default function App() {
         {inspectorOpen && (
           <Inspector
             project={project}
+            host={overview.hosts.find((item) => item.id === project?.dev_host_id)}
             refresh={inspectorRefresh}
             tabRequest={inspectorRequest}
             onClose={() => setInspectorOpen(false)}
-            onRefresh={() =>
-              void refresh().catch((cause) => notify(errorText(cause)))
-            }
+            onRefresh={() => void refresh().catch((cause) => notify(errorText(cause)))}
           />
         )}
       </div>
       {adminVisited && overview.user.role === "admin" && (
         <div className="admin-view" hidden={!showAdmin}>
           <Suspense fallback={<div className="loading-state">正在打开管理面板…</div>}>
-          <AdminPanel
-            overview={overview}
-            onRefresh={refresh}
-            onSidebar={() => setSidebarOpen(true)}
-            onOpenProject={select}
-            onNewProject={() => createProject()}
-            onNewHost={() => setDialog({ type: "host" })}
-            onEditHost={(host) => setDialog({ type: "host", host })}
-            onConnect={connect}
-          />
+            <AdminPanel
+              overview={overview}
+              onRefresh={refresh}
+              onSidebar={() => setSidebarOpen(true)}
+              onOpenProject={select}
+              onNewProject={() => createProject()}
+              onNewHost={() => setDialog({ type: "host" })}
+              onEditHost={(host) => setDialog({ type: "host", host })}
+              onConnect={connect}
+            />
           </Suspense>
         </div>
       )}
-      {dialog?.type === "host" && (
-        <HostDialog
-          key={dialog.host?.id || "new-host"}
-          overview={overview}
-          initialHost={dialog.host}
-          onClose={closeDialog}
-          onCreated={async () => {
-            await refresh();
-            if (dialog.host) notify("连接配置已更新，测试连接后在项目中恢复同步", "success");
-          }}
-        />
-      )}
-      {dialog?.type === "project" && (
-        <ProjectDialog
-          overview={overview}
-          initialHost={dialog.host}
-          onClose={closeDialog}
-          onCreated={async (created) => {
-            notify(created.sync_status === "CREATING"
-              ? `项目「${created.name}」已创建，正在后台进行首次同步`
-              : `项目「${created.name}」已创建`, "success");
-            await refresh().catch((cause) => notify(errorText(cause)));
-            select(created);
-          }}
-        />
-      )}
-      {dialog?.type === "delete" && (
-        <ConfirmDialog
-          name={dialog.name}
-          kind={
-            dialog.kind === "host"
-              ? "开发机"
-              : dialog.kind === "project"
-                ? "项目"
-                : "对话"
-          }
-          onClose={closeDialog}
-          onConfirm={remove}
-        />
-      )}
-      {dialog?.type === "rename" && (
-        <RenameDialog
-          session={dialog.session}
-          onClose={closeDialog}
-          onSaved={refresh}
-        />
-      )}
-      {dialog?.type === "settings" && (
-        <Settings
-          overview={overview}
-          onClose={closeDialog}
-          onOpenSession={openSession}
-          onRestoreSession={(target) => archiveSession(target, false)}
-          onSessionDeleted={handleSessionDeleted}
-        />
-      )}
-      {dialog?.type === "discussion" && <DiscussionDialog overview={overview} project={dialog.project} onClose={closeDialog}
-        onCreated={(sessionId) => { setDialog(null); void refresh().then(() => changeSelection(dialog.project.id, sessionId)); }} />}
-      {dialog?.type === "memory" && <ProjectMemoryDialog project={dialog.project} onClose={closeDialog} onNotice={notify} />}
-      <AppNotices notices={notices} onDismiss={(id) => setNotices((current) => current.filter((notice) => notice.id !== id))} />
+      <AppOverlays
+        overview={overview}
+        dialog={dialog}
+        notices={notices}
+        memoryRefreshTick={memoryRefreshTick}
+        onCloseDialog={closeDialog}
+        onDismissNotice={(id) => setNotices((current) => current.filter((notice) => notice.id !== id))}
+        onRefresh={refresh}
+        onNotice={notify}
+        onSelect={select}
+        onChangeSelection={changeSelection}
+        onDeleteConfirm={remove}
+        onOpenSession={openSession}
+        onRestoreSession={(target) => archiveSession(target, false)}
+        onSessionDeleted={handleSessionDeleted}
+      />
     </div>
   );
 }

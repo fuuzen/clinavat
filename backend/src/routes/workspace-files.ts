@@ -2,6 +2,7 @@ import { basename, extname } from 'node:path';
 import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { mapClientRpcError } from '../client-host/workspace-adapter.js';
 import { HttpError } from '../models.js';
 import { type Context, projectFor } from '../context.js';
 import { FileTransfers, fileTag, transferFailure } from '../runtime/file-transfers.js';
@@ -53,8 +54,12 @@ export function workspaceFileRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     const { path, download } = z.object({ path: filePath, download: z.enum(['1']).optional() }).parse(request.query);
     const { handle, size, mtime } = await workspaces.rawFile(projectFor(context, id, request.user.id), path)
-      // Filesystem errors embed absolute server paths; only the workspace's own validation messages are passed through.
-      .catch((error: NodeJS.ErrnoException) => { throw new HttpError(404, error.code ? '文件不存在或无法访问' : error.message); });
+      // Filesystem errors embed absolute server paths; only workspace/RPC errors are passed through.
+      .catch((error: NodeJS.ErrnoException) => {
+        const mapped = mapClientRpcError(error);
+        if (mapped instanceof HttpError) throw mapped;
+        throw new HttpError(404, error.code ? '文件不存在或无法访问' : error.message);
+      });
     const etag = fileTag({ size, mtime });
     const type = download ? 'application/octet-stream' : previewTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
     reply.header('Content-Type', type)

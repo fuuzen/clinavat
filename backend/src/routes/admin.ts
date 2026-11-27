@@ -85,16 +85,16 @@ export function adminRoutes(app: FastifyInstance, context: Context) {
     if (!user) throw new HttpError(404, '用户不存在');
     const hosts = store.all<Omit<Host, 'user_id'>>(`SELECT id,name,host,port,username,kind,status,created_at,
       jump_host,jump_port,jump_username FROM dev_hosts
-      WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at`, user.id, user.role);
+      WHERE user_id=? AND (kind IN ('ssh','client') OR ?='admin') ORDER BY kind,created_at`, user.id, user.role);
     const projects = store.all<Pick<Project, 'id' | 'dev_host_id' | 'name' | 'remote_path' | 'local_path'
       | 'sync_status' | 'created_at' | 'path_mode' | 'execution_mode'>>(`SELECT p.id,p.dev_host_id,p.name,
       p.remote_path,p.local_path,p.sync_status,p.created_at,p.path_mode,p.execution_mode
       FROM projects p JOIN dev_hosts h ON h.id=p.dev_host_id AND h.user_id=p.user_id
-      WHERE p.user_id=? AND (h.kind='ssh' OR ?='admin') ORDER BY p.created_at`, user.id, user.role);
+      WHERE p.user_id=? AND (h.kind IN ('ssh','client') OR ?='admin') ORDER BY p.created_at`, user.id, user.role);
     const counts = store.all<{ project_id: string; count: number }>(`SELECT s.project_id,count(*) AS count
       FROM sessions s JOIN projects p ON p.id=s.project_id AND p.user_id=s.user_id
       JOIN dev_hosts h ON h.id=p.dev_host_id AND h.user_id=p.user_id
-      WHERE s.user_id=? AND (h.kind='ssh' OR ?='admin') GROUP BY s.project_id`, user.id, user.role);
+      WHERE s.user_id=? AND (h.kind IN ('ssh','client') OR ?='admin') GROUP BY s.project_id`, user.id, user.role);
     return { user: publicUser(user), hosts, projects,
       sessionCounts: Object.fromEntries(counts.map(row => [row.project_id, row.count])) };
   });

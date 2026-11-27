@@ -8,11 +8,15 @@ import {
 } from "lucide-react";
 import type { Overview, Project } from "../types";
 import { BrandMark } from "./Brand";
+import ClientDeviceCard from "./hosts/ClientDeviceCard";
+
 interface WelcomeProps {
   overview: Overview;
   onNewHost: () => void;
   onNewProject: () => void;
   onSelectProject: (project: Project) => void;
+  onRefresh: () => Promise<void>;
+  onNotice?: (message: string, kind?: "error" | "success") => void;
 }
 
 export default function Welcome({
@@ -20,6 +24,8 @@ export default function Welcome({
   onNewHost,
   onNewProject,
   onSelectProject,
+  onRefresh,
+  onNotice,
 }: WelcomeProps) {
   // Child agents' worktrees belong to their master project.
   const projects = overview.projects.filter((project) => !project.parent_project_id);
@@ -58,6 +64,14 @@ export default function Welcome({
           系统维护中，暂不支持新建对话或项目；可通过下方项目列表或侧栏继续浏览历史对话。
         </p>
       )}
+      <ClientDeviceCard
+        hosts={overview.hosts}
+        variant="banner"
+        readOnly={maintenanceEnabled}
+        readOnlyReason={maintenanceTip}
+        onRefresh={onRefresh}
+        onNotice={onNotice}
+      />
       <div className="welcome-features">
         <div>
           <span>

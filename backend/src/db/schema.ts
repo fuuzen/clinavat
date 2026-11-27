@@ -233,5 +233,19 @@ export function initializeSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS dev_host_approvals_host ON dev_host_approvals(user_id,dev_host_id,status);
     CREATE INDEX IF NOT EXISTS dev_host_approvals_status ON dev_host_approvals(status,requested_at);
     CREATE INDEX IF NOT EXISTS deferred_questions_session ON deferred_questions(session_id,deferred_at);
+    CREATE TABLE IF NOT EXISTS session_btw_exchanges (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','error','cancelled')),
+      error TEXT,
+      engine TEXT NOT NULL ${engineCheck},
+      model TEXT,
+      slot_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_btw_exchanges_session ON session_btw_exchanges(session_id, created_at);
   `);
 }

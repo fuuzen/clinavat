@@ -21,6 +21,7 @@ export function allowedReferencePath(path: string): boolean {
 
 export function visibleProjectPath(workspaces: WorkspaceManager, project: Project, path: string): boolean {
   if (!allowedReferencePath(path)) return false;
+  if (workspaces.isClientDirect(project)) return true;
   const target = resolve(project.local_path, path);
   const inside = (root: string, candidate: string) => {
     const child = relative(resolve(root), candidate);
@@ -32,6 +33,13 @@ export function visibleProjectPath(workspaces: WorkspaceManager, project: Projec
 
 export async function assertReadableReference(workspaces: WorkspaceManager, project: Project, path: string): Promise<void> {
   if (!visibleProjectPath(workspaces, project, path || '.')) throw new HttpError(400, '无法引用运行配置或私密文件');
+  if (workspaces.isClientDirect(project)) {
+    if (!path || path === '.') return;
+    const meta = await workspaces.stat(project, path);
+    if (!meta.exists) throw new HttpError(404, '路径不存在');
+    if (meta.kind === 'symlink' || meta.isSymlink) throw new HttpError(400, '文件引用不支持符号链接路径');
+    return;
+  }
   const root = await realpath(project.local_path);
   const requested = resolve(root, path);
   const actual = await realpath(requested);

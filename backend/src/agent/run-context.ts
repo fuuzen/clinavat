@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto';
-import { realpath, stat } from 'node:fs/promises';
+import { mkdir, realpath, stat } from 'node:fs/promises';
 import { openContained } from '../runtime/contained-files.js';
+import { clientDirectEmptyDir } from './environment.js';
+import { isClientDirect } from './orchestration-tools.js';
 import { getPermissionMode } from './permissions.js';
 import { RunControl } from './run-control.js';
-import { settingsKey, type ActiveRun, type RunContinuation } from './resident-run.js';
+import { rescueUnconsumedSteers, settingsKey, type ActiveRun, type RunContinuation } from './resident-run.js';
 import type { UserInputRequests } from './user-input.js';
 import type {
   AgentCallbacks, AgentConfig, AgentContext, ApprovalDecision, QueuedInput, RunServices, TurnOrigin, TurnOutcome,
 } from './types.js';
 
-export async function shellHash(context: AgentContext): Promise<string> {
+export async function shellHash(context: AgentContext): Promise<string | null> {
+  if (isClientDirect(context)) return null;
   if (context.project.execution_mode === 'local') {
     const directory = await realpath(context.project.local_path);
     if (directory !== context.project.local_path || !(await stat(directory)).isDirectory()) {
@@ -28,6 +31,13 @@ export async function shellHash(context: AgentContext): Promise<string> {
 export async function createShellVerifier(
   config: AgentConfig, context: AgentContext, signal: AbortSignal,
 ): Promise<() => Promise<void>> {
+  if (isClientDirect(context)) {
+    await mkdir(clientDirectEmptyDir(config.workspaceDir), { recursive: true, mode: 0o700 });
+    context.project.host_shell = null;
+    return async () => {
+      if (signal.aborted) throw new Error('会话已停止');
+    };
+  }
   context.project.host_shell = await config.hostShell?.(context) ?? null;
   const expectedShellHash = await shellHash(context);
   return async () => {
@@ -94,7 +104,7 @@ export function createActiveRun(
   const state: ActiveRun = {
     userId: context.user.id, projectId: context.project.id, slotId: context.slot.id, context,
     settings: settingsKey(context), abort: new AbortController(), startup, control: new RunControl(),
-    turnActive: true, queue, attemptedSlotIds: continuation?.attemptedSlotIds ?? [], flushes: Promise.resolve(),
+    turnActive: true, queue, pendingSteers: [], attemptedSlotIds: continuation?.attemptedSlotIds ?? [], flushes: Promise.resolve(),
   };
   const sessionId = context.session.id;
   state.control.subscribe(status => {
@@ -107,7 +117,8 @@ export function createActiveRun(
 
 export interface RunServiceHooks {
   config: AgentConfig; callbacks: AgentCallbacks; questions: UserInputRequests; state: ActiveRun;
-  turnEnded: (outcome: TurnOutcome) => void; automaticTurn: (origin: TurnOrigin) => void; activityChanged: () => void;
+  turnEnded: (outcome: TurnOutcome) => void; automaticTurn: (origin: TurnOrigin) => void;
+  steered: (messageId: string) => void; activityChanged: () => void;
 }
 
 export function buildRunServices(hooks: RunServiceHooks): RunServices {
@@ -146,7 +157,7 @@ export function buildRunServices(hooks: RunServiceHooks): RunServices {
       await state.verifyShell!();
       await state.control.waitUntilRunning(state.abort.signal);
     },
-    turnEnded: hooks.turnEnded, automaticTurn: hooks.automaticTurn, activityChanged: hooks.activityChanged,
+    turnEnded: hooks.turnEnded, automaticTurn: hooks.automaticTurn, steered: hooks.steered, activityChanged: hooks.activityChanged,
     recordTokenUsage: update => callbacks.recordTokenUsage?.({
       userId: context.user.id, slotId: context.slot.id, sessionId, turnId: context.session.turn_id ?? null, engine: context.session.engine,
     }, update),
@@ -197,7 +208,7 @@ export function attachRunCompletion(state: ActiveRun, services: RunServices, hoo
     if (state.turnActive) {
       state.turnActive = false;
       const status = aborted && !hooks.lease.failed ? 'interrupted' : failure ? 'error' : 'completed';
-      if (!aborted) await hooks.callbacks.flushWorkspace(sessionId).catch(() => undefined);
+      if (!aborted && !isClientDirect(state.context)) await hooks.callbacks.flushWorkspace(sessionId).catch(() => undefined);
       await hooks.callbacks.updateSession(sessionId, { status });
       if (failure && (!aborted || hooks.lease.failed)) hooks.emitError(state, message);
       services.event('turn-state', { status });
@@ -207,7 +218,10 @@ export function attachRunCompletion(state: ActiveRun, services: RunServices, hoo
       services.event('error', { message });
     }
   }).finally(() => {
-    if (state.queue.length && (!state.abort.signal.aborted || hooks.isClosing())) hooks.retainQueue(sessionId, state.queue);
+    if (!state.abort.signal.aborted || hooks.isClosing()) {
+      rescueUnconsumedSteers(state, state.queue);
+      if (state.queue.length) hooks.retainQueue(sessionId, state.queue);
+    } else state.pendingSteers = [];
     state.abort.abort();
     state.queue = [];
     hooks.clearActive(sessionId, state);
@@ -227,7 +241,10 @@ export async function handleStartupFailure(state: ActiveRun, error: unknown, hoo
   await state.run?.completion.catch(() => undefined);
   let failure = error;
   try { await hooks.lease.release(); } catch (releaseError) { failure = releaseError; }
-  if (!interrupted || hooks.isClosing()) hooks.retainQueue(sessionId, state.queue);
+  if (!interrupted || hooks.isClosing()) {
+    rescueUnconsumedSteers(state, state.queue);
+    hooks.retainQueue(sessionId, state.queue);
+  } else state.pendingSteers = [];
   hooks.clearActive(sessionId, state);
   const status = interrupted && !hooks.lease.failed ? 'interrupted' : 'error';
   await hooks.callbacks.updateSession(sessionId, { status });

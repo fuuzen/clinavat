@@ -4,7 +4,7 @@ import type { AgentPrompt, RunServices } from '../types.js';
 import { answerClaudeQuestions } from './questions.js';
 import { denyHook, preToolUseDecision, validHookOutput } from './hooks.js';
 import { questionTimeoutRange } from '../session-settings.js';
-import { answerHubMcp, hubToolNamespace, orchestrates } from '../orchestration-tools.js';
+import { answerHubMcp, hasHubMcp, hubToolNamespace } from '../orchestration-tools.js';
 
 const preToolUseCallback = 'clinavat-pre-tool-use';
 
@@ -17,8 +17,18 @@ interface Initialization {
 
 interface PendingRequest {
   timer: NodeJS.Timeout;
+  timeoutMs: number;
+  subtype: string;
+  onProgress?: (event: Record<string, unknown>) => void;
+  cleanup?: () => void;
   resolve(value: any): void;
   reject(error: Error): void;
+}
+
+export interface ClaudeControlRequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onProgress?: (event: Record<string, unknown>) => void;
 }
 
 export class ClaudeControl {
@@ -45,7 +55,7 @@ export class ClaudeControl {
       this.initialization = { id, cancelTimeout, resolve, reject };
       try {
         this.write({ type: 'control_request', request_id: id, request: { subtype: 'initialize',
-          ...(orchestrates(this.services.context) ? { sdkMcpServers: [hubToolNamespace] } : {}), hooks: { PreToolUse: [{
+          ...(hasHubMcp(this.services.context) ? { sdkMcpServers: [hubToolNamespace] } : {}), hooks: { PreToolUse: [{
           matcher: '.*', hookCallbackIds: [preToolUseCallback],
           // An unanswered callback blocks the tool. Hub deadlines exclude paused time; this native one uses wall time
           // even after SIGSTOP, so it leaves a day beyond the longest Hub deadline.
@@ -71,18 +81,39 @@ export class ClaudeControl {
     this.write({ type: 'control_request', request_id: randomUUID(), request });
   }
 
-  request(request: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+  request(request: Record<string, unknown>, timeoutOrOptions: number | ClaudeControlRequestOptions = 30_000): Promise<any> {
     if (this.closed) return Promise.reject(new Error('Claude CLI 控制通道已关闭'));
+    const options = typeof timeoutOrOptions === 'number' ? { timeoutMs: timeoutOrOptions } : timeoutOrOptions;
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    const signal = options.signal;
+    if (signal?.aborted) return Promise.reject(new DOMException('请求已取消', 'AbortError'));
     const id = randomUUID();
+    const subtype = String(request.subtype ?? '控制');
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const startTimer = () => setTimeout(() => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
         this.pending.delete(id);
-        reject(new Error(`Claude ${String(request.subtype ?? '控制')} 请求超时`));
+        entry.cleanup?.();
+        reject(new Error(`Claude ${subtype} 请求超时`));
       }, timeoutMs);
-      this.pending.set(id, { timer, resolve, reject });
+      const onAbort = () => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        clearTimeout(entry.timer);
+        entry.cleanup?.();
+        try { this.write({ type: 'control_cancel_request', request_id: id }); } catch { /* ignore */ }
+        reject(new DOMException('请求已取消', 'AbortError'));
+      };
+      const cleanup = signal ? () => signal.removeEventListener('abort', onAbort) : undefined;
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const timer = startTimer();
+      this.pending.set(id, { timer, timeoutMs, subtype, onProgress: options.onProgress, cleanup, resolve, reject });
       try { this.write({ type: 'control_request', request_id: id, request }); }
       catch (error) {
         clearTimeout(timer);
+        cleanup?.();
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error('Claude CLI 控制请求失败'));
       }
@@ -90,12 +121,29 @@ export class ClaudeControl {
   }
 
   handle(event: Record<string, any>): boolean {
+    if (event.type === 'system' && event.subtype === 'control_request_progress') {
+      const id = String(event.request_id ?? '');
+      const pending = id ? this.pending.get(id) : undefined;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(() => {
+          const entry = this.pending.get(id);
+          if (!entry) return;
+          this.pending.delete(id);
+          entry.cleanup?.();
+          entry.reject(new Error(`Claude ${entry.subtype} 请求超时`));
+        }, pending.timeoutMs);
+        pending.onProgress?.(event);
+      }
+      return true;
+    }
     if (event.type === 'control_response') {
       const response = event.response;
       const pending = this.pending.get(response?.request_id);
       if (pending) {
         this.pending.delete(response.request_id);
         clearTimeout(pending.timer);
+        pending.cleanup?.();
         if (response.subtype !== 'success' || response.error) {
           pending.reject(new Error(String(response.error || 'Claude CLI 控制请求失败')));
         } else pending.resolve(response.response);
@@ -151,6 +199,7 @@ export class ClaudeControl {
     this.requests.clear();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       pending.reject(error);
     }
     this.pending.clear();

@@ -1,7 +1,9 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Socket } from 'node:net';
+import { StringDecoder } from 'node:string_decoder';
 import { Client, type ClientChannel } from 'ssh2';
 import type { WebSocket } from 'ws';
+import type { ClientPtyHandle } from '../client-host/workspace-adapter.js';
 import type { DevHostApprovalStore } from './dev-host-approvals.js';
 import { attachLocalTerminal } from './local-terminal.js';
 import { remoteCommand } from './remote-paths.js';
@@ -32,9 +34,9 @@ interface ActiveTerminalSocket {
   id: string;
   userId: string;
   devHostId: string;
-  pinnedIp: string;
-  port: number;
-  rawSocket: Socket;
+  pinnedIp?: string;
+  port?: number;
+  rawSocket?: Socket;
   revoke: (reason?: string) => void;
 }
 
@@ -57,13 +59,145 @@ export function revokeSockets(filter: TerminalRevokeFilter, reason = '开发机�
   return matched.length;
 }
 
+async function attachClientTerminal(
+  socket: WebSocket, userId: string, host: DevHost, project: WorkspaceProject,
+  workspaces: WorkspaceManager, security: TerminalSecurityOptions,
+): Promise<void> {
+  const adapter = workspaces.clientAdapter;
+  const registry = workspaces.clientRegistry;
+  if (!adapter || !registry) throw new Error('客户端终端服务尚未就绪');
+  if (security.isUserActive && !security.isUserActive(userId)) {
+    throw new Error(userUnavailableMessage);
+  }
+  const terminalId = randomUUID();
+  const decoder = new StringDecoder('utf8');
+  let pty: ClientPtyHandle | undefined;
+  let unwatchDisconnect: (() => void) | undefined;
+  let closed = false;
+  let exited = false;
+  let bytes = 0;
+  let intervalStarted = Date.now();
+  const send = (value: unknown) => {
+    if (socket.readyState === 1) {
+      if (socket.bufferedAmount > 4 * 1024 * 1024) {
+        socket.close(1013, '终端输出过快，请重新连接');
+        return;
+      }
+      socket.send(JSON.stringify(value));
+    }
+  };
+  const triggerMirroredFlush = () => {
+    if (project.client_mode === 'mirrored') {
+      return workspaces.flush(project).catch(error => send({ type: 'error', message: (error as Error).message }));
+    }
+    return Promise.resolve();
+  };
+  const shutdown = () => {
+    if (closed) return;
+    closed = true;
+    activeTerminals.delete(terminalId);
+    unwatchDisconnect?.();
+    unwatchDisconnect = undefined;
+    if (pty) {
+      const current = pty;
+      pty = undefined;
+      void adapter.closePty(host.id, { ptyId: current.ptyId, streamId: current.stream.streamId });
+      void current.stream.cancel('terminal_closed').catch(() => undefined);
+    }
+    if (!exited && project.client_mode === 'mirrored') {
+      void workspaces.flush(project).catch(() => undefined);
+    }
+  };
+
+  socket.once('close', shutdown);
+  socket.once('error', shutdown);
+  socket.on('message', raw => {
+    if (closed || exited) return;
+    const data = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
+    if (Date.now() - intervalStarted > 1000) { bytes = 0; intervalStarted = Date.now(); }
+    bytes += data.length;
+    if (bytes > 256 * 1024) { socket.close(1009, '终端输入过大'); return; }
+    try {
+      const message = JSON.parse(data.toString()) as { type?: string; data?: string; rows?: number; cols?: number };
+      if (!pty) return;
+      if (message.type === 'input' && typeof message.data === 'string' && message.data.length <= 64 * 1024) {
+        void pty.stream.sendData(Buffer.from(message.data, 'utf8')).catch(() => shutdown());
+      } else if (message.type === 'resize' && Number.isInteger(message.rows) && Number.isInteger(message.cols)) {
+        const rows = Math.max(1, Math.min(message.rows!, 500));
+        const cols = Math.max(1, Math.min(message.cols!, 500));
+        void adapter.resizePty(host.id, { ptyId: pty.ptyId, streamId: pty.stream.streamId, cols, rows }).catch(() => undefined);
+      }
+    } catch { send({ type: 'error', message: '终端消息格式无效' }); }
+  });
+
+  try {
+    if (project.client_mode === 'mirrored') await workspaces.flush(project);
+    if (closed) return;
+    const opened = await adapter.openPty(host.id, { cwd: project.remote_path, cols: 100, rows: 30 });
+    if (closed) {
+      void adapter.closePty(host.id, { ptyId: opened.ptyId, streamId: opened.stream.streamId });
+      void opened.stream.cancel('terminal_closed').catch(() => undefined);
+      return;
+    }
+    pty = opened;
+    activeTerminals.set(terminalId, {
+      id: terminalId,
+      userId,
+      devHostId: host.id,
+      revoke: reason => {
+        if (reason) send({ type: 'error', message: reason });
+        if (socket.readyState === 1) socket.close(1008, '连接授权已撤销');
+        shutdown();
+      },
+    });
+    unwatchDisconnect = registry.onDisconnect(host.id, () => {
+      if (closed) return;
+      send({ type: 'error', message: '客户端设备已断开连接' });
+      if (socket.readyState === 1) socket.close(1011, '客户端已断开');
+      shutdown();
+    });
+    send({ type: 'ready' });
+    opened.stream.onData(chunk => {
+      if (closed) return;
+      const text = decoder.write(chunk);
+      if (text) send({ type: 'output', data: text });
+    });
+    opened.stream.onEof(meta => {
+      if (closed) return;
+      exited = true;
+      const tail = decoder.end();
+      if (tail) send({ type: 'output', data: tail });
+      const code = typeof (meta as { exitCode?: unknown } | undefined)?.exitCode === 'number'
+        ? (meta as { exitCode: number }).exitCode : 0;
+      void triggerMirroredFlush().finally(() => {
+        send({ type: 'exit', code });
+        if (socket.readyState === 1) socket.close(1000, '终端已结束');
+        shutdown();
+      });
+    });
+    opened.stream.onCancel(error => {
+      if (closed || exited) return;
+      send({ type: 'error', message: error.message || '远端终端已关闭' });
+      if (socket.readyState === 1) socket.close(1011, '远端终端已关闭');
+      shutdown();
+    });
+  } catch (error) {
+    send({ type: 'error', message: (error as Error).message });
+    if (socket.readyState === 1) socket.close(1011, '无法启动客户端终端');
+    shutdown();
+  }
+}
+
 export async function attachTerminal(
   socket: WebSocket, userId: string, host: DevHost, project: WorkspaceProject,
   ssh: SshManager, workspaces: WorkspaceManager, security: TerminalSecurityOptions,
 ): Promise<void> {
   assertHostOwner(userId, host);
   if (project.user_id !== userId || project.dev_host_id !== host.id) throw new Error('工作区归属不匹配');
-  if (host.kind === 'client') throw new Error('客户端开发机连接通道尚未启用');
+  if (host.kind === 'client') {
+    await attachClientTerminal(socket, userId, host, project, workspaces, security);
+    return;
+  }
   if (host.kind === 'local' || project.execution_mode === 'local') {
     if (host.kind !== 'local' || project.execution_mode !== 'local') throw new Error('本机项目与开发机类型不匹配');
     await attachLocalTerminal(socket, project, workspaces);

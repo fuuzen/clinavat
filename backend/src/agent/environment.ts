@@ -24,7 +24,52 @@ export function agentEnvironment(execution: ExecutionHost, context: Omit<AgentCo
   };
 }
 
-export function agentScope(context: AgentContext): ExecutionScope {
+const DEFAULT_WORKSPACE_DIR = '/var/tmp/clinavat-workspace';
+
+/** Shared read-only empty directory mounted into slot VMs for Mode 1 (client direct) runs. */
+export function clientDirectEmptyDir(workspaceDir?: string): string {
+  return path.join(workspaceDir || DEFAULT_WORKSPACE_DIR, '.client-direct-empty');
+}
+
+/** The project root path as seen inside the CLI's execution environment (LXD slot VM or Hub process). */
+export function vmProjectRoot(context: AgentContext, workspaceDir?: string): string {
+  if (context.host?.kind === 'client') {
+    if (context.project.client_mode !== 'mirrored') return clientDirectEmptyDir(workspaceDir);
+    return context.project.vm_path || context.project.local_path;
+  }
+  return context.project.local_path;
+}
+
+/** The working directory passed as `cwd` to the CLI process inside the slot VM. */
+export function vmWorkingDirectory(context: AgentContext, workspaceDir?: string): string {
+  if (context.host?.kind === 'client') {
+    if (context.project.client_mode !== 'mirrored') return clientDirectEmptyDir(workspaceDir);
+    const root = context.project.vm_path || context.project.local_path;
+    return context.session.agent_directory ? path.posix.join(root, context.session.agent_directory) : root;
+  }
+  return context.session.agent_directory ? path.join(context.project.local_path, context.session.agent_directory) : context.project.local_path;
+}
+
+export function agentScope(context: AgentContext, workspaceDir?: string): ExecutionScope {
+  if (context.host?.kind === 'client') {
+    if (context.project.client_mode !== 'mirrored') {
+      // Mode 1 (direct): mount only one shared read-only empty directory so the CLI sees no Hub mirror files.
+      return {
+        userId: context.user.id,
+        slotId: context.slot.id,
+        paths: [context.runtime_home],
+        readOnlyPaths: [clientDirectEmptyDir(workspaceDir)],
+      };
+    }
+    // Mode 2 (mirrored): mount the mirror once at `vm_path` via `mounts`, omitting `local_path` from `paths`.
+    const target = context.project.vm_path || context.project.local_path;
+    return {
+      userId: context.user.id,
+      slotId: context.slot.id,
+      paths: [context.runtime_home],
+      mounts: [{ source: context.project.local_path, target, readonly: context.session.agent_access === 'read' }],
+    };
+  }
   return { userId: context.user.id, slotId: context.slot.id, paths: [context.runtime_home, context.project.local_path],
     // The host command key reaches local-project runs only.
     ...(context.project.host_shell ? { readOnlyPaths: [path.dirname(context.project.host_shell)] } : {}) };

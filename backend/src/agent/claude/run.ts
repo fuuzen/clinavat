@@ -2,16 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { ClaudeControl } from './control.js';
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess, vmProjectRoot, vmWorkingDirectory } from '../environment.js';
 import { readJsonLines } from '../ndjson.js';
 import { claudePermissionMode } from '../permissions.js';
 import { conversationInstructions } from '../project-instructions.js';
-import { hubToolNamespace, isSuperAgent, nativeReadsEnabled, orchestrates, workingDirectory } from '../orchestration-tools.js';
+import { hasHubMcp, hubToolNamespace, isClientDirect, isSuperAgent, nativeReadsEnabled } from '../orchestration-tools.js';
 import { ClaudeQuotaTracker } from './quota.js';
 import { ClaudeRetries } from './retries.js';
 import { ClaudeUsageMeter } from '../../token-usage/meters.js';
 import { parseClaudeUsage } from '../../accounts/usage-parsers.js';
 import { ClaudeSubagents } from './subagents.js';
+import { runClaudeResidentSideQuestion } from '../btw/claude.js';
 import type { AgentPrompt, AgentRun, RunServices, RunTask } from '../types.js';
 
 // How long a CLI told to finish may take, including stopping its background tasks.
@@ -29,8 +30,10 @@ async function transcriptPath(home: string, nativeId: string): Promise<string | 
 
 export async function startClaude(services: RunServices, prompt: AgentPrompt, signal?: AbortSignal): Promise<AgentRun> {
   if (signal?.aborted) throw new Error('会话已停止');
-  const { execution } = services.config;
-  const scope = agentScope(services.context);
+  const { execution, workspaceDir } = services.config;
+  const scope = agentScope(services.context, workspaceDir);
+  const vmRoot = vmProjectRoot(services.context, workspaceDir);
+  const vmCwd = vmWorkingDirectory(services.context, workspaceDir);
   const binary = await execution.binary(scope, 'claude');
   const plansDirectory = path.join(services.context.runtime_home, '.claude', 'plans');
   await mkdir(plansDirectory, { recursive: true, mode: 0o700 });
@@ -40,25 +43,31 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
   const settings = {
     plansDirectory,
     permissions: { deny: ['.bin', '.git', '.claude', '.codex'].flatMap((directory) => {
-      const root = `/${services.context.project.local_path}`;
+      const root = `/${vmRoot}`;
       return [`${root}/${directory}/**`, `${root}/**/${directory}/**`]
         .flatMap((pattern) => [`Read(${pattern})`, `Edit(${pattern})`]);
     }) },
   };
   const superAgent = isSuperAgent(services.context);
+  const direct = isClientDirect(services.context);
+  const systemPrompt = await conversationInstructions(
+    services.context, 'claude', services.config.orchestration?.briefing?.(services.context), services.config.workspaces,
+  ) + (permissionMode === 'plan'
+    ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : '');
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     // Without summarized display the API streams thinking blocks with empty text.
     '--thinking-display', 'summarized',
     ...(permissionMode === 'bypassPermissions' ? [] : ['--restricted']),
     '--permission-mode', permissionMode, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
     '--setting-sources', '', '--settings', JSON.stringify(settings),
-    '--append-system-prompt', conversationInstructions(services.context, 'claude', services.config.orchestration?.briefing?.(services.context)) + (permissionMode === 'plan'
-      ? '\nThe user selected Plan mode in the web UI. Stay in Plan mode for this turn. When the plan is complete, present it in your final response and tell the user they can switch to Normal to implement it. Do not use ExitPlanMode to change the selected mode.' : ''),
+    '--append-system-prompt', systemPrompt,
     '--tools', superAgent
       ? `${nativeReadsEnabled(services.context) ? 'Read,Glob,Grep,' : ''}WebFetch,WebSearch,AskUserQuestion,ExitPlanMode`
-      : 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
+      : direct
+        ? 'WebFetch,WebSearch,AskUserQuestion,ExitPlanMode'
+        : 'Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,AskUserQuestion,ExitPlanMode',
     // The Hub's tools are an in-process server: the CLI reaches it through control requests on stdio.
-    '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: orchestrates(services.context)
+    '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: hasHubMcp(services.context)
       ? { [hubToolNamespace]: { type: 'sdk', name: hubToolNamespace } } : {} }),
     '--model', services.context.session.model || 'default',
     ...(services.context.session.reasoning_effort ? ['--effort', services.context.session.reasoning_effort] : []),
@@ -69,7 +78,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         '--session-id', nativeId]
         : ['--session-id', nativeId])];
   const child = await execution.spawn(binary, args, {
-    scope, cwd: workingDirectory(services.context), env: agentEnvironment(execution, services.context, scope),
+    scope, cwd: vmCwd, env: agentEnvironment(execution, services.context, scope),
     secrets: await services.config.credentials.secretEnvironment(services.context.slot.id),
   });
   services.control.track(child);
@@ -84,8 +93,10 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
   let activeTextIndex: number | undefined;
   const thinkingBlocks = new Set<number>();
   let textSize = 0;
+  let steerEpoch = 0;
   const messages = new Map<string, string>();
   const messageGroups = new Map<string, string>();
+  const unreconciledTextIds: string[] = [];
   let stopped = false;
   let nativeSessionReceived = false;
   let turnActive = true;
@@ -96,10 +107,35 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
   // Only a finished task makes the CLI begin a turn by itself; a background subagent's requests must not.
   let taskNotified = false;
   let tasks: RunTask[] = [];
+  let activeSideQuestions = 0;
   const subagents = new ClaudeSubagents();
   const retries = new ClaudeRetries(services);
   // Steering sent while a turn was ending starts its own turn; its message already exists.
   const pendingSteers = new Map<string, string>();
+  const epochPrefix = () => steerEpoch ? `s${steerEpoch}:` : '';
+  const resetSegmentText = () => {
+    messageId = '';
+    activeTextIndex = undefined;
+    thinkingBlocks.clear();
+    messages.clear();
+    messageGroups.clear();
+    unreconciledTextIds.length = 0;
+  };
+  const consumeSteer = (commandUuid: string) => {
+    const steeredMessageId = pendingSteers.get(commandUuid);
+    if (!steeredMessageId) return;
+    pendingSteers.delete(commandUuid);
+    if (!turnActive) {
+      turnActive = true;
+      steerEpoch = 0;
+      services.automaticTurn({ messageId: steeredMessageId });
+    } else {
+      steerEpoch += 1;
+      resetSegmentText();
+      services.steered(steeredMessageId);
+    }
+    services.activityChanged();
+  };
   const inputError = (error: Error) => { resultError = error.message; control.close(error); terminateProcess(child); };
   const control = new ClaudeControl(child, services, inputError);
   const stop = () => { stopped = true; control.close(new Error('会话已停止')); terminateProcess(child); };
@@ -118,12 +154,9 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     // The next turn may begin immediately, so its text must never mix with this one's.
     resultError = '';
     interruptRequested = false;
-    messageId = '';
-    activeTextIndex = undefined;
     textSize = 0;
-    messages.clear();
-    messageGroups.clear();
-    thinkingBlocks.clear();
+    steerEpoch = 0;
+    resetSegmentText();
     for (const { id, text } of finalTexts) services.event('activity', { id, kind: 'text', text, final: true });
     const output = finalTexts.map(item => item.text).join('\n\n').trim()
       || (services.context.session.command === 'compact' && !failure ? '原生上下文已压缩。网页中的历史消息仍会保留。' : '');
@@ -135,11 +168,9 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
   const lines = readJsonLines(child.stdout, (event) => {
     if (control.handle(event)) return;
     const agent = subagents.source(event);
-    if (event.type === 'command_lifecycle' && event.state === 'started' && !turnActive && pendingSteers.has(event.command_uuid)) {
-      turnActive = true;
-      services.automaticTurn({ messageId: pendingSteers.get(event.command_uuid)! });
-    }
-    if (event.type === 'command_lifecycle' && ['started', 'completed', 'cancelled'].includes(event.state)) {
+    if (event.type === 'command_lifecycle' && event.state === 'started' && typeof event.command_uuid === 'string' && pendingSteers.has(event.command_uuid)) {
+      consumeSteer(event.command_uuid);
+    } else if (event.type === 'command_lifecycle' && ['started', 'completed', 'cancelled'].includes(event.state)) {
       pendingSteers.delete(event.command_uuid);
       services.activityChanged();
     }
@@ -176,6 +207,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         messageId = String(nested.message?.id || randomUUID());
         activeTextIndex = undefined;
         thinkingBlocks.clear();
+        unreconciledTextIds.length = 0;
       }
       if (nested?.type === 'content_block_start' && nested.content_block?.type === 'text') {
         activeTextIndex = nested.index;
@@ -188,7 +220,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
             inputError(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
           }
           textSize += text.length;
-          services.event('activity', { id: `${messageId}:thinking:${nested.index}`, kind: 'reasoning', text, append: true });
+          services.event('activity', { id: `${epochPrefix()}${messageId}:thinking:${nested.index}`, kind: 'reasoning', text, append: true });
         }
       }
       if (nested?.type === 'content_block_stop' && nested.index === activeTextIndex) activeTextIndex = undefined;
@@ -198,10 +230,12 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
           inputError(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
         }
         if (!messageId) messageId = randomUUID();
-        const id = `${messageId}:block:${nested.index ?? activeTextIndex ?? 0}`;
+        const prefix = epochPrefix();
+        const id = `${prefix}${messageId}:block:${nested.index ?? activeTextIndex ?? 0}`;
         textSize += text.length;
+        if (!messages.has(id)) unreconciledTextIds.push(id);
         messages.set(id, (messages.get(id) || '') + text);
-        messageGroups.set(id, messageId);
+        messageGroups.set(id, `${prefix}${messageId}`);
         services.event('activity', { id, kind: 'text', text, append: true });
       }
     }
@@ -216,25 +250,38 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
       if (typeof event.uuid === 'string') lastAssistantUuid = event.uuid;
       const contents = Array.isArray(event.message?.content) ? event.message.content : [];
       const nativeMessageId = String(event.message?.id || messageId || randomUUID());
+      const prefix = epochPrefix();
+      const groupId = `${prefix}${nativeMessageId}`;
       for (const [index, entry] of contents.entries()) {
         if (entry.type !== 'text' || !entry.text) continue;
         const text = String(entry.text);
         // The CLI emits one assistant frame per completed block, sharing the API message ID.
-        const id = nativeMessageId === messageId && activeTextIndex !== undefined && contents.length === 1
-          ? `${nativeMessageId}:block:${activeTextIndex}`
-          : `${nativeMessageId}:frame:${event.uuid || randomUUID()}:${index}`;
+        // Reconcile against the streamed block ID even if `content_block_stop` arrived first.
+        let id: string;
+        if (nativeMessageId === messageId && activeTextIndex !== undefined && contents.length === 1) {
+          id = `${prefix}${nativeMessageId}:block:${activeTextIndex}`;
+          const pos = unreconciledTextIds.indexOf(id);
+          if (pos >= 0) unreconciledTextIds.splice(pos, 1);
+        } else if (nativeMessageId === messageId && unreconciledTextIds.length) {
+          id = unreconciledTextIds.shift()!;
+        } else {
+          id = `${prefix}${nativeMessageId}:frame:${event.uuid || randomUUID()}:${index}`;
+        }
         textSize += text.length - (messages.get(id)?.length ?? 0);
         if (textSize > 8 * 1024 * 1024) {
           inputError(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return;
         }
         messages.set(id, text);
-        messageGroups.set(id, nativeMessageId);
+        messageGroups.set(id, groupId);
         services.event('activity', { id, kind: 'text', text });
       }
       for (const entry of contents) {
         if (entry.type === 'tool_use' && entry.name === 'Agent') subagents.launched(entry.id, entry.input);
         if (entry.type === 'tool_use') services.event('tool', { id: entry.id, tool: entry.name, input: entry.input, status: 'running' });
       }
+    }
+    if (event.type === 'user' && typeof event.uuid === 'string' && pendingSteers.has(event.uuid)) {
+      consumeSteer(event.uuid);
     }
     if (event.type === 'user' && Array.isArray(event.message?.content)) {
       for (const entry of event.message.content) {
@@ -255,7 +302,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
         const errors = Array.isArray(event.errors) ? event.errors.join('\n') : '';
         resultError = errors || String(event.result || event.api_error || event.subtype || 'CLI 返回失败结果');
       } else if (!messages.size && event.result) {
-        const id = randomUUID();
+        const id = `${epochPrefix()}${randomUUID()}`;
         const text = String(event.result);
         if (text.length > 8 * 1024 * 1024) { inputError(new Error('CLI 文本输出超过 8 MiB，已停止会话')); return; }
         messages.set(id, text);
@@ -301,6 +348,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     startTurn: async (input) => {
       if (closing) throw new Error('Claude CLI 正在退出');
       quota.reset();
+      steerEpoch = 0;
       turnActive = true;
       control.sendUser(input);
     },
@@ -316,7 +364,7 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
       interruptRequested = true;
       control.sendControl({ subtype: 'interrupt' });
     },
-    isIdle: () => !turnActive && !tasks.length && !pendingSteers.size,
+    isIdle: () => !turnActive && !tasks.length && !pendingSteers.size && activeSideQuestions === 0,
     close: () => {
       if (closing) return;
       closing = true;
@@ -326,5 +374,10 @@ export async function startClaude(services: RunServices, prompt: AgentPrompt, si
     },
     tasks: () => tasks,
     stopTask: async (taskId) => { control.sendControl({ subtype: 'stop_task', task_id: taskId }); },
+    sideQuestion: async (question, sideSignal, options) => {
+      activeSideQuestions++;
+      try { return await runClaudeResidentSideQuestion(control, question, sideSignal, options); }
+      finally { activeSideQuestions--; services.activityChanged(); }
+    },
   };
 }

@@ -107,12 +107,15 @@ export default function MessageView({
   username,
   agentName,
   engine,
+  pendingSteer,
   onFork,
 }: {
   message: Message;
   username: string;
   agentName: string;
   engine: AgentEngine;
+  /** True while this mid-turn steering message is waiting for the engine to finish its current step and consume it. */
+  pendingSteer?: boolean;
   /** Present on the answer of a turn that can be branched from. */
   onFork?: () => void;
 }) {
@@ -131,6 +134,7 @@ export default function MessageView({
         )}
         <strong>{source === "delegation" ? "主智能体的任务" : source === "report" ? (message.content.includes("<clinavat_discussion") ? "讨论记录" : "子智能体汇报") : user ? "你" : message.role === "assistant" ? agentName : "系统"}</strong>
         <time>{formatTime(message.created_at)}</time>
+        {user && pendingSteer && <span className="steer-pending-badge">等待接入</span>}
         {message.role === "assistant" && (
           <span className="message-actions">
             <CopyMarkdown text={message.content} />

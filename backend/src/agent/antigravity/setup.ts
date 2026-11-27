@@ -3,8 +3,10 @@ import { lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { privateSubdirectory } from '../../accounts/credential-files.js';
 import { atomicWrite } from '../../runtime/process.js';
-import { quoteShell } from '../environment.js';
-import { isSuperAgent, nativeReadDenied, superNativeReadLimit, superReadModeOf, workingDirectory } from '../orchestration-tools.js';
+import { quoteShell, vmProjectRoot, vmWorkingDirectory } from '../environment.js';
+import {
+  isClientDirect, isClientMirrored, isSuperAgent, nativeReadDenied, superNativeReadLimit, superReadModeOf,
+} from '../orchestration-tools.js';
 import type { AgentContext } from '../types.js';
 import { toolShimProgram } from './tool-bridge.js';
 import { hookProgram } from './hook-program.js';
@@ -46,16 +48,22 @@ async function exists(file: string): Promise<boolean> {
 }
 
 /** Writes the settings and hooks agy reads from the slot home, before every start: a user's profile can bring older ones. */
-export async function prepareAntigravityHome(context: AgentContext): Promise<AntigravityHome> {
-  const root = context.project.local_path;
-  const found = [];
-  for (const file of executableCustomizations) if (await exists(path.join(root, file))) found.push(file);
-  if (found.length) {
-    throw new Error(`项目包含 Antigravity 会在槽位虚拟机中执行的工作区配置（${found.join('、')}），已拒绝启动。请移除这些文件或改用其他 CLI。`);
+export async function prepareAntigravityHome(context: AgentContext, workspaceDir?: string): Promise<AntigravityHome> {
+  const direct = isClientDirect(context);
+  const mirrored = isClientMirrored(context);
+  const hubRoot = context.project.local_path;
+  const vmRoot = vmProjectRoot(context, workspaceDir);
+  const vmCwd = vmWorkingDirectory(context, workspaceDir);
+  if (!direct) {
+    const found = [];
+    for (const file of executableCustomizations) if (await exists(path.join(hubRoot, file))) found.push(file);
+    if (found.length) {
+      throw new Error(`项目包含 Antigravity 会在槽位虚拟机中执行的工作区配置（${found.join('、')}），已拒绝启动。请移除这些文件或改用其他 CLI。`);
+    }
   }
   const home = context.runtime_home;
   const local = context.project.execution_mode === 'local';
-  const shell = local ? context.project.host_shell ?? null : path.join(root, '.bin', 'remote-shell');
+  const shell = direct ? null : local ? context.project.host_shell ?? null : path.posix.join(vmRoot, '.bin', 'remote-shell');
   const cli = await privateSubdirectory(home, '.gemini/antigravity-cli');
   const config = await privateSubdirectory(home, '.gemini/config');
   const hook = path.join(config, 'clinavat-hook.py');
@@ -63,18 +71,21 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
   const toolShim = path.join(config, 'clinavat-mcp.py');
   const run = (...args: string[]) => ['python3', '-I', hook, ...args].map(quoteShell).join(' ');
   const superAgent = isSuperAgent(context);
-  const readMode = superAgent ? superReadModeOf(context.session) : 'normal';
+  const readMode = direct ? 'off' : superAgent ? superReadModeOf(context.session) : 'normal';
   const counter = readMode === 'full' ? path.join(config, `clinavat-read-${randomUUID()}.count`) : undefined;
   const preToolUse = (matcher: string, ...args: string[]) =>
     ({ matcher, hooks: [{ type: 'command', command: run(...args), timeout: 30 }] });
   const hooks = { clinavat: {
-    PreToolUse: [
-      preToolUse('^run_command$', 'command'),
-      preToolUse('^(read_file|view_file|view_file_outline|grep_search|find_by_name|list_dir)$', 'read'),
-      preToolUse('^(write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|run_workflow)$', 'write'),
-      // A subagent's permission requests never reach an ACP client, so its commands would wait and fail.
-      preToolUse('^(invoke_subagent|define_subagent|manage_subagents)$', 'deny', 'Subagents are disabled in this workspace; do the work yourself.'),
-    ],
+    PreToolUse: direct
+      ? [preToolUse('.*', 'btw-gate'), preToolUse('.*', 'direct')]
+      : [
+          preToolUse('.*', 'btw-gate'),
+          preToolUse('^run_command$', 'command'),
+          preToolUse('^(read_file|view_file|view_file_outline|grep_search|find_by_name|list_dir)$', 'read'),
+          preToolUse('^(write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|run_workflow)$', 'write'),
+          // A subagent's permission requests never reach an ACP client, so its commands would wait and fail.
+          preToolUse('^(invoke_subagent|define_subagent|manage_subagents)$', 'deny', 'Subagents are disabled in this workspace; do the work yourself.'),
+        ],
     Stop: [{ type: 'command', command: run('stop', stopLog), timeout: 10 }],
   } };
   const settings = {
@@ -96,11 +107,22 @@ export async function prepareAntigravityHome(context: AgentContext): Promise<Ant
     stopOffset = 0;
   }
   await atomicWrite(toolShim, toolShimProgram);
-  const hookEnvironment = { CLINAVAT_AGY_ROOT: root, CLINAVAT_AGY_CWD: workingDirectory(context),
+  const hookEnvironment: NodeJS.ProcessEnv = {
+    CLINAVAT_AGY_ROOT: vmRoot,
+    CLINAVAT_AGY_CWD: vmCwd,
     CLINAVAT_AGY_BRAIN_ROOT: path.join(cli, 'brain'),
-    CLINAVAT_AGY_ACCESS: superAgent ? 'super' : context.session.agent_access ?? 'write', CLINAVAT_AGY_MODE: readMode,
-    CLINAVAT_AGY_SHELL: shell ?? '', CLINAVAT_AGY_READ_COUNTER: counter,
-    CLINAVAT_AGY_READ_DENIAL: nativeReadDenied(context), CLINAVAT_AGY_READ_LIMIT: String(superNativeReadLimit) };
+    CLINAVAT_AGY_ACCESS: superAgent ? 'super' : context.session.agent_access ?? 'write',
+    CLINAVAT_AGY_MODE: readMode,
+    CLINAVAT_AGY_SHELL: shell ?? '',
+    CLINAVAT_AGY_READ_COUNTER: counter,
+    CLINAVAT_AGY_READ_DENIAL: nativeReadDenied(context),
+    CLINAVAT_AGY_READ_LIMIT: String(superNativeReadLimit),
+    CLINAVAT_AGY_CLIENT_MODE: direct ? 'direct' : mirrored ? 'mirrored' : '',
+    CLINAVAT_AGY_CLIENT_PLATFORM: context.host?.platform ?? '',
+    CLINAVAT_AGY_CLIENT_ROOT: context.host?.kind === 'client' ? context.project.remote_path : '',
+    CLINAVAT_AGY_VM_ROOT: vmRoot,
+    CLINAVAT_AGY_AGENT_DIR: context.session.agent_directory ?? '',
+  };
   return { stopLog, stopOffset, shell, toolShim, hookEnvironment,
     resetReadBudget: async () => { if (counter) await atomicWrite(counter, '0'); },
     close: async () => { if (counter) await rm(counter, { force: true }); } };

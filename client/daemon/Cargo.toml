@@ -1,0 +1,47 @@
+[package]
+name = "clinavat-daemon"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "clinavat_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "clinavat-agent"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+dirs = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+futures-util = "0.3"
+globset = "0.4"
+http = "1"
+ignore = "0.4"
+portable-pty = "0.9"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "http2", "charset", "rustls-tls-webpki-roots-no-provider"] }
+russh = { version = "0.51", default-features = false, features = ["flate2"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "fs", "signal", "process"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-util = "0.7"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

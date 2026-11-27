@@ -70,7 +70,7 @@ export function archivedSessionRoutes(app: FastifyInstance, context: Context) {
     const conditions: string[] = [
       's.user_id = ?',
       's.archived_at IS NOT NULL',
-      "(h.kind = 'ssh' OR ? = 'admin')",
+      "(h.kind IN ('ssh','client') OR ? = 'admin')",
     ];
     const params: SQLInputValue[] = [request.user.id, request.user.role];
 
@@ -136,7 +136,7 @@ export function archivedSessionRoutes(app: FastifyInstance, context: Context) {
       `SELECT s.* FROM sessions s
        JOIN projects p ON p.id = s.project_id
        JOIN dev_hosts h ON h.id = p.dev_host_id
-       WHERE s.id = ? AND s.user_id = ? AND (h.kind = 'ssh' OR ? = 'admin')`,
+       WHERE s.id = ? AND s.user_id = ? AND (h.kind IN ('ssh','client') OR ? = 'admin')`,
       id,
       request.user.id,
       request.user.role,

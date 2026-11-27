@@ -56,6 +56,7 @@ export function PermissionMenuBody(props: {
   onChange: (mode: PermissionMode) => void;
   close: () => void;
   headingPrefix?: ReactNode;
+  clientHostWarning?: boolean;
 }) {
   const options = nativeOptionsFor(props.engine);
   function item(option: PermissionOption) {
@@ -96,6 +97,11 @@ export function PermissionMenuBody(props: {
         <div className="settings-menu-heading"><span>本系统</span></div>
         {item(yoloOption)}
       </div>
+      {props.clientHostWarning && (
+        <div className="permission-client-warning" role="note">
+          客户端本机无容器沙箱隔离，不建议默认使用 Full access 或 YOLO。
+        </div>
+      )}
     </>
   );
 }

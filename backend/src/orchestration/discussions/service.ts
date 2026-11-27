@@ -64,7 +64,7 @@ export class Discussions {
     }
     const rounds = input.format === 'council' ? 2 : input.format === 'review' ? 1 : Math.min(input.rounds ?? limits.debateRounds, limits.debateRounds);
     const project = projectFor(this.context, host.project_id, user.id);
-    const directory = await childDirectory(project, input.directory);
+    const directory = await childDirectory(project, input.directory, this.context.workspaces);
     const id = randomUUID();
     const number = store.get<{ count: number }>('SELECT COUNT(*) AS count FROM discussions WHERE host_session_id=?', host.id)!.count + 1;
     store.run('INSERT INTO discussions(id,host_session_id,topic,format,rounds,started_by) VALUES(?,?,?,?,?,?)', id, host.id, input.topic, input.format, rounds, startedBy);

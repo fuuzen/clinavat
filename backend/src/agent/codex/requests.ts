@@ -1,7 +1,11 @@
 import path from 'node:path';
+import { vmProjectRoot, vmWorkingDirectory } from '../environment.js';
 import { getPermissionMode } from '../permissions.js';
 import type { RpcMessage } from '../rpc.js';
-import { assertWritable, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
+import {
+  assertWritable, isClientDirect, isClientMirrored, isSuperAgent, nativeReadsEnabled,
+} from '../orchestration-tools.js';
+import { directDeclineHint, validateCodexMirroredFileChanges } from './client-mode.js';
 import type { RunServices } from '../types.js';
 import { unansweredNotice, type UserInputQuestion } from '../user-input.js';
 
@@ -21,19 +25,23 @@ function approvalChanges(value: unknown) {
   });
 }
 
-function usesRemoteShell(command: unknown, cwd: string, project: RunServices['context']['project']) {
+function usesRemoteShell(command: unknown, cwd: string, services: RunServices) {
   if (typeof command !== 'string') return false;
-  const root = project.local_path;
+  const { project } = services.context;
+  const vmRoot = vmProjectRoot(services.context, services.config.workspaceDir);
   if (project.execution_mode === 'local') return !!project.host_shell && command.includes(project.host_shell);
-  if (command.includes(path.join(root, '.bin', 'remote-shell'))) return true;
-  return path.resolve(root, cwd) === path.resolve(root)
+  if (command.includes(path.posix.join(vmRoot, '.bin', 'remote-shell')) || command.includes(path.join(project.local_path, '.bin', 'remote-shell'))) {
+    return true;
+  }
+  const resolved = path.posix.resolve(vmRoot, cwd);
+  return (resolved === path.posix.resolve(vmRoot) || path.resolve(project.local_path, cwd) === path.resolve(project.local_path))
     && /(?:^|[\s'"`;|&()])(?:\.\/)?\.bin\/remote-shell(?=$|[\s'"`;|&()])/.test(command);
 }
 
 export function codexPermissions(services: RunServices) {
   const mode = getPermissionMode(services.context.session);
-  // Super Agent keeps Codex's read-only sandbox for safe local inspection (rg/cat/ls) while rejecting edits and untrusted commands.
-  if (isSuperAgent(services.context)) {
+  // Super Agent and client-direct runs keep Codex's read-only sandbox; client-direct edits/commands go via clinavat.client_*.
+  if (isSuperAgent(services.context) || isClientDirect(services.context)) {
     return {
       approvalPolicy: 'untrusted',
       approvalsReviewer: 'user',
@@ -44,6 +52,8 @@ export function codexPermissions(services: RunServices) {
   // Codex cannot turn off apply_patch, and its read-only sandbox breaks remote-shell, which writes its lock in the
   // project. A read-only child instead asks for everything Codex does not know to be safe, and the Hub declines file changes.
   const readOnly = services.context.session.agent_access === 'read';
+  const vmRoot = vmProjectRoot(services.context, services.config.workspaceDir);
+  const vmCwd = vmWorkingDirectory(services.context, services.config.workspaceDir);
   return {
     approvalPolicy: readOnly ? 'untrusted' : mode === 'full-access' ? 'never' : 'on-request',
     approvalsReviewer: mode === 'auto' ? 'auto_review' : 'user',
@@ -51,7 +61,7 @@ export function codexPermissions(services: RunServices) {
     sandboxPolicy: mode === 'full-access' ? { type: 'dangerFullAccess' } : {
       // A child confined to a directory may still need .bin, where remote-shell keeps its lock.
       type: 'workspaceWrite', writableRoots: services.context.session.agent_directory
-        ? [workingDirectory(services.context), path.join(services.context.project.local_path, '.bin')] : [services.context.project.local_path],
+        ? [vmCwd, path.posix.join(vmRoot, '.bin')] : [vmRoot],
       networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
     },
   };
@@ -94,6 +104,9 @@ export function createCodexRequests(
     async handle(message: RpcMessage) {
       if (message.id === undefined || !message.method) return false;
       if (!nativeReadsEnabled(services.context) && ['item/commandExecution/requestApproval', 'execCommandApproval'].includes(message.method)) {
+        if (isClientDirect(services.context)) {
+          services.event('activity', { id: `codex-direct-deny:${String(message.id)}`, kind: 'notice', text: directDeclineHint(false) });
+        }
         if (!signal.aborted && isRunning()) {
           send({ id: message.id, result: { decision: message.method === 'execCommandApproval' ? 'denied' : 'decline' } });
         }
@@ -133,14 +146,28 @@ export function createCodexRequests(
       const itemId = String(params.itemId ?? params.callId ?? '');
       const item = items.get(itemId);
       const command = Array.isArray(params.command) ? params.command.join(' ') : params.command ?? item?.command;
-      const root = services.context.project.local_path;
+      const root = vmProjectRoot(services.context, services.config.workspaceDir);
       const cwd = typeof params.cwd === 'string' ? params.cwd : typeof item?.cwd === 'string' ? item.cwd : root;
-      const remote = usesRemoteShell(command, cwd, services.context.project);
+      const remote = usesRemoteShell(command, cwd, services);
       try {
         if (signal.aborted || !isRunning()) return true;
-        const changes = Array.isArray(item?.changes) ? item.changes as { path?: unknown }[] : [];
+        if (isClientDirect(services.context)) {
+          services.event('activity', { id: `codex-direct-deny:${itemId || key}`, kind: 'notice', text: directDeclineHint(fileChange) });
+          if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
+          return true;
+        }
+        const changes = Array.isArray(item?.changes) ? item.changes as { path?: unknown }[]
+          : Array.isArray(params.fileChanges) ? params.fileChanges as { path?: unknown }[] : [];
+        if (fileChange && isClientMirrored(services.context)) {
+          const mirroredError = await validateCodexMirroredFileChanges(services.context, cwd, changes, services.config.workspaceDir);
+          if (mirroredError) {
+            services.event('activity', { id: `codex-mirror-deny:${itemId || key}`, kind: 'notice', text: mirroredError });
+            if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
+            return true;
+          }
+        }
         const outside = fileChange && (await Promise.all(changes.map(change => typeof change.path === 'string'
-          ? assertWritable(services.context, path.resolve(cwd, change.path)).then(() => false, () => true) : false))).some(Boolean);
+          ? assertWritable(services.context, path.posix.resolve(cwd, change.path)).then(() => false, () => true) : false))).some(Boolean);
         if (isSuperAgent(services.context)) {
           if (canReply(key, controller)) send({ id: message.id, result: { decision: 'decline' } });
           return true;

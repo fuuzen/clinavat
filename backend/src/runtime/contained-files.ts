@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, link, mkdir, open, readlink, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
+import { copyFile, link, lstat, mkdir, open, readlink, realpath, rename, rm, unlink, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isProtectedInternalSegment } from '../client-host/path-utils.js';
 
 export interface ContainedFile {
   handle: FileHandle;
@@ -73,4 +74,57 @@ export async function placeFile(directory: FileHandle, name: string, source: str
     await copyFile(source, nearby, constants.COPYFILE_EXCL);
     await move(nearby);
   } finally { await rm(nearby, { force: true }); }
+}
+
+function splitContainedRelPath(relPath: string): { parent: string[]; name: string } {
+  const segments = relPath.split('/');
+  if (!segments.length || segments.some(s => !s || s === '.' || s === '..' || isProtectedInternalSegment(s) || /[\\\0]/.test(s))) {
+    throw new Error(`工作区相对路径无效或受保护：${relPath}`);
+  }
+  return { parent: segments.slice(0, -1), name: segments.at(-1)! };
+}
+
+/** Atomically writes a file inside `root` through descriptor-pinned directories, rejecting any symlink traversal or target. */
+export async function writeContainedFile(
+  root: string, relPath: string, content: Buffer, mtimeMs?: number,
+): Promise<{ size: number; mtimeMs: number }> {
+  const { parent, name } = splitContainedRelPath(relPath);
+  const directory = await openContainedDirectory(root, parent, true);
+  const dirFdPath = descriptorPath(directory.handle);
+  const tmpPath = join(dirFdPath, `.clinavat-${randomBytes(6).toString('hex')}.tmp`);
+  const targetPath = join(dirFdPath, name);
+  try {
+    const existing = await lstat(targetPath).catch((err: NodeJS.ErrnoException) => (err.code === 'ENOENT' ? undefined : Promise.reject(err)));
+    if (existing && (existing.isSymbolicLink() || existing.isDirectory())) {
+      throw new Error(`目标路径不能是符号链接或目录：${relPath}`);
+    }
+    const handle = await open(tmpPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    try {
+      if (content.length) await handle.write(content, 0, content.length, 0);
+      if (mtimeMs && Number.isFinite(mtimeMs)) await handle.utimes(mtimeMs / 1000, mtimeMs / 1000).catch(() => undefined);
+    } finally { await handle.close(); }
+    await rename(tmpPath, targetPath);
+    const placed = await lstat(targetPath);
+    if (!placed.isFile() || placed.isSymbolicLink()) throw new Error(`写入结果不是普通文件：${relPath}`);
+    return { size: placed.size, mtimeMs: Math.floor(placed.mtimeMs) };
+  } catch (error) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw error;
+  } finally { await directory.handle.close(); }
+}
+
+/** Deletes a regular file inside `root` through descriptor-pinned parent directories, never following symlinks. */
+export async function removeContainedFile(root: string, relPath: string): Promise<void> {
+  const { parent, name } = splitContainedRelPath(relPath);
+  const directory = await openContainedDirectory(root, parent, false).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return undefined;
+    throw err;
+  });
+  if (!directory) return;
+  try {
+    const targetPath = join(descriptorPath(directory.handle), name);
+    const existing = await lstat(targetPath).catch((err: NodeJS.ErrnoException) => (err.code === 'ENOENT' ? undefined : Promise.reject(err)));
+    if (!existing || existing.isDirectory()) return;
+    await unlink(targetPath);
+  } finally { await directory.handle.close(); }
 }

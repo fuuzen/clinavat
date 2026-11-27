@@ -1,5 +1,5 @@
 import type { RunControl } from './run-control.js';
-import { orchestrationModeOf, superReadModeOf } from './orchestration-tools.js';
+import { hasClientDirectTools, orchestrationModeOf, superReadModeOf } from './orchestration-tools.js';
 import type { AgentContext, AgentErrorDetail, AgentRun, QueuedInput, QuotaFailure, RunTask } from './types.js';
 import type { SlotUsage } from '../accounts/usage.js';
 import { relevantWindowsForEngine } from '../accounts/selection.js';
@@ -70,6 +70,8 @@ export interface ActiveRun {
   verifyShell?: () => Promise<void>;
   turnActive: boolean;
   queue: QueuedInput[];
+  /** Steer inputs accepted by the engine (`run.steer === true`) that have not yet been consumed into the turn. */
+  pendingSteers: QueuedInput[];
   attemptedSlotIds: string[];
   idleTimer?: NodeJS.Timeout;
   flushes: Promise<void>;
@@ -85,14 +87,39 @@ export interface RuntimeView {
   settling?: boolean;
 }
 
-export const settingsKey = (context: AgentContext) => JSON.stringify([context.slot.id, context.slot.credential_revision,
-  context.session.model ?? null, context.session.reasoning_effort ?? null, context.session.permission_mode ?? null,
-  context.session.agent_mode ?? null, context.session.role_preset ?? null, orchestrationModeOf(context.session),
-  context.session.agent_access ?? null]);
+export const settingsKey = (context: AgentContext) => JSON.stringify([
+  context.slot.id,
+  context.slot.credential_revision,
+  context.session.model ?? null,
+  context.session.reasoning_effort ?? null,
+  context.session.permission_mode ?? null,
+  context.session.agent_mode ?? null,
+  context.session.role_preset ?? null,
+  orchestrationModeOf(context.session),
+  context.session.agent_access ?? null,
+  context.host?.kind ?? 'ssh',
+  context.project.client_mode ?? null,
+  context.project.vm_path ?? null,
+  context.host?.platform ?? null,
+  context.host?.default_shell ?? null,
+  context.session.agent_directory ?? null,
+  hasClientDirectTools(context) ? (context.session.agent_access === 'read' ? 'client-direct-ro' : 'client-direct-rw') : 'native',
+]);
 
 export function isIdleResidentRun(state: ActiveRun, failingOver: boolean): boolean {
   return !failingOver && !state.finishing && !state.closing
     && !!state.run && !state.turnActive && !state.queue.length && state.run.isIdle();
+}
+
+/** Moves unconsumed steering inputs to the front of `queue` with their saved `messageId` intact so nothing is lost or duplicated on failover/teardown. */
+export function rescueUnconsumedSteers(state: ActiveRun, queue: QueuedInput[]): boolean {
+  if (!state.pendingSteers.length) return false;
+  const existing = new Set(queue.map(item => item.messageId ?? item.id));
+  const rescued = state.pendingSteers.filter(item => !existing.has(item.messageId ?? item.id));
+  state.pendingSteers = [];
+  if (!rescued.length) return false;
+  queue.unshift(...rescued);
+  return true;
 }
 
 export function hasResidentBackgroundWork(state: ActiveRun | undefined): boolean {

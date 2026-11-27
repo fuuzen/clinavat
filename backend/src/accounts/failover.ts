@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type { Context } from '../context.js';
-import { projectFor, sessionFor } from '../context.js';
-import { HttpError } from '../models.js';
+import { agentHostInfo, projectFor, sessionFor } from '../context.js';
+import { HttpError, type Project } from '../models.js';
 import { resolveAgentSelection, type AgentPreference } from '../agent/model-catalog.js';
-import type { AgentContext, QuotaFailure } from '../agent/types.js';
+import type { AgentContext, AgentHostInfo, QuotaFailure } from '../agent/types.js';
 import { slotForUser } from './access.js';
 import { engineProfiles } from '../agent/engines.js';
+
+function isProjectReadyForFailover(project: Project, host: AgentHostInfo): boolean {
+  if (host.kind === 'client') {
+    return project.client_mode !== 'mirrored' || project.sync_status === 'WATCHING';
+  }
+  return project.execution_mode === 'local' ? project.sync_status === 'LOCAL' : project.sync_status === 'WATCHING';
+}
 
 /** Runs after the old CLI and its lease have ended; the manager owns cancellation throughout this operation. */
 export async function prepareSlotFailover(context: Context, previous: AgentContext, quota: QuotaFailure,
@@ -16,7 +23,8 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
   if (session.slot_mode !== 'auto' || !engineProfiles[session.engine].automaticSlot) throw new HttpError(409, '当前对话未启用 Claude 自动账号');
   if (config.credentials.isSessionBusy(session.id)) throw new HttpError(409, '原账号状态尚未回收，无法切换');
   const project = projectFor(context, session.project_id, previous.user.id);
-  if (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING') {
+  const host = agentHostInfo(context, project.dev_host_id, previous.user.id);
+  if (!isProjectReadyForFailover(project, host)) {
     throw new HttpError(409, '项目同步不可用，已停止自动切换');
   }
   const candidates = await slots.candidates({ userId: session.user_id, engine: session.engine, model: session.model,
@@ -24,7 +32,7 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
   let selectionError: unknown;
   for (const slot of candidates) {
     signal.throwIfAborted();
-    const next: AgentContext = { user: { id: session.user_id }, project, slot, runtime_home: slot.home_dir,
+    const next: AgentContext = { user: { id: session.user_id }, project, host, slot, runtime_home: slot.home_dir,
       runtime_kind: 'conversation', session: { ...session } };
     let resolved: AgentPreference;
     try {
@@ -39,7 +47,8 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
     slotForUser(store, slot.id, session.user_id, session.engine);
     if (!slots.eligible(slot, session.user_id, session.model)) continue;
     const currentProject = projectFor(context, session.project_id, session.user_id);
-    if (currentProject.execution_mode === 'local' ? currentProject.sync_status !== 'LOCAL' : currentProject.sync_status !== 'WATCHING') {
+    const currentHost = agentHostInfo(context, currentProject.dev_host_id, session.user_id);
+    if (!isProjectReadyForFailover(currentProject, currentHost)) {
       throw new HttpError(409, '项目同步状态已变化，已停止自动切换');
     }
     const current = sessionFor(context, session.id, session.user_id);
@@ -54,7 +63,7 @@ export async function prepareSlotFailover(context: Context, previous: AgentConte
     events.emit(session.user_id, { type: 'session', sessionId: session.id, payload: store.get('SELECT * FROM sessions WHERE id=?', session.id) });
     events.emit(session.user_id, { type: 'message', sessionId: session.id, payload: store.get('SELECT * FROM messages WHERE id=?', noteId) });
     const turn = turns.start(session.id, noteId, { slotId: slot.id, credentialRevision: slot.credential_revision }, randomUUID());
-    return { ...next, project: currentProject,
+    return { ...next, project: currentProject, host: currentHost,
       session: { ...current, model: resolved.model, reasoning_effort: resolved.reasoningEffort,
         model_is_explicit: !!current.model, reasoning_effort_is_explicit: !!current.reasoning_effort, turn_id: turn.id } };
   }

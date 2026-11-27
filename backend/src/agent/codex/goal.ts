@@ -1,9 +1,9 @@
-import { agentEnvironment, agentScope, observeProcessClose, terminateProcess } from '../environment.js';
+import { agentEnvironment, agentScope, observeProcessClose, terminateProcess, vmProjectRoot, vmWorkingDirectory } from '../environment.js';
 import { RpcClient, type RpcMessage } from '../rpc.js';
 import { getPermissionMode } from '../permissions.js';
-import { canInspectProject, isSuperAgent, nativeReadsEnabled, workingDirectory } from '../orchestration-tools.js';
+import { isSuperAgent, nativeReadsEnabled } from '../orchestration-tools.js';
 import type { AgentConfig, AgentContext } from '../types.js';
-import type { Session } from '../../models.js';
+export { codexInspectToolsChanged, codexNativeToolsState } from './client-mode.js';
 
 export interface CodexGoal {
   threadId: string;
@@ -21,23 +21,22 @@ export interface CodexGoalChange {
   objective?: string;
 }
 
-export function codexServerArguments(context: AgentContext): string[] {
+export function codexServerArguments(context: AgentContext, workspaceDir?: string): string[] {
   const shell = nativeReadsEnabled(context);
+  const vmRoot = vmProjectRoot(context, workspaceDir);
+  const vmCwd = vmWorkingDirectory(context, workspaceDir);
   return [
     '-c', 'cli_auth_credentials_store="file"',
+    // Codex models default `default_reasoning_summary` to "none"; opt in explicitly so summaries stream into the turn process.
+    '-c', 'model_reasoning_summary="detailed"',
     '-c', `features.shell_tool=${shell}`, '-c', `features.unified_exec=${shell}`, '-c', 'features.goals=true',
     '-c', 'features.shell_snapshot=false', '-c', `features.multi_agent=${isSuperAgent(context) ? 'false' : 'true'}`,
     // Codex's own defaults: OpenAI's cached index, which exposes less to prompt injection, and live pages with full access.
     '-c', `web_search="${getPermissionMode(context.session) === 'full-access' ? 'live' : 'cached'}"`,
-    '-c', `projects.${JSON.stringify(context.project.local_path)}.trust_level="untrusted"`,
-    ...(context.session.agent_directory ? ['-c', `projects.${JSON.stringify(workingDirectory(context))}.trust_level="untrusted"`] : []),
+    '-c', `projects.${JSON.stringify(vmRoot)}.trust_level="untrusted"`,
+    ...(vmCwd !== vmRoot ? ['-c', `projects.${JSON.stringify(vmCwd)}.trust_level="untrusted"`] : []),
     'app-server',
   ];
-}
-
-/** The app-server only sets dynamic tools when a native thread is created. */
-export function codexInspectToolsChanged(session: Session): boolean {
-  return session.engine === 'codex' && !!session.native_session_id && !!session.native_inspect_tools !== canInspectProject(session);
 }
 
 export async function initializeCodexServer(rpc: RpcClient): Promise<void> {
@@ -118,13 +117,13 @@ export async function accessCodexGoal(
     if (change) throw new Error('当前对话尚未创建原生目标');
     return null;
   }
-  const { execution } = config;
-  const scope = agentScope(context);
+  const { execution, workspaceDir } = config;
+  const scope = agentScope(context, workspaceDir);
   const binary = await execution.binary(scope, 'codex');
-  const arguments_ = codexServerArguments(context);
+  const arguments_ = codexServerArguments(context, workspaceDir);
   if (signal?.aborted) throw new Error('目标操作已取消');
   const child = await execution.spawn(binary, arguments_, {
-    scope, cwd: context.project.local_path, env: agentEnvironment(execution, context, scope),
+    scope, cwd: vmWorkingDirectory(context, workspaceDir), env: agentEnvironment(execution, context, scope),
   });
   const closed = observeProcessClose(child);
   child.stderr.resume();

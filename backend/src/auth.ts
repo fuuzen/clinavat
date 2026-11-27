@@ -48,7 +48,10 @@ export function registerAuth(app: FastifyInstance, store: Store, config: Config,
     if (origin && !siteAccess.allows(origin)) throw new HttpError(403, '请求来源不受信任');
     if (request.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, '禁止跨站请求');
     const path = request.url.split('?')[0];
-    if (['/api/health', '/api/site/settings', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register'].includes(path)) return;
+    if ([
+      '/api/health', '/api/site/settings', '/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/auth/register',
+      '/api/client-devices/bootstrap', '/api/client-devices/tunnel',
+    ].includes(path)) return;
     const token = request.cookies[cookieName];
     const user = token && store.get<User & { auth_session_expires_at: number }>(
       `SELECT users.*,auth_sessions.expires_at AS auth_session_expires_at FROM auth_sessions JOIN users ON users.id=auth_sessions.user_id

@@ -33,6 +33,29 @@
 .turn-toggle {
   color: var(--muted);
 }
+.turn-steered .turn-toggle {
+  color: var(--text-secondary);
+}
+.turn-steered-badge,
+.steer-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.turn-steered-badge {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.steer-pending-badge {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
 .turn-details {
   border-left: 1px solid var(--line);
   padding: 8px 0 2px 14px;

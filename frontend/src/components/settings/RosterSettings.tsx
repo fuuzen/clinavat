@@ -9,7 +9,7 @@ type Draft = { id?: string; name: string; engine: AgentEngine; slotId: string; m
 const blank = (engine: AgentEngine): Draft => ({ name: "", engine, slotId: "", model: "", reasoningEffort: "", access: "read", instructions: "" });
 
 /** The user's agent roster: named child agents a master starts by name, with their CLI, account, model, access and role. */
-export default function RosterSettings({ overview }: { overview: Overview }) {
+export default function RosterSettings({ overview, onChanged }: { overview: Overview; onChanged?: () => void }) {
   const engines = agentEngines.filter((engine) => overview.slots.some((slot) => slot.engine === engine));
   const [profiles, setProfiles] = useState<AgentProfile[] | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -28,12 +28,13 @@ export default function RosterSettings({ overview }: { overview: Overview }) {
       await api(draft.id ? `/agent-profiles/${draft.id}` : "/agent-profiles", { method: draft.id ? "PUT" : "POST", body: JSON.stringify(body) });
       setDraft(null);
       await load();
+      onChanged?.();
     } catch (cause) { setError(errorText(cause)); }
     finally { setSaving(false); }
   }
   async function remove(profile: AgentProfile) {
     setError("");
-    try { await api(`/agent-profiles/${profile.id}`, { method: "DELETE" }); await load(); }
+    try { await api(`/agent-profiles/${profile.id}`, { method: "DELETE" }); await load(); onChanged?.(); }
     catch (cause) { setError(errorText(cause)); }
   }
 

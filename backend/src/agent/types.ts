@@ -12,8 +12,59 @@ import type { SlotModelCatalogs } from './model-catalog.js';
 import type { AgentEngine } from './engines.js';
 import type { OrchestrationMode, SuperReadMode } from './orchestration-tools.js';
 
+export type DevHostKind = 'ssh' | 'local' | 'client';
+
+export interface AgentHostInfo {
+  id: string;
+  kind: DevHostKind;
+  platform: string | null;
+  os_version: string | null;
+  arch: string | null;
+  default_shell: string | null;
+  homedir: string | null;
+  device_name: string | null;
+}
+
+/** Lightweight client workspace bridge injected into AgentConfig so agent tools avoid circular imports. */
+export interface AgentWorkspaceBridge {
+  readSlice(hostId: string, root: string, relPath: string, offset?: number, maxBytes?: number): Promise<{
+    buffer: Buffer; size: number; mtimeMs: number; isBinary: boolean;
+  }>;
+  stat(hostId: string, root: string, relPath: string): Promise<{
+    exists: boolean; kind?: 'file' | 'directory' | 'symlink'; size?: number; mtimeMs?: number; isSymlink?: boolean;
+  }>;
+  listFiles(hostId: string, root: string, relPath?: string): Promise<{
+    path: string; entries: Array<{ name: string; path: string; type: 'directory' | 'file'; size?: number }>;
+  }>;
+  writeFile(hostId: string, params: {
+    root: string; path: string; contentBase64: string; createDirs?: boolean; commit?: boolean;
+  }): Promise<{ size: number; mtimeMs: number }>;
+  editFile(hostId: string, params: {
+    root: string; path: string; oldText: string; newText: string; replaceAll?: boolean;
+  }): Promise<{ replacements: number; size?: number; mtimeMs?: number; diff?: string }>;
+  applyPatch(hostId: string, params: {
+    root: string; patch: string; dryRun: boolean;
+  }): Promise<{ ok?: boolean; files: string[]; diff: string; hunks?: number; error?: string }>;
+  glob(hostId: string, params: {
+    root: string; pattern: string; cwd?: string; maxResults?: number;
+  }): Promise<{ matches: string[]; truncated?: boolean }>;
+  grep(hostId: string, params: {
+    root: string; pattern: string; path?: string; glob?: string; caseInsensitive?: boolean; maxResults?: number;
+  }): Promise<{ matches: Array<{ path: string; line: number; text: string }>; truncated?: boolean }>;
+  execCommand(hostId: string, params: {
+    cwd: string; command: string; shell?: string; env?: Record<string, string>;
+    background?: boolean; waitMs?: number; taskId?: string; sessionId?: string;
+  }, timeoutMs?: number): Promise<{
+    exitCode: number; stdout: string; stderr: string; timedOut?: boolean; backgroundTaskId?: string;
+  }>;
+  manageTask(hostId: string, params: {
+    sessionId: string; action: 'list' | 'status' | 'send_input' | 'kill'; taskId?: string; input?: string;
+  }): Promise<unknown>;
+}
+
 export interface AgentConfig {
   dataDir: string;
+  workspaceDir?: string;
   claudeBinary: string;
   codexBinary: string;
   approvalTimeoutMs: number;
@@ -28,6 +79,8 @@ export interface AgentConfig {
   hostShell?(context: AgentContext): Promise<string | null>;
   /** The tools a master agent uses to start and direct child agents. */
   orchestration?: OrchestrationHost;
+  /** Client workspace RPC bridge for Mode 1 (direct) tools and remote instruction file loading. */
+  workspaces?: AgentWorkspaceBridge;
 }
 
 /** A tool the Hub serves to a conversation's CLI; `inputSchema` is a JSON Schema object. */
@@ -55,10 +108,14 @@ export interface AgentContext {
   slot: { id: string; home_dir: string; engine: AgentEngine; credential_revision: number; updated_at?: string };
   project: {
     id: string; local_path: string; remote_path: string; sync_name: string;
+    dev_host_id?: string | null;
+    client_mode?: 'direct' | 'mirrored';
+    vm_path?: string | null;
     execution_mode?: 'local' | 'direct' | 'bwrap' | 'symlink' | null;
     /** Set for a run of a local project whose shell commands go back to the host over SSH. */
     host_shell?: string | null;
   };
+  host?: AgentHostInfo | null;
   session: {
     id: string;
     engine: AgentEngine;
@@ -116,7 +173,7 @@ export interface AgentCallbacks {
   saveMessage(sessionId: string, role: string, content: string): void | Promise<void>;
   updateSession(sessionId: string, fields: {
     native_session_id?: string;
-    native_inspect_tools?: 0 | 1;
+    native_inspect_tools?: number;
     status?: string;
     jsonl_file_path?: string;
   }): void | Promise<void>;
@@ -128,6 +185,8 @@ export interface AgentCallbacks {
   loadImages(sessionId: string, ids: string[]): PromptImage[];
   /** Records a new turn for a saved message, or for a turn the CLI began after a background task. Returns the turn ID. */
   beginTurn(sessionId: string, origin: TurnOrigin, authorization: TurnAuthorization): string;
+  /** Records the exact moment an engine consumed a mid-turn steering message. */
+  steered?(sessionId: string, messageId: string, turnId?: string): void;
   quotaReached?(context: AgentContext, quota: QuotaFailure): void;
   prepareFailover?(context: AgentContext, quota: QuotaFailure, excludedSlotIds: string[], signal: AbortSignal): Promise<AgentContext>;
   verifyAutomaticSlot?(context: AgentContext): Promise<void>;
@@ -198,6 +257,13 @@ export interface AgentRun {
     get(): Promise<CodexGoal | null>;
     set(change: CodexGoalChange): Promise<CodexGoal | null>;
   };
+  /** Answers a read-only side question (/btw) on the live CLI without affecting the main turn stream. */
+  sideQuestion?(question: string, signal: AbortSignal, options?: {
+    history?: { question: string; response: string }[];
+    snapshot?: string;
+    onDelta?: (chunk: string) => void;
+    onProgress?: (event: Record<string, unknown>) => void;
+  }): Promise<string | null>;
 }
 
 export interface RunServices {
@@ -213,6 +279,8 @@ export interface RunServices {
   turnEnded(outcome: TurnOutcome): void;
   /** The CLI began a turn by itself. */
   automaticTurn(origin: TurnOrigin): void;
+  /** Called at the exact moment the engine consumes a mid-turn steering message. */
+  steered(messageId: string): void;
   /** Something changed that can make the process idle or keep it from being idle. */
   activityChanged(): void;
   /** Tokens the CLI reported, attributed to the current turn. */

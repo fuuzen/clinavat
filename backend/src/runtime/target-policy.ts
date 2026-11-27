@@ -248,6 +248,12 @@ export function dialAuthorizedTcp(pinnedIp: string, port: number, timeoutMs = 10
     });
 
     let settled = false;
+    const swallowError = () => undefined;
+    const guardLateErrors = () => {
+      if (socket.closed) return;
+      socket.on('error', swallowError);
+      socket.once('close', () => socket.off('error', swallowError));
+    };
     const cleanup = () => {
       clearTimeout(timer);
       socket.off('connect', onConnect);
@@ -256,12 +262,15 @@ export function dialAuthorizedTcp(pinnedIp: string, port: number, timeoutMs = 10
     const onConnect = () => {
       if (settled) return;
       settled = true;
+      // Keep an error guard across the async handoff until the caller attaches its own listeners or closes the socket.
+      guardLateErrors();
       cleanup();
       resolve(socket);
     };
     const onError = (error: Error) => {
       if (settled) return;
       settled = true;
+      guardLateErrors();
       cleanup();
       socket.destroy();
       reject(error);
@@ -269,9 +278,10 @@ export function dialAuthorizedTcp(pinnedIp: string, port: number, timeoutMs = 10
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      guardLateErrors();
       cleanup();
       const error = new Error(`连接目标 ${pinnedIp}:${port} 超时（${timeoutMs}ms）`);
-      socket.destroy(error);
+      socket.destroy();
       reject(error);
     }, timeoutMs);
     timer.unref();

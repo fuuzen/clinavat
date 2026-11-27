@@ -2,8 +2,10 @@
 # Shared firewalld zone and port helpers sourced by deploy/lxd/setup.sh and deploy/lxd/host-commands.sh.
 # Expects $NETWORK (and for port checks/writes: $bridge, $subnet, $port, $relay_port, $hub_user).
 
+FIREWALLD_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 FIREWALLD_ZONE=cv-users
 FIREWALLD_RESOLVED_ZONE=""
+FIREWALLD_RESOLVED_EXTERNAL_ZONE=""
 
 declare -F fail >/dev/null || fail() { echo "FAIL: $*" >&2; exit 1; }
 declare -F ok >/dev/null || ok() { echo "  ok: $*"; }
@@ -111,8 +113,8 @@ firewalld_ensure_zone() {
   echo "firewalld: bound $NETWORK to zone $FIREWALLD_ZONE"
 }
 
-firewalld_zone_allows_port() {
-  local scope="$1" zone="$2" target_port="$3"
+firewalld_zone_allows_tcp() {
+  local scope="$1" zone="$2" target_port="$3" bridge_arg="${4:-}" source_arg="${5:-}"
   local -a scope_args=()
   [[ "$scope" == permanent ]] && scope_args=(--permanent)
   local target ports services rich_rules
@@ -120,168 +122,12 @@ firewalld_zone_allows_port() {
   ports="$(firewall-cmd "${scope_args[@]}" --zone="$zone" --list-ports 2>/dev/null)" || return 1
   services="$(firewall-cmd "${scope_args[@]}" --zone="$zone" --list-services 2>/dev/null)" || return 1
   rich_rules="$(firewall-cmd "${scope_args[@]}" --zone="$zone" --list-rich-rules 2>/dev/null)" || return 1
-
-  python3 -I -c '
-import ipaddress, shlex, sys
-
-bridge_ip = ipaddress.ip_address(sys.argv[1])
-subnet_net = ipaddress.ip_network(sys.argv[2], strict=False)
-target_port = int(sys.argv[3])
-target, ports, services = sys.argv[4], sys.argv[5], sys.argv[6]
-
-def port_in_spec(spec, port_num):
-    if "-" in spec:
-        lo, hi = spec.split("-", 1)
-        return lo.isdigit() and hi.isdigit() and int(lo) <= port_num <= int(hi)
-    return spec.isdigit() and int(spec) == port_num
-
-def parse_ipv4_net(addr):
-    if not addr:
-        return None
-    try:
-        net = ipaddress.ip_network(addr, strict=False)
-    except ValueError:
-        return None
-    return net if isinstance(net, ipaddress.IPv4Network) else None
-
-accept_prios = []
-block_prios = []
-
-if target.strip().upper() == "ACCEPT":
-    accept_prios.append(float("inf"))
-
-for entry in ports.split():
-    if "/" in entry:
-        spec, proto = entry.split("/", 1)
-        if proto.lower() == "tcp" and port_in_spec(spec, target_port):
-            accept_prios.append(0)
-            break
-
-if target_port == 22 and "ssh" in services.split():
-    accept_prios.append(0)
-
-ignored = {"forward-port", "masquerade", "icmp-block", "icmp-type", "source-port", "mark"}
-actions = {"accept", "drop", "reject"}
-clauses = {"source", "destination", "port", "service", "protocol", "log", "nflog", "audit", "limit"} | actions | ignored
-
-def classify_rich_rule(line):
-    try:
-        tokens = shlex.split(line)
-    except ValueError:
-        return None
-    if not tokens or tokens[0] != "rule":
-        return None
-
-    priority = 0
-    family = action = source_addr = dest_addr = service_name = proto_val = port_clause = None
-    has_source = has_dest = src_not = dst_not = False
-    src_non_addr = dst_non_addr = False
-    clause = "rule"
-
-    for tok in tokens[1:]:
-        low = tok.lower()
-        if "=" not in tok:
-            if low in ignored:
-                return None
-            if low == "not":
-                if clause == "source": src_not = True
-                elif clause == "destination": dst_not = True
-                continue
-            if low in actions:
-                if action is not None:
-                    return None
-                action, clause = low, low
-            elif low in clauses:
-                clause = low
-                if clause == "source": has_source = True
-                elif clause == "destination": has_dest = True
-                elif clause == "port": port_clause = {}
-            continue
-
-        key, val = tok.split("=", 1)
-        k = key.lower()
-        if clause == "rule":
-            if k == "family": family = val.lower()
-            elif k == "priority":
-                try:
-                    priority = int(val)
-                except ValueError:
-                    return None
-        elif clause == "source":
-            if k == "address": source_addr = val
-            else: src_non_addr = True
-        elif clause == "destination":
-            if k == "address": dest_addr = val
-            else: dst_non_addr = True
-        elif clause == "port" and port_clause is not None:
-            port_clause[k] = val
-        elif clause == "service" and k == "name":
-            service_name = val
-        elif clause == "protocol" and k == "value":
-            proto_val = val.lower()
-
-    if action is None or (family is not None and family != "ipv4"):
-        return None
-
-    port_ok = (port_clause is not None and port_clause.get("protocol", "").lower() == "tcp"
-               and port_in_spec(port_clause.get("port", ""), target_port))
-    service_ok = target_port == 22 and service_name == "ssh"
-
-    if action == "accept":
-        if src_not or dst_not or src_non_addr or dst_non_addr:
-            return None
-        if not (port_ok or service_ok):
-            return None
-        if has_dest:
-            dst_net = parse_ipv4_net(dest_addr)
-            if dst_net is None or bridge_ip not in dst_net:
-                return None
-        if has_source:
-            src_net = parse_ipv4_net(source_addr)
-            if src_net is None or not subnet_net.subnet_of(src_net):
-                return None
-        return ("accept", priority)
-
-    # drop / reject: treat as blocking if it matches (bridge, subnet, target_port).
-    has_l4 = port_clause is not None or service_name is not None or proto_val is not None
-    l4_matches = (not has_l4) or port_ok or service_ok or (proto_val == "tcp" and port_clause is None and service_name is None)
-    if not l4_matches:
-        return None
-    if has_dest:
-        if dst_non_addr:
-            return None
-        dst_net = parse_ipv4_net(dest_addr)
-        if dst_net is None:
-            return None
-        if (bridge_ip in dst_net) == dst_not:
-            return None
-    if has_source:
-        if src_non_addr:
-            return None
-        src_net = parse_ipv4_net(source_addr)
-        if src_net is None:
-            return None
-        if src_not:
-            if subnet_net.subnet_of(src_net):
-                return None
-        elif not subnet_net.overlaps(src_net):
-            return None
-    return ("block", priority)
-
-for line in sys.stdin:
-    if not line.strip():
-        continue
-    res = classify_rich_rule(line)
-    if res is None:
-        continue
-    kind, prio = res
-    (accept_prios if kind == "accept" else block_prios).append(prio)
-
-if accept_prios and (not block_prios or min(accept_prios) < min(block_prios)):
-    sys.exit(0)
-sys.exit(1)
-' "$bridge" "$subnet" "$target_port" "$target" "$ports" "$services" <<<"$rich_rules"
+  python3 -I "$FIREWALLD_DIR/firewalld-port-eval.py" \
+    "$bridge_arg" "$source_arg" "$target_port" "$target" "$ports" "$services" <<<"$rich_rules"
 }
+
+firewalld_zone_allows_port() { firewalld_zone_allows_tcp "$1" "$2" "$3" "$bridge" "$subnet"; }
+firewalld_zone_allows_external_port() { firewalld_zone_allows_tcp "$1" "$2" "$3" "" "${4:-}"; }
 
 firewalld_rich_rule() {
   printf 'rule family="ipv4" source address="%s" destination address="%s/32" port port="%s" protocol="tcp" accept\n' \
@@ -416,4 +262,187 @@ firewalld_check_port() {
   else
     problem "firewalld zone $zone allows $bridge:$target_port ($label) in runtime but not in --permanent (will be lost after reload/reboot); run: $fix_hint"
   fi
+}
+
+firewalld_normalize_cidr() {
+  python3 -I -c '
+import ipaddress, sys
+net = ipaddress.ip_network(sys.argv[1], strict=True)
+print(f"ipv{net.version}", net)' "$1" 2>/dev/null
+}
+
+firewalld_external_fix_hint() {
+  local cmd="sudo $0 apply-client-ssh --client-ssh-port $1"
+  [[ -n "${2:-}" ]] && cmd+=" --zone $2"
+  [[ -n "${3:-}" ]] && cmd+=" --source $3"
+  printf '%s' "$cmd"
+}
+
+firewalld_detect_vm_subnet() {
+  local raw=""
+  if [[ -n "${subnet:-}" ]]; then
+    raw="$subnet"
+  elif command -v ip >/dev/null 2>&1; then
+    raw="$(ip -o -4 addr show dev "$NETWORK" 2>/dev/null | awk '{print $4; exit}' || true)"
+  fi
+  if [[ -z "$raw" ]] && (declare -F lxc >/dev/null 2>&1 || [[ -x /snap/bin/lxc ]]); then
+    raw="$(lxc network get "$NETWORK" ipv4.address 2>/dev/null || /snap/bin/lxc network get "$NETWORK" ipv4.address </dev/null 2>/dev/null || true)"
+  fi
+  [[ -n "$raw" && "$raw" != "none" ]] || return 0
+  python3 -I -c '
+import ipaddress, sys
+print(ipaddress.ip_interface(sys.argv[1].strip()).network)' "$raw" 2>/dev/null || true
+}
+
+firewalld_zone_matches_vm_subnet() {
+  local zone="$1" vm_subnet="${2:-}" rt_src perm_src
+  [[ -n "$vm_subnet" ]] || return 1
+  rt_src="$(firewall-cmd --zone="$zone" --list-sources 2>/dev/null || true)"
+  perm_src="$(firewall-cmd --permanent --zone="$zone" --list-sources 2>/dev/null || true)"
+  [[ -n "$rt_src$perm_src" ]] || return 1
+  python3 -I -c '
+import ipaddress, sys
+vm = ipaddress.ip_network(sys.argv[1], strict=False)
+for tok in sys.argv[2].split():
+    try:
+        net = ipaddress.ip_network(tok, strict=False)
+    except ValueError:
+        continue
+    if net.version == vm.version and vm.overlaps(net):
+        sys.exit(0)
+sys.exit(1)' "$vm_subnet" "$rt_src $perm_src"
+}
+
+firewalld_is_vm_zone() {
+  local zone="$1" rt_vm="$2" perm_vm="$3" unbound_default="${4:-}" vm_subnet="${5:-}"
+  if [[ "$zone" == "$FIREWALLD_ZONE" || ( -n "$rt_vm" && "$zone" == "$rt_vm" ) || ( -n "$perm_vm" && "$zone" == "$perm_vm" ) || ( -n "$unbound_default" && "$zone" == "$unbound_default" ) ]]; then
+    return 0
+  fi
+  firewalld_zone_matches_vm_subnet "$zone" "$vm_subnet"
+}
+
+# Sets $FIREWALLD_RESOLVED_EXTERNAL_ZONE to the external/LAN zone, or "" when check already reported a problem.
+# Refuses VM isolation zones (cv-users / $NETWORK / unbound default zone / VM source zones) and never calls --reload.
+firewalld_resolve_external_zone() {
+  local mode="$1" target_port="$2" label="$3" requested="${4:-}"
+  local rt_vm perm_vm default_zone vm_subnet unbound_default="" active_out z msg=""
+  local -a external_candidates=() other_cv_zones=()
+  FIREWALLD_RESOLVED_EXTERNAL_ZONE=""
+  rt_vm="$(firewalld_interface_zone runtime)" || exit 1
+  perm_vm="$(firewalld_interface_zone permanent)" || exit 1
+  default_zone="$(firewall-cmd --get-default-zone 2>/dev/null || true)"
+  vm_subnet="$(firewalld_detect_vm_subnet)"
+
+  if [[ -z "$rt_vm" || -z "$perm_vm" ]] && [[ -n "$default_zone" ]]; then
+    if [[ -e "/sys/class/net/$NETWORK" || -n "$vm_subnet" ]] \
+        || firewalld_zone_exists runtime "$FIREWALLD_ZONE" \
+        || firewalld_zone_exists permanent "$FIREWALLD_ZONE"; then
+      unbound_default="$default_zone"
+    fi
+  fi
+
+  if [[ -n "$requested" ]]; then
+    if [[ -n "$unbound_default" && "$requested" == "$unbound_default" ]]; then
+      msg="refusing to expose $label (tcp/$target_port) on default zone $requested: $NETWORK is not bound to $FIREWALLD_ZONE in both runtime and --permanent, so VM traffic falls into $requested; run deploy/lxd/setup.sh or deploy/lxd/host-commands.sh apply first"
+    elif firewalld_is_vm_zone "$requested" "$rt_vm" "$perm_vm" "$unbound_default" "$vm_subnet"; then
+      msg="refusing to expose $label (tcp/$target_port) on VM isolation zone $requested ($FIREWALLD_ZONE / $NETWORK must stay isolated)"
+    elif ! firewalld_zone_exists runtime "$requested" || ! firewalld_zone_exists permanent "$requested"; then
+      msg="firewalld zone $requested must exist in both runtime and --permanent for $label (tcp/$target_port)"
+    else
+      FIREWALLD_RESOLVED_EXTERNAL_ZONE="$requested"
+      return 0
+    fi
+  else
+    active_out="$(firewall-cmd --get-active-zones 2>/dev/null || true)"
+    while IFS= read -r z; do
+      [[ -n "$z" ]] || continue
+      firewalld_is_vm_zone "$z" "$rt_vm" "$perm_vm" "$unbound_default" "$vm_subnet" && continue
+      if [[ "$z" == cv-* ]]; then other_cv_zones+=("$z"); else external_candidates+=("$z"); fi
+    done < <(awk '!/^[[:space:]]/ && NF { print $1 }' <<<"$active_out")
+
+    if (( ${#external_candidates[@]} == 1 && ${#other_cv_zones[@]} == 0 )); then
+      z="${external_candidates[0]}"
+      if firewalld_zone_exists runtime "$z" && firewalld_zone_exists permanent "$z"; then
+        FIREWALLD_RESOLVED_EXTERNAL_ZONE="$z"
+        return 0
+      fi
+      msg="detected firewalld zone $z is not present in both runtime and --permanent; specify --zone <zone>"
+    elif (( ${#external_candidates[@]} + ${#other_cv_zones[@]} > 1 )); then
+      msg="multiple active non-VM firewalld zones found (${other_cv_zones[*]}${other_cv_zones[*]:+${external_candidates[*]:+ }}${external_candidates[*]}); specify --zone <zone> (never $FIREWALLD_ZONE)"
+    elif (( ${#other_cv_zones[@]} == 1 )); then
+      msg="no active non-cv-* firewalld zone found (active non-VM zone: ${other_cv_zones[0]}); re-run with --zone ${other_cv_zones[0]}"
+    elif [[ -n "$unbound_default" ]]; then
+      msg="$NETWORK is not bound to $FIREWALLD_ZONE in both runtime and --permanent, so default zone $unbound_default may carry VM traffic; bind $NETWORK to $FIREWALLD_ZONE via deploy/lxd/setup.sh or deploy/lxd/host-commands.sh apply, or specify a dedicated external --zone <zone>"
+    else
+      if [[ -n "$default_zone" && "$default_zone" != cv-* ]] && ! firewalld_is_vm_zone "$default_zone" "$rt_vm" "$perm_vm" "$unbound_default" "$vm_subnet"; then
+        msg="no active non-cv-* firewalld zone found (default zone is $default_zone); re-run explicitly with --zone $default_zone"
+      else
+        msg="no active external firewalld zone found; re-run with --zone <zone>"
+      fi
+    fi
+  fi
+  if [[ "$mode" == ensure ]]; then fail "$msg"; else problem "$msg"; fi
+}
+
+firewalld_ensure_external_port() {
+  local target_port="$1" label="$2" requested="${3:-}" source_cidr="${4:-}"
+  local raw_source="" family="" zone desc rule perm_ok=0 rt_ok=0
+  if ! firewalld_active; then
+    ok "firewalld is not active; skipping firewalld rule for tcp/$target_port ($label)"
+    return 0
+  fi
+  if [[ -n "$source_cidr" ]]; then
+    raw_source="$source_cidr"
+    read -r family source_cidr < <(firewalld_normalize_cidr "$raw_source") || fail "invalid --source CIDR: $raw_source"
+  fi
+  firewalld_resolve_external_zone ensure "$target_port" "$label" "$requested"
+  zone="$FIREWALLD_RESOLVED_EXTERNAL_ZONE"
+  desc="tcp/$target_port${source_cidr:+ from $source_cidr}"
+
+  firewalld_zone_allows_external_port permanent "$zone" "$target_port" "$source_cidr" && perm_ok=1
+  firewalld_zone_allows_external_port runtime "$zone" "$target_port" "$source_cidr" && rt_ok=1
+  if (( perm_ok && rt_ok )); then
+    ok "firewalld zone $zone already allows $desc ($label)"
+    return 0
+  fi
+  local -a add_args=(--add-port="${target_port}/tcp")
+  if [[ -n "$source_cidr" ]]; then
+    rule="rule family=\"$family\" source address=\"$source_cidr\" port port=\"$target_port\" protocol=\"tcp\" accept"
+    add_args=(--add-rich-rule="$rule")
+  fi
+  if (( !perm_ok )); then
+    firewall-cmd --permanent --zone="$zone" "${add_args[@]}" >/dev/null \
+      || fail "failed to persist firewalld rule for $desc ($label) in zone $zone"
+  fi
+  if (( !rt_ok )); then
+    firewall-cmd --zone="$zone" "${add_args[@]}" >/dev/null \
+      || fail "failed to add runtime firewalld rule for $desc ($label) in zone $zone"
+  fi
+  if (( !perm_ok && !rt_ok )); then ok "firewalld zone $zone allows $desc ($label) (runtime and --permanent)"
+  elif (( !perm_ok )); then ok "firewalld zone $zone persisted $desc ($label) (--permanent)"
+  else ok "firewalld zone $zone allows $desc ($label) (runtime)"; fi
+}
+
+firewalld_check_external_port() {
+  local target_port="$1" label="$2" requested="${3:-}" source_cidr="${4:-}"
+  local raw_source="" family="" zone desc fix_hint rt_ok=0 perm_ok=0
+  if ! firewalld_active; then
+    ok "firewalld is not active; skipping firewalld check for tcp/$target_port ($label)"
+    return 0
+  fi
+  if [[ -n "$source_cidr" ]]; then
+    raw_source="$source_cidr"
+    read -r family source_cidr < <(firewalld_normalize_cidr "$raw_source") || { problem "invalid --source CIDR: $raw_source"; return 0; }
+  fi
+  firewalld_resolve_external_zone check "$target_port" "$label" "$requested"
+  [[ -n "$FIREWALLD_RESOLVED_EXTERNAL_ZONE" ]] || return 0
+  zone="$FIREWALLD_RESOLVED_EXTERNAL_ZONE"
+  desc="tcp/$target_port${source_cidr:+ from $source_cidr}"
+  fix_hint="$(firewalld_external_fix_hint "$target_port" "$zone" "$source_cidr")"
+
+  firewalld_zone_allows_external_port runtime "$zone" "$target_port" "$source_cidr" && rt_ok=1
+  firewalld_zone_allows_external_port permanent "$zone" "$target_port" "$source_cidr" && perm_ok=1
+  if (( rt_ok && perm_ok )); then ok "firewalld zone $zone allows $desc ($label)"
+  elif (( !rt_ok )); then problem "firewalld zone $zone does not allow $desc ($label) in runtime; run: $fix_hint"
+  else problem "firewalld zone $zone allows $desc ($label) in runtime but not in --permanent; run: $fix_hint"; fi
 }

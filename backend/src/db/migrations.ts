@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import { agentEngines } from '../agent/engines.js';
+import { agentEngines, engineCheck } from '../agent/engines.js';
 import { superReadModeColumn } from './schema.js';
 
 export interface MigrationStore {
@@ -130,6 +130,19 @@ function widenDevHostKindCheck(db: DatabaseSync, store: MigrationStore): void {
   rewriteTableSchemas(db, store, [{ name: table.name, sql: table.sql.replace(check[0], `CHECK(kind IN (${kinds}))`) }]);
 }
 
+/** Widens native_inspect_tools CHECK constraint from IN (0,1) to >= 0 for Codex dynamic toolset bitmask encoding. */
+function widenNativeInspectToolsCheck(db: DatabaseSync, store: MigrationStore): void {
+  const updates: { name: string; sql: string }[] = [];
+  for (const name of ['sessions', 'session_turns']) {
+    const table = store.get<{ name: string; sql: string }>("SELECT name,sql FROM sqlite_schema WHERE type='table' AND name=?", name);
+    if (!table?.sql) continue;
+    const check = /CHECK\s*\(\s*native_inspect_tools\s+IN\s*\(\s*0\s*,\s*1\s*\)\s*\)/i.exec(table.sql);
+    if (!check) continue;
+    updates.push({ name: table.name, sql: table.sql.replace(check[0], 'CHECK(native_inspect_tools >= 0)') });
+  }
+  rewriteTableSchemas(db, store, updates);
+}
+
 export function runMigrations(db: DatabaseSync, store: MigrationStore): void {
   addColumn(db, store, 'execution_machines', 'timezone', 'TEXT');
   addColumn(db, store, 'sessions', 'slot_mode', "TEXT NOT NULL DEFAULT 'manual' CHECK(slot_mode IN ('manual','auto'))");
@@ -151,7 +164,7 @@ export function runMigrations(db: DatabaseSync, store: MigrationStore): void {
   // Copied turns of a branch keep their source's native session, whose history up to them is the same.
   addColumn(db, store, 'session_turns', 'native_ref', 'TEXT');
   addColumn(db, store, 'session_turns', 'native_session_id', 'TEXT');
-  addColumn(db, store, 'session_turns', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools IN (0,1))');
+  addColumn(db, store, 'session_turns', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools >= 0)');
   // A branch starts from its source's native history; fork_native_* apply only until it has its own.
   for (const column of ['forked_from_session_id', 'forked_from_turn_id', 'fork_native_id', 'fork_native_anchor']) {
     addColumn(db, store, 'sessions', column, 'TEXT');
@@ -177,8 +190,8 @@ export function runMigrations(db: DatabaseSync, store: MigrationStore): void {
   addColumn(db, store, 'sessions', 'orchestration', 'INTEGER NOT NULL DEFAULT 0 CHECK(orchestration IN (0,1))');
   addColumn(db, store, 'sessions', 'orchestration_mode', "TEXT CHECK(orchestration_mode IN ('off','hybrid','super'))");
   addColumn(db, store, 'sessions', 'super_read_mode', superReadModeColumn);
-  // Codex stores the tool list with its native thread. Pre-existing threads never offered inspect.
-  addColumn(db, store, 'sessions', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools IN (0,1))');
+  // Codex stores the tool list with its native thread. Bitmask tracks inspect and client-direct toolsets.
+  addColumn(db, store, 'sessions', 'native_inspect_tools', 'INTEGER NOT NULL DEFAULT 0 CHECK(native_inspect_tools >= 0)');
   addColumn(db, store, 'sessions', 'agent_profile', 'TEXT');
   addColumn(db, store, 'work_items', 'review_rounds', 'INTEGER NOT NULL DEFAULT 0');
   addColumn(db, store, 'agent_tasks', 'work_item_id', 'TEXT REFERENCES work_items(id) ON DELETE SET NULL');
@@ -207,7 +220,24 @@ export function runMigrations(db: DatabaseSync, store: MigrationStore): void {
     addColumn(db, store, table, 'question_mode', "TEXT CHECK(question_mode IN ('skip','defer'))");
     addColumn(db, store, table, 'question_timeout_ms', 'INTEGER');
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_btw_exchanges (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','error','cancelled')),
+      error TEXT,
+      engine TEXT NOT NULL ${engineCheck},
+      model TEXT,
+      slot_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_btw_exchanges_session ON session_btw_exchanges(session_id, created_at);
+  `);
   migrateSlotQuotaLimits(db, store);
   widenEngineChecks(db, store);
   widenDevHostKindCheck(db, store);
+  widenNativeInspectToolsCheck(db, store);
 }

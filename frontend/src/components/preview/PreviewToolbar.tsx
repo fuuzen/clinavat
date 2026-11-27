@@ -1,5 +1,21 @@
 import { useState, type ReactNode } from "react";
-import { ArrowLeft, Check, Code2, Copy, Download, Eye, LoaderCircle, Maximize2, Minimize2, Pencil, Save, WrapText, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Code2,
+  Copy,
+  Download,
+  ExternalLink,
+  Eye,
+  LoaderCircle,
+  LocateFixed,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  Save,
+  WrapText,
+  X,
+} from "lucide-react";
 import { formatBytes } from "../../api";
 import { fileName, iconFor, kindInfo, type FileKind } from "./fileKinds";
 
@@ -18,10 +34,12 @@ export interface EditControls {
 
 interface Props {
   path: string;
+  projectName?: string;
   kind: FileKind;
   size?: number;
   downloadUrl: string;
   expanded: boolean;
+  standalone?: boolean;
   showSource: boolean;
   wrap: boolean;
   canToggleSource: boolean;
@@ -29,12 +47,14 @@ interface Props {
   edit: EditControls;
   onBack: () => void;
   onToggleExpanded: () => void;
+  onDetach?: () => void;
+  onLocateInMain?: () => void;
   onToggleSource: (value: boolean) => void;
   onToggleWrap: () => void;
 }
 
 export default function PreviewToolbar(props: Props) {
-  const { path, kind, size, expanded, showSource, wrap, edit } = props;
+  const { path, projectName, kind, size, expanded, standalone = false, showSource, wrap, edit } = props;
   const [copied, setCopied] = useState(false);
   const Icon = iconFor(path);
   const directory = path.split("/").slice(0, -1).join("/");
@@ -45,23 +65,26 @@ export default function PreviewToolbar(props: Props) {
   }
   return (
     <header className="preview-toolbar">
-      <button
-        className="icon-button"
-        onClick={expanded ? props.onToggleExpanded : props.onBack}
-        aria-label={expanded ? "收起大窗口" : "返回文件列表"}
-        title={expanded ? "收起" : "返回"}
-      >
-        {expanded ? <X size={16} /> : <ArrowLeft size={15} />}
-      </button>
+      {!standalone && (
+        <button
+          className="icon-button"
+          onClick={expanded ? props.onToggleExpanded : props.onBack}
+          aria-label={expanded ? "收起大窗口" : "返回文件列表"}
+          title={expanded ? "收起" : "返回"}
+        >
+          {expanded ? <X size={16} /> : <ArrowLeft size={15} />}
+        </button>
+      )}
       <span className={`preview-file-icon tone-${kindInfo[kind].tone}`}>
         <Icon size={15} />
       </span>
       <div className="preview-title" title={path}>
         <strong>{fileName(path)}</strong>
         <small>
+          {standalone && projectName && <>{projectName} · </>}
           {kindInfo[kind].label}
           {size !== undefined && <> · {formatBytes(size)}</>}
-          {expanded && directory && <> · {directory}</>}
+          {(expanded || standalone) && directory && <> · {directory}</>}
           {edit.active && edit.dirty && <em className="preview-unsaved"> · 未保存</em>}
         </small>
       </div>
@@ -109,14 +132,45 @@ export default function PreviewToolbar(props: Props) {
         <a className="icon-button" href={props.downloadUrl} download={fileName(path)} aria-label="下载文件" title="下载">
           <Download size={14} />
         </a>
-        <button
-          className="icon-button"
-          onClick={props.onToggleExpanded}
-          aria-label={expanded ? "收起大窗口" : "在大窗口中查看"}
-          title={expanded ? "收起 (Esc)" : "展开"}
-        >
-          {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>
+        {!standalone && props.onDetach && (
+          <button
+            className="icon-button"
+            onClick={props.onDetach}
+            aria-label="在独立窗口中打开"
+            title="在独立窗口中打开"
+          >
+            <ExternalLink size={14} />
+          </button>
+        )}
+        {standalone && props.onLocateInMain && (
+          <button
+            className="icon-button"
+            onClick={props.onLocateInMain}
+            aria-label="在主窗口中定位"
+            title="在主窗口中定位"
+          >
+            <LocateFixed size={14} />
+          </button>
+        )}
+        {standalone ? (
+          <button
+            className="icon-button"
+            onClick={props.onBack}
+            aria-label="关闭窗口"
+            title="关闭窗口"
+          >
+            <X size={15} />
+          </button>
+        ) : (
+          <button
+            className="icon-button"
+            onClick={props.onToggleExpanded}
+            aria-label={expanded ? "收起大窗口" : "在大窗口中查看"}
+            title={expanded ? "收起 (Esc)" : props.onDetach ? "在独立窗口中打开" : "展开"}
+          >
+            {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        )}
       </div>
     </header>
   );

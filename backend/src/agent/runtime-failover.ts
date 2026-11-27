@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { buildAgentErrorPayload, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
+import { buildAgentErrorPayload, rescueUnconsumedSteers, type ActiveRun, type RunContinuation, type RuntimeView } from './resident-run.js';
 import type { AgentCallbacks, AgentContext, QueuedInput, QuotaFailure } from './types.js';
 import type { SlotUsage } from '../accounts/usage.js';
 import { engineProfiles } from './engines.js';
@@ -129,8 +129,13 @@ export class RuntimeFailovers {
     if (!preserveQueue) this.retained.delete(sessionId);
     const pending = this.pending.get(sessionId);
     if (!pending) return Promise.resolve();
-    if (preserveQueue) this.retainQueue(sessionId, pending.queue);
-    else pending.queue.length = 0;
+    if (preserveQueue) {
+      rescueUnconsumedSteers(pending.state, pending.queue);
+      this.retainQueue(sessionId, pending.queue);
+    } else {
+      pending.queue.length = 0;
+      pending.state.pendingSteers = [];
+    }
     pending.abort.abort();
     return pending.operation ?? Promise.resolve();
   }
@@ -160,6 +165,7 @@ export class RuntimeFailovers {
         this.host.close(state);
       }
       await state.completion;
+      rescueUnconsumedSteers(state, pending.queue);
       abort.signal.throwIfAborted();
       if (state.credentialError) throw state.credentialError;
       if (state.completionError) throw state.completionError;
@@ -182,7 +188,10 @@ export class RuntimeFailovers {
       if (pending.superseded) return;
       const interrupted = abort.signal.aborted || (error instanceof Error && error.name === 'AbortError')
         || (handedOff && !!this.host.current(sessionId)?.abort.signal.aborted);
-      if (!interrupted) this.retainQueue(sessionId, pending.queue);
+      if (!interrupted) {
+        rescueUnconsumedSteers(state, pending.queue);
+        this.retainQueue(sessionId, pending.queue);
+      }
       if (!interrupted && this.host.current(sessionId) === state && !state.turnActive && state.run?.isIdle()) {
         this.host.close(state);
         await state.completion?.catch(cleanupError => { error = cleanupError; });

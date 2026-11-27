@@ -38,7 +38,7 @@ export class Orchestrator implements OrchestrationHost {
     this.board = new WorkBoard(context.store);
     this.inspector = new ProjectInspector(context.workspaces);
     this.memory = new ProjectMemory(context.store);
-    this.reports = new ReportDelivery(context, this.tasks, masterId => this.publish(masterId), (user, master, delivered) => {
+    this.reports = new ReportDelivery(context, this.tasks, this.board, masterId => this.publish(masterId), (user, master, delivered) => {
       for (const childId of new Set(delivered.map(task => task.child_session_id))) {
         void this.retireEphemeralIfSettled(user, master.id, childId);
       }
@@ -128,7 +128,7 @@ export class Orchestrator implements OrchestrationHost {
         const item = input.task ? this.board.resolve(master.id, input.task)
           : superAgent && input.access === 'read' && input.profile === 'verifier' ? this.board.reviewTask(master.id, null) : undefined;
         const main = projectFor(this.context, master.project_id, user.id);
-        const directory = await childDirectory(main, input.directory);
+        const directory = await childDirectory(main, input.directory, this.context.workspaces);
         const requested = input.access === 'write' ? input.isolation ?? 'worktree' : 'shared';
         assertChildRoom(this.context, this.tasks, user, master, { access: input.access, isolation: requested, directory });
         const notes: string[] = [];
@@ -178,7 +178,7 @@ export class Orchestrator implements OrchestrationHost {
       case 'merge_agent': {
         const input = toolInputs.merge_agent.parse(args);
         const child = this.child(master, input.agent);
-        const result = await this.merge(child, input.mode, input.onConflict);
+        const result = await this.merge(child, input.mode, input.onConflict, input.commitMessage);
         const shouldArchive = result.status === 'merged' && (input.archive ?? child.agent_ephemeral === 1);
         const archived = shouldArchive ? await this.tryArchiveChild(user, master.id, child.id) : false;
         return json({ ...result, ...(archived ? { archived: true } : {}) });
@@ -309,10 +309,21 @@ export class Orchestrator implements OrchestrationHost {
     return child;
   }
 
-  async merge(child: Session, mode: 'merge' | 'squash', onConflict: 'abort' | 'leave') {
-    const outcome = await this.worktrees.merge(this.worktreeChild(child), mode, onConflict);
-    this.publish(child.parent_session_id!);
-    return { agent: child.agent_name, ...outcome };
+  async merge(child: Session, mode: 'merge' | 'squash', onConflict: 'abort' | 'leave', commitMessage?: string) {
+    const target = this.worktreeChild(child);
+    const latestTask = this.tasks.latest(target.id);
+    const workItemId = latestTask?.work_item_id ?? this.tasks.latestWorkItem(target.id);
+    const task = target.parent_session_id ? this.board.commitTask(target.parent_session_id, workItemId, target.agent_name) : undefined;
+    const report = latestTask?.report
+      ?? this.context.store.get<{ content: string }>("SELECT content FROM messages WHERE session_id=? AND role='assistant' ORDER BY rowid DESC LIMIT 1", target.id)?.content;
+    const outcome = await this.worktrees.merge(target, mode, onConflict, {
+      agentName: target.agent_name,
+      task,
+      report,
+      commitMessage,
+    });
+    this.publish(target.parent_session_id!);
+    return { agent: target.agent_name, ...outcome };
   }
 
   /** The user hands a merge conflict to the master agent, which receives it as a message and takes a turn. */

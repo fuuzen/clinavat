@@ -5,22 +5,23 @@ use std::sync::Mutex;
 use tauri::webview::DownloadEvent;
 use tauri::{Manager, Runtime, Webview};
 
-/// Destinations by download URL, because macOS does not report the saved path when a download finishes.
+/// Destinations by (window label, download URL), because macOS does not report the saved path on finish.
 #[derive(Default)]
-pub struct Downloads(Mutex<HashMap<String, PathBuf>>);
+pub struct Downloads(Mutex<HashMap<(String, String), PathBuf>>);
 
 pub fn handle<R: Runtime>(webview: Webview<R>, event: DownloadEvent<'_>) -> bool {
   let downloads = webview.state::<Downloads>();
+  let label = webview.label().to_string();
   match event {
     DownloadEvent::Requested { url, destination } => {
       #[cfg(target_os = "ios")]
       ios::move_to_documents(&webview, destination);
       if let Ok(mut pending) = downloads.0.lock() {
-        pending.insert(url.to_string(), destination.clone());
+        pending.insert((label, url.to_string()), destination.clone());
       }
     }
     DownloadEvent::Finished { url, path, success } => {
-      let requested = downloads.0.lock().ok().and_then(|mut pending| pending.remove(url.as_str()));
+      let requested = downloads.0.lock().ok().and_then(|mut pending| pending.remove(&(label, url.to_string())));
       if success {
         reveal(&webview, path.or(requested));
       }

@@ -56,7 +56,7 @@ export default function ApprovalPreview({
   ];
   const command = typeof values.command === "string" ? values.command : null;
   const showCommand =
-    command !== null && /bash|remote_command|shell/i.test(tool);
+    command !== null && /bash|remote_command|shell|client_exec_command|client_manage_task/i.test(tool);
   const showDiff = after !== undefined && (path || before !== undefined);
   const nativeChanges = Array.isArray(values.changes)
     ? values.changes.filter((change): change is Record<string, unknown> =>
@@ -109,7 +109,7 @@ export default function ApprovalPreview({
         <div className="approval-command">
           <div>
             <Terminal size={13} />
-            <span>{values.execution === "local" ? "本地命令" : "远程命令"}</span>
+            <span>{values.execution === "local" ? "本地命令" : /client_/i.test(tool) ? "客户端命令" : "远程命令"}</span>
             <small>
               {typeof values.cwd === "string" ? values.cwd : "当前项目目录"}
             </small>

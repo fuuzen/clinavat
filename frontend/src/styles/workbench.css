@@ -330,3 +330,98 @@
   font-size: 11px;
   letter-spacing: 0.09em;
 }
+
+/* Detached desktop windows (preview, settings, memory) */
+.detached-window-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg);
+}
+.detached-window-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+}
+.detached-window-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.detached-window-header h1,
+.detached-window-header h2 {
+  font-size: 17px;
+  color: var(--text);
+  letter-spacing: -0.25px;
+  margin: 0 0 5px;
+}
+.detached-window-header p {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.detached-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.detached-settings-window .settings-layout.is-standalone {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.detached-settings-window .settings-nav {
+  overflow-y: auto;
+}
+.detached-settings-window .settings-body {
+  overflow-y: auto;
+}
+.detached-memory-window .memory-modal-body {
+  max-height: none;
+  flex: 1 1 auto;
+}
+.detached-preview-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.detached-window-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100dvh;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
+}
+.detached-window-state > strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+}
+.detached-window-state > p {
+  margin: 0;
+  max-width: 380px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.detached-window-state-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}

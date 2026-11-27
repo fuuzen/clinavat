@@ -16,12 +16,19 @@ import { SshManager } from './runtime/ssh.js';
 import { SshTargetPolicy } from './runtime/target-policy.js';
 import { DevHostApprovalStore } from './runtime/dev-host-approvals.js';
 import { SshRelayServer } from './runtime/ssh-relay.js';
+import { ClientHostRegistry } from './client-host/registry.js';
+import { ClientSshServer } from './client-host/ssh-server.js';
+import { clientDeviceRoutes } from './client-host/routes.js';
+import { ClientWorkspaceAdapter } from './client-host/workspace-adapter.js';
+import { ClientMirrorSync } from './client-host/mirror-sync.js';
+import { ClientExecBarrier, type ClientExecBarrierReply, type ClientExecBarrierRequest } from './client-host/exec-barrier.js';
 import { revokeSockets as revokeTerminalSockets } from './runtime/terminal.js';
 import { WorkspaceManager } from './runtime/workspace.js';
 import { MaintenanceService } from './runtime/maintenance.js';
 import { registerMaintenanceGuard } from './runtime/maintenance-guard.js';
 import { describeSkippedLinks, recordSkippedLinks } from './sync-links.js';
 import { AgentManager } from './agent/manager.js';
+import { BtwService } from './agent/btw/service.js';
 import { resourceRoutes } from './routes/resources.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { agentModelRoutes } from './routes/agent-models.js';
@@ -42,11 +49,11 @@ import { GatewayService } from './gateway/service.js';
 import { SiteAccess } from './site-access.js';
 import { SiteSettingsService } from './site-settings.js';
 import { HttpError, type Host, type Project, type Session } from './models.js';
-import type { AgentContext, AgentEvent, OrchestrationHost } from './agent/types.js';
+import type { AgentContext, AgentEvent, AgentWorkspaceBridge, OrchestrationHost } from './agent/types.js';
 import { Orchestrator } from './orchestration/service.js';
 import { resetReviewsForUserMessage } from './orchestration/board.js';
 import { OrchestrationSettingsStore } from './orchestration/limits.js';
-import { Worktrees } from './orchestration/worktrees.js';
+import { WorktreeManager } from './orchestration/worktrees/index.js';
 import { sessionAgentRoutes } from './routes/session-agents.js';
 import { AccountCredentials } from './accounts/credentials.js';
 import { SlotTokens } from './accounts/slot-tokens.js';
@@ -86,12 +93,14 @@ const machineResourceSettings = new MachineResourceSettingsStore(store, {
 });
 // Assigned once the SSH manager exists; the VM host only calls it when serving a sync barrier.
 let mutagenEnvironment: (userId: string) => Promise<NodeJS.ProcessEnv> = async () => { throw new Error('同步服务尚未就绪'); };
+let clientExecHandler: (userId: string, request: ClientExecBarrierRequest) => Promise<ClientExecBarrierReply> = async () => ({ ok: false, error: '客户端命令执行屏障尚未就绪' });
 const execution = config.executionHost === 'lxd' ? new LxdExecutionHost(config, localExecution, {
   plan: machines,
   syncProject: (userId, syncName) => store.get<{ local_path: string }>(
     "SELECT local_path FROM projects WHERE user_id=? AND sync_name=? AND execution_mode IS NOT 'local'", userId, syncName)?.local_path,
   mutagenEnvironment: userId => mutagenEnvironment(userId),
   reportSkippedLinks: (userId, syncName, skipped) => describeSkippedLinks(recordSkippedLinks(store, events, userId, syncName, skipped)),
+  clientExec: (userId, request) => clientExecHandler(userId, request),
   resources: kind => machineResourceSettings.view()[kind],
 }) : localExecution;
 for (const slot of store.all<{ id: string; home_dir: string; engine: string }>('SELECT id,home_dir,engine FROM account_slots')) {
@@ -133,6 +142,15 @@ if (execution instanceof LxdExecutionHost) {
 await credentials.recover();
 const connections = new ConnectionRegistry(store);
 const events = new EventBus(store, config.approvalTimeoutMs);
+const clientHostRegistry = new ClientHostRegistry(store, events);
+const clientWorkspaceAdapter = new ClientWorkspaceAdapter(clientHostRegistry);
+const clientMirrorSync = new ClientMirrorSync(config, store, clientHostRegistry, execution);
+const clientExecBarrier = new ClientExecBarrier(config, store, clientMirrorSync, clientWorkspaceAdapter,
+  (userId, syncName, skipped) => describeSkippedLinks(recordSkippedLinks(store, events, userId, syncName, skipped)));
+clientExecHandler = (userId, request) => clientExecBarrier.execute(userId, request);
+const clientSsh = new ClientSshServer({
+  dataDir: config.dataDir, host: config.clientSshBind, port: config.clientSshPort, store, keyStore: ssh.keys, registry: clientHostRegistry, logger: app.log,
+});
 const slotRecipients = (slotId: string) => store.all<{ user_id: string }>(`SELECT user_id FROM slot_user_access WHERE slot_id=?
     UNION SELECT id AS user_id FROM users WHERE role='admin'`, slotId).map(row => row.user_id);
 const usageSettings = new UsageSettingsStore(store);
@@ -147,6 +165,7 @@ let gateway: GatewayService | undefined;
 const hostCommands = execution.kind === 'vm' ? new HostCommands(config, ssh.keys) : undefined;
 const agentConfig = { ...config, credentials, usage, execution, catalogs: new SlotModelCatalogs(store),
   orchestration: undefined as OrchestrationHost | undefined,
+  workspaces: undefined as AgentWorkspaceBridge | undefined,
   egress: { assertBound: async (slotId: string) => { await gateway?.assertBound(slotId); } },
   hostShell: async (context: AgentContext) => context.project.execution_mode === 'local' && hostCommands
     ? hostCommands.ensureReady() : null };
@@ -163,7 +182,12 @@ const turns = new ConversationStore(store, turn => {
   if (session) events.broadcast(session.user_id, { type: 'turn', sessionId: turn.session_id, payload: turn });
 });
 mutagenEnvironment = userId => ssh.mutagenEnvironment(userId);
-const workspaces = new WorkspaceManager(config, ssh, execution);
+const workspaces = new WorkspaceManager(config, ssh, execution, {
+  store, registry: clientHostRegistry, adapter: clientWorkspaceAdapter, mirror: clientMirrorSync,
+  clientExecSocketPath: execution.kind === 'vm' ? '/run/clinavat-relay/barrier.sock' : clientExecBarrier.socketPath,
+  clientExecTokenFor: execution.kind === 'vm' ? undefined : projectId => clientExecBarrier.tokenForProject(projectId),
+});
+agentConfig.workspaces = workspaces.agentBridge();
 workspaces.onSkippedLinks = (project, skipped) => { recordSkippedLinks(store, events, project.user_id, project.sync_name, skipped); };
 for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
   if (host.kind !== 'ssh') continue;
@@ -172,9 +196,9 @@ for (const host of store.all<Host>('SELECT * FROM dev_hosts')) {
 }
 // A first sync runs after its request returns, so a restart can interrupt it; the user retries it from the workspace.
 store.run("UPDATE projects SET sync_status='ERROR' WHERE sync_status='CREATING'");
-for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_status='WATCHING' AND execution_mode IS NOT NULL")) {
+for (const project of store.all<Project>("SELECT * FROM projects WHERE sync_status='WATCHING'")) {
   const host = store.get<Host>('SELECT * FROM dev_hosts WHERE id=?', project.dev_host_id);
-  if (!host || host.kind === 'client') continue;
+  if (!host || (host.kind === 'client' ? project.client_mode !== 'mirrored' : project.execution_mode === null)) continue;
   try { await workspaces.refreshExecutor(project, host); }
   catch (error) {
     store.run("UPDATE projects SET sync_status='ERROR' WHERE id=?", project.id);
@@ -296,6 +320,9 @@ const agents: AgentManager = new AgentManager(agentConfig, {
     }
     return turns.start(sessionId, messageId, authorization, randomUUID()).id;
   },
+  steered(sessionId, messageId, turnId) {
+    turns.steer(sessionId, messageId, turnId);
+  },
   approval(request) {
     const session = store.get<Session>('SELECT * FROM sessions WHERE id=?', request.sessionId);
     if (!session) return Promise.resolve({ decision: 'deny', reason: '会话不存在' });
@@ -344,14 +371,16 @@ app.addHook('onSend', async (_request, reply) => {
 registerAuth(app, store, config, ssh, connections, siteAccess);
 registerMaintenanceGuard(app, maintenanceService);
 events.register(app, connections);
-const context = { config: agentConfig, store, events, ssh, targetPolicy, devHostApprovals, sshRelay, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
-  usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined, maintenance: maintenanceService };
-const worktrees = new Worktrees(context);
-Object.assign(context, { worktrees });
+const context = { config: agentConfig, store, events, ssh, targetPolicy, devHostApprovals, sshRelay, clientHostRegistry, clientSsh, clientWorkspaceAdapter, clientMirrorSync, workspaces, agents, connections, turns, slots, questionDefaults, agentDefaults, tokenUsage, prices, hostCommands,
+  usageSettings, orchestrationSettings: new OrchestrationSettingsStore(store), machineResourceSettings, machineResources: execution instanceof LxdExecutionHost ? execution : undefined, maintenance: maintenanceService, btw: undefined as unknown as BtwService };
+const btw = new BtwService(context);
+const worktrees = new WorktreeManager(context);
+Object.assign(context, { worktrees, btw });
 const orchestrator = new Orchestrator(context);
 agentConfig.orchestration = orchestrator;
 observeAgentEvent = event => orchestrator.observe(event);
 resourceRoutes(app, context);
+clientDeviceRoutes(app, context);
 sessionRoutes(app, context);
 sessionAgentRoutes(app, context, orchestrator);
 agentModelRoutes(app, context);
@@ -380,8 +409,12 @@ app.addHook('preClose', async () => {
   connections.close();
   events.close();
   revokeTerminalSockets({}, '服务正在关闭');
+  await btw.close();
   await agents.close();
   await credentials.close();
+  clientHostRegistry.closeAll('服务正在关闭');
+  await clientExecBarrier.stop();
+  await clientSsh.stop();
   await sshRelay.stop();
 });
 app.addHook('onClose', async () => { await ssh.close(); store.close(); });
@@ -392,6 +425,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
 });
 try {
   if (config.executionHost === 'lxd') await sshRelay.start();
+  else await clientExecBarrier.start();
+  await clientSsh.start();
   await app.listen({ host: config.host, port: config.port });
   // Prepares the key and logs in once, so a broken path shows in the admin panel before anyone needs it.
   void hostCommands?.check().then(status => {
@@ -400,8 +435,10 @@ try {
   // Guests run their own Mutagen daemons; asking for status boots the VM and restarts the daemon. Not awaited,
   // because a cold boot takes about a minute per user and the site must stay available meanwhile.
   if (execution.kind === 'vm') {
-    void Promise.allSettled(store.all<Project>("SELECT * FROM projects WHERE sync_status='WATCHING' AND execution_mode<>'local'")
-      .map(project => workspaces.status(project).catch(error => app.log.error({ err: error, projectId: project.id }, '无法恢复虚拟机内的项目同步'))));
+    void Promise.allSettled(store.all<Project>(
+      `SELECT p.* FROM projects p JOIN dev_hosts h ON h.id=p.dev_host_id
+       WHERE p.sync_status='WATCHING' AND p.execution_mode<>'local' AND h.kind='ssh'`,
+    ).map(project => workspaces.status(project).catch(error => app.log.error({ err: error, projectId: project.id }, '无法恢复虚拟机内的项目同步'))));
   }
 }
 catch (error) { app.log.error(error); await app.close(); process.exitCode = 1; }

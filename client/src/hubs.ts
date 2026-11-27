@@ -26,6 +26,16 @@ export function newHubId() {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** Matches the daemon trust-store and supervisor key (`scheme://host[:port]` in lowercase). */
+export function hubKeyFromUrl(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}`;
+  } catch {
+    return rawUrl.trim().toLowerCase();
+  }
+}
+
 export function loadBook(): HubBook {
   let stored: Partial<HubBook> = {};
   try {

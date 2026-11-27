@@ -105,6 +105,8 @@ export function useWorkspaceEvents({
         window.dispatchEvent(new CustomEvent("clinavat:runtime", { detail: { sessionId: data.sessionId, runtime: payload } }));
       if (data.type === "agents")
         window.dispatchEvent(new CustomEvent("clinavat:agents", { detail: { sessionId: data.sessionId, agents: payload } }));
+      if (data.type === "btw")
+        window.dispatchEvent(new CustomEvent("clinavat:btw", { detail: { sessionId: data.sessionId, ...object } }));
       if (data.type === "user-input" || (data.type === "done" && current))
         window.dispatchEvent(new Event("clinavat:user-input"));
       if (
@@ -167,6 +169,7 @@ export function useWorkspaceEvents({
         receiveSlotUsage(object.usage as SlotUsage);
       if (data.type === "approval") void refreshApprovals();
       if (
+        data.type === "host" ||
         data.type === "slot" ||
         data.type === "session" ||
         data.type === "user-input" ||

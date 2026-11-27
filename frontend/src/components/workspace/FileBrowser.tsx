@@ -1,5 +1,5 @@
-import { useRef, useState, type DragEvent } from "react";
-import { ArrowLeft, ChevronRight, FileUp, Folder, FolderUp, LoaderCircle, Upload } from "lucide-react";
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { ArrowLeft, ChevronRight, ExternalLink, FileUp, Folder, FolderUp, LoaderCircle, Upload } from "lucide-react";
 import type { FileEntry } from "../../types";
 import { detectKind, iconFor, kindInfo } from "../preview/fileKinds";
 import { fromDrop, fromFileList, type PickedFiles } from "./pickedFiles";
@@ -12,19 +12,60 @@ interface Props {
   syncedMirror: boolean;
   onNavigate: (path: string) => void;
   onOpen: (entry: FileEntry) => void;
+  onOpenDetached?: (entry: FileEntry) => void;
   onUpload: (picked: PickedFiles) => void;
 }
 
 const carriesFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
-export default function FileBrowser({ path, entries, busy, uploading, syncedMirror, onNavigate, onOpen, onUpload }: Props) {
+export default function FileBrowser({
+  path,
+  entries,
+  busy,
+  uploading,
+  syncedMirror,
+  onNavigate,
+  onOpen,
+  onOpenDetached,
+  onUpload,
+}: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
+
+  useEffect(() => () => {
+    if (clickTimer.current !== undefined) clearTimeout(clickTimer.current);
+  }, []);
+
   const pick = (input: HTMLInputElement) => {
     if (input.files?.length) onUpload(fromFileList(input.files));
     input.value = "";
   };
+
+  function handleEntryClick(entry: FileEntry, event: MouseEvent<HTMLButtonElement>) {
+    if (entry.type === "directory" || !onOpenDetached) {
+      onOpen(entry);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+      if (clickTimer.current !== undefined) clearTimeout(clickTimer.current);
+      onOpenDetached(entry);
+      return;
+    }
+    if (event.detail >= 2) {
+      if (clickTimer.current !== undefined) clearTimeout(clickTimer.current);
+      onOpenDetached(entry);
+      return;
+    }
+    if (clickTimer.current !== undefined) clearTimeout(clickTimer.current);
+    // Brief delay lets desktop double-clicks open a detached window before inline preview mounts.
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = undefined;
+      onOpen(entry);
+    }, 180);
+  }
+
   const sorted = [...entries].sort((a, b) =>
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1);
   return (
@@ -103,15 +144,35 @@ export default function FileBrowser({ path, entries, busy, uploading, syncedMirr
           {sorted.map((entry) => {
             const FileIcon = iconFor(entry.path);
             return (
-              <button key={entry.path} onClick={() => onOpen(entry)}>
-                {entry.type === "directory" ? (
-                  <Folder size={15} className="folder-icon" />
-                ) : (
-                  <FileIcon size={14} className={`tone-${kindInfo[detectKind(entry.path)].tone}`} />
+              <div key={entry.path} className="file-list-row">
+                <button
+                  className="file-list-entry"
+                  onClick={(event) => handleEntryClick(entry, event)}
+                  title={entry.type === "file" && onOpenDetached ? `${entry.name}（双击在独立窗口中打开）` : entry.name}
+                >
+                  {entry.type === "directory" ? (
+                    <Folder size={15} className="folder-icon" />
+                  ) : (
+                    <FileIcon size={14} className={`tone-${kindInfo[detectKind(entry.path)].tone}`} />
+                  )}
+                  <span>{entry.name}</span>
+                  {entry.type === "directory" && <ChevronRight size={12} />}
+                </button>
+                {entry.type === "file" && onOpenDetached && (
+                  <button
+                    type="button"
+                    className="icon-button file-detach-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenDetached(entry);
+                    }}
+                    title="在独立窗口中打开"
+                    aria-label={`在独立窗口中打开 ${entry.name}`}
+                  >
+                    <ExternalLink size={12} />
+                  </button>
                 )}
-                <span>{entry.name}</span>
-                {entry.type === "directory" && <ChevronRight size={12} />}
-              </button>
+              </div>
             );
           })}
         </div>
