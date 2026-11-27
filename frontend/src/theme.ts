@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { broadcastWindowEvent, subscribeWindowEvents } from "./windows/channel";
 
 export type ThemeMode = "dark" | "light";
 
@@ -227,6 +228,14 @@ export function initializeTheme() {
     }
     publish();
   });
+  subscribeWindowEvents((message) => {
+    if (message.type !== "theme-changed") return;
+    snapshot = {
+      preferences: parsePreferences(JSON.stringify(message.preferences)),
+      storageAvailable: snapshot.storageAvailable,
+    };
+    publish();
+  });
 }
 
 function setPreferences(next: ThemePreferences | ((current: ThemePreferences) => ThemePreferences)) {
@@ -240,6 +249,7 @@ function setPreferences(next: ThemePreferences | ((current: ThemePreferences) =>
   }
   snapshot = { preferences, storageAvailable };
   publish();
+  broadcastWindowEvent({ type: "theme-changed", preferences });
 }
 
 function subscribe(listener: () => void) {

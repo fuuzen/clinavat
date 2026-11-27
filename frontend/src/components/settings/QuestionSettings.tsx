@@ -11,7 +11,7 @@ interface QuestionSettingsView {
 }
 
 /** The user's defaults for conversations that have not set their own. */
-export default function QuestionSettings() {
+export default function QuestionSettings({ onChanged }: { onChanged?: () => void } = {}) {
   const [view, setView] = useState<QuestionSettingsView | null>(null);
   const [draft, setDraft] = useState<QuestionPreference>({ mode: null, timeoutMs: null });
   const [saving, setSaving] = useState(false);
@@ -40,7 +40,7 @@ export default function QuestionSettings() {
           event.preventDefault();
           setSaving(true); setError(""); setMessage("");
           api<QuestionSettingsView>("/settings/questions", { method: "PUT", body: JSON.stringify(draft) })
-            .then((value) => { setView(value); setDraft(value.user); setMessage("已保存，之后的提问按新设置处理。"); })
+            .then((value) => { setView(value); setDraft(value.user); setMessage("已保存，之后的提问按新设置处理。"); onChanged?.(); })
             .catch((cause) => setError(errorText(cause)))
             .finally(() => setSaving(false));
         }}>

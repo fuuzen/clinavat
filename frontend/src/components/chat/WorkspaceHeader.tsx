@@ -2,6 +2,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { FolderOpen, Menu, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { isActive, statusLabel } from "../../api";
 import type { Overview, Project, Session } from "../../types";
+import {
+  isClientDirectProject,
+  isClientHost,
+  isClientHostOnline,
+  isProjectWorkspaceReady,
+} from "../hosts/client-device";
 import ProjectPathSettings from "./ProjectPathSettings";
 
 interface Props {
@@ -14,6 +20,7 @@ interface Props {
   onSidebar: () => void;
   onInspector: () => void;
   onProjectRefresh: () => Promise<void>;
+  onNotice?: (message: string, kind?: "error" | "success") => void;
 }
 
 function FadingName({ children, className }: { children: string; className: string }) {
@@ -40,18 +47,23 @@ function FadingName({ children, className }: { children: string; className: stri
 export default function WorkspaceHeader(props: Props) {
   const { overview, project, session } = props;
   const host = overview.hosts.find((item) => item.id === project?.dev_host_id);
-  const syncReady = project?.sync_status === "WATCHING" || project?.sync_status === "LOCAL";
-  const hostConnected = !host || host.kind === "local" || host.status === "CONNECTED";
+  const client = isClientHost(host);
+  const clientOnline = client && isClientHostOnline(host);
+  const clientDirect = isClientDirectProject(project, host);
+  const syncReady = isProjectWorkspaceReady(project, host);
+  const hostConnected = !host || host.kind === "local" || (client ? clientOnline : host.status === "CONNECTED");
   const connectionState = !props.streamConnected ? "reconnecting"
     : host?.status === "ERROR" || project?.sync_status === "ERROR" ? "error"
     : !hostConnected || (project && !syncReady) ? "warning" : "connected";
   const connectionLabel = !props.streamConnected ? "正在重连"
+    : client && !clientOnline ? "客户端离线"
     : !hostConnected ? statusLabel(host!.status)
+    : clientDirect ? "本机直执（实时）"
     : project && !syncReady ? statusLabel(project.sync_status) : "实时连接";
   const connectionDetails = [
     props.streamConnected ? "工作台实时连接正常" : "工作台连接中断，正在重连",
-    host && `${host.name}：${host.kind === "local" ? "本机" : statusLabel(host.status)}`,
-    project && `项目：${statusLabel(project.sync_status)}`,
+    host && `${host.name}：${host.kind === "local" ? "本机" : client ? (clientOnline ? "客户端在线" : "客户端离线，请在桌面客户端确认连接") : statusLabel(host.status)}`,
+    project && `项目：${client && !clientOnline ? "等待客户端重新连接" : clientDirect ? "本机直执（实时）" : statusLabel(project.sync_status)}`,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -79,7 +91,15 @@ export default function WorkspaceHeader(props: Props) {
         </span>
       </div>
       <div className="header-actions">
-        {project && <ProjectPathSettings project={project} active={overview.sessions.some((item) => item.project_id === project.id && isActive(item.status)) || props.active} onRefresh={props.onProjectRefresh} />}
+        {project && (
+          <ProjectPathSettings
+            project={project}
+            host={host}
+            active={overview.sessions.some((item) => item.project_id === project.id && isActive(item.status)) || props.active}
+            onRefresh={props.onProjectRefresh}
+            onNotice={props.onNotice}
+          />
+        )}
         <button
           className={`icon-button ${props.inspectorOpen ? "is-active" : ""}`}
           onClick={props.onInspector}

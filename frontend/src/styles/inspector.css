@@ -174,37 +174,70 @@
 .file-list {
   padding: 8px 10px;
 }
-.file-list > button {
+.file-list-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+  transition: background 0.14s;
+}
+.file-list-row:hover {
+  background: var(--accent-dim);
+}
+.file-list-entry {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 5px 10px;
   border-radius: 6px;
   color: var(--muted);
   font-size: 12px;
   text-align: left;
-  transition: background 0.14s, color 0.14s;
+  transition: color 0.14s;
 }
-.file-list > button:hover {
-  background: var(--accent-dim);
+.file-list-row:hover .file-list-entry {
   color: var(--text);
 }
-.file-list > button > svg {
+.file-list-entry > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.file-list-entry > svg[class*="tone-"] {
+  color: color-mix(in srgb, var(--tone) 70%, var(--muted));
+}
+.file-list-row:hover .file-list-entry > svg[class*="tone-"] {
+  color: var(--tone);
+}
+.file-list-entry > .folder-icon {
   color: var(--muted);
 }
-.file-list > button > .folder-icon {
-  color: var(--muted);
-}
-.file-list > button > span {
+.file-list-entry > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-list > button > svg:last-child:not(:first-child) {
+.file-list-entry > svg:last-child:not(:first-child) {
   margin-left: auto;
   color: var(--muted);
+}
+.file-detach-button {
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--muted);
+  transition: opacity 0.14s, color 0.14s;
+}
+.file-list-row:hover .file-detach-button,
+.file-list-row:focus-within .file-detach-button {
+  opacity: 1;
+}
+.file-detach-button:hover {
+  color: var(--accent);
 }
 .file-preview {
   overflow: auto;

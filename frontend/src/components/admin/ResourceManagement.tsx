@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowUpRight, ChevronDown, FolderGit2, Link2, LoaderCircle,
+  ArrowUpRight, ChevronDown, FolderGit2, Laptop, Link2, LoaderCircle,
   MessageSquare, Network, Plus, RefreshCw, Search, Server, Settings2, SlidersHorizontal,
 } from "lucide-react";
 import { errorText, statusLabel } from "../../api";
+import { hasClientDeviceIdentity, useClientShell } from "../../client";
 import type { DevHost, Overview, Project, User } from "../../types";
+import ClientDeviceCard from "../hosts/ClientDeviceCard";
+import { isClientDirectProject, isClientHost, isClientHostOnline } from "../hosts/client-device";
 import MobileCardDetails from "./MobileCardDetails";
 import UserSelect from "./UserSelect";
 import { useResourceView } from "./useResourceView";
@@ -25,13 +28,23 @@ interface Props {
   refreshing?: boolean;
 }
 
+function effectiveProjectStatus(project: Project, hosts: DevHost[]): string {
+  const host = hosts.find((item) => item.id === project.dev_host_id);
+  if (isClientHost(host)) {
+    if (!isClientHostOnline(host)) return "OFFLINE";
+    if (isClientDirectProject(project, host)) return "DIRECT";
+  }
+  return project.sync_status;
+}
+
 function ResourceStatus({ status }: { status: string }) {
-  const tone = ["CONNECTED", "READY", "LOCAL", "WATCHING"].includes(status)
+  const tone = ["CONNECTED", "READY", "LOCAL", "DIRECT", "WATCHING"].includes(status)
     ? "success" : status === "ERROR" ? "danger" : "";
   return <span className={`admin-status admin-resource-status ${tone}`}><i />{statusLabel(status)}</span>;
 }
 
 export default function ResourceManagement({ kind, overview, users, selectedUserId, onSelectUser, onOpenProject, onNewProject, onNewHost, onEditHost, onConnect, onRefresh, refreshing = false }: Props) {
+  const shell = useClientShell();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [expanded, setExpanded] = useState("");
@@ -51,11 +64,12 @@ export default function ResourceManagement({ kind, overview, users, selectedUser
   const filteredProjects = projects.filter((project) => {
     const host = allHosts.find((item) => item.id === project.dev_host_id);
     return matching([project.name, project.remote_path, host?.name || ""])
-      && (status === "all" || project.sync_status === status);
+      && (status === "all" || effectiveProjectStatus(project, allHosts) === status);
   });
-  const filteredHosts = hosts.filter((host) => matching([host.name, host.host, host.username])
-    && (status === "all" || host.status === status));
-  const statuses = [...new Set(workspaces ? projects.map((project) => project.sync_status) : hosts.map((host) => host.status))];
+  const filteredHosts = hosts.filter((host) => matching([
+    host.name, host.host, host.username, host.device?.platform || "", host.device?.arch || "", host.device?.default_shell || "",
+  ]) && (status === "all" || host.status === status));
+  const statuses = [...new Set(workspaces ? projects.map((project) => effectiveProjectStatus(project, allHosts)) : hosts.map((host) => host.status))];
   const total = workspaces ? projects.length : hosts.length;
   const visible = workspaces ? filteredProjects.length : filteredHosts.length;
 
@@ -103,6 +117,12 @@ export default function ResourceManagement({ kind, overview, users, selectedUser
           <label className="admin-resource-filter"><SlidersHorizontal size={14} /><select aria-label="筛选资源状态" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">所有状态</option>{statuses.map((value) => <option value={value} key={value}>{statusLabel(value)}</option>)}</select></label>
         </div>
         {(error || viewError) && <div className="inline-error admin-resource-error" role="alert">{error || viewError}</div>}
+        {!workspaces && !readOnly && resources && hasClientDeviceIdentity(shell)
+          && !allHosts.some((host) => host.kind === "client" && host.device?.id === shell.deviceId) && (
+          <div className="admin-resource-connections" style={{ paddingBottom: filteredHosts.length ? 0 : undefined }}>
+            <ClientDeviceCard hosts={allHosts} onRefresh={refresh} />
+          </div>
+        )}
         {loading ? <div className="loading-state"><LoaderCircle size={20} className="spin" />正在加载资源…</div> : !resources ? null : visible === 0 ? (
           <div className="admin-resource-empty">
             <span>{workspaces ? <FolderGit2 size={26} /> : <Network size={26} />}</span>
@@ -115,18 +135,21 @@ export default function ResourceManagement({ kind, overview, users, selectedUser
             {filteredProjects.map((project) => {
               const host = allHosts.find((item) => item.id === project.dev_host_id);
               const count = resources.sessionCounts[project.id] || 0;
+              const client = isClientHost(host);
+              const clientDirect = isClientDirectProject(project, host);
+              const projectStatus = effectiveProjectStatus(project, allHosts);
               return (
                 <article className="admin-resource-project" key={project.id}>
                   <div className="admin-resource-project-main">
                     <span className="admin-resource-icon"><FolderGit2 size={19} /></span>
                     <div className="admin-resource-name"><strong>{project.name}</strong><code title={project.remote_path}>{project.remote_path}</code></div>
-                    <div className="admin-resource-host-name"><Server size={13} /><span>{host?.name || "未关联开发机"}</span></div>
+                    <div className="admin-resource-host-name">{client ? <Laptop size={13} /> : <Server size={13} />}<span>{host?.name || "未关联开发机"}</span></div>
                     <span className="admin-resource-sessions" title={`${count} 个对话`}><MessageSquare size={13} />{count}</span>
-                    <ResourceStatus status={project.sync_status} />
+                    <ResourceStatus status={projectStatus} />
                     <button className="icon-button" onClick={() => setExpanded(expanded === project.id ? "" : project.id)} aria-expanded={expanded === project.id} aria-controls={`resource-${project.id}`} aria-label={`查看 ${project.name} 路径详情`}><ChevronDown size={15} className={expanded === project.id ? "admin-resource-rotated" : ""} /></button>
                     <button className="admin-resource-open" disabled={readOnly} onClick={() => onOpenProject(project)} title={readOnly ? readOnlyNote : `打开 ${project.name}`}><span>打开</span><ArrowUpRight size={15} /></button>
                   </div>
-                  {expanded === project.id && <dl className="admin-resource-details" id={`resource-${project.id}`}><div><dt>项目目录</dt><dd><code>{project.remote_path}</code></dd></div><div><dt>本机路径</dt><dd><code>{project.local_path || "尚未建立"}</code></dd></div><div><dt>执行方式</dt><dd>{project.execution_mode || "待初始化"}</dd></div><div><dt>所属账号</dt><dd>{resources.user.username}</dd></div></dl>}
+                  {expanded === project.id && <dl className="admin-resource-details" id={`resource-${project.id}`}><div><dt>项目目录</dt><dd><code>{project.remote_path}</code></dd></div><div><dt>{clientDirect ? "运行模式" : "本机路径"}</dt><dd>{clientDirect ? "客户端直执（实时）" : <code>{project.local_path || "尚未建立"}</code>}</dd></div><div><dt>执行方式</dt><dd>{client ? (clientDirect ? "客户端直执" : "客户端镜像同步") : (project.execution_mode || "待初始化")}</dd></div><div><dt>所属账号</dt><dd>{resources.user.username}</dd></div></dl>}
                 </article>
               );
             })}
@@ -135,6 +158,18 @@ export default function ResourceManagement({ kind, overview, users, selectedUser
           <div className="admin-resource-connections">
             {filteredHosts.map((host) => {
               const projectCount = projects.filter((project) => project.dev_host_id === host.id).length;
+              if (isClientHost(host)) {
+                return (
+                  <ClientDeviceCard
+                    key={host.id}
+                    host={host}
+                    projectCount={projectCount}
+                    readOnly={readOnly}
+                    readOnlyReason={readOnlyNote}
+                    onRefresh={refresh}
+                  />
+                );
+              }
               const connecting = connectingId === host.id;
               return (
                 <article className="admin-resource-connection" key={host.id}>

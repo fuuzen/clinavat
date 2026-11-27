@@ -26,6 +26,7 @@ export function createMessageSender(options: MessageSenderOptions) {
     account: AccountSelection, behavior: AgentBehavior, mode?: InputMode): Promise<boolean> {
     const { project, session, userId } = options;
     if (!project || !userId) return false;
+    if (/^\s*\/btw(?:\s|$)/i.test(content)) return false;
     const pending = options.beginSend(project.id, options.selectedSession.current);
     if (!pending) return false;
     const request = ++options.request.current;

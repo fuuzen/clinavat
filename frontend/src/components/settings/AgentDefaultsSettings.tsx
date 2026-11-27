@@ -17,7 +17,7 @@ interface AgentSettingsView {
  * The user's defaults per CLI: model and reasoning effort, chosen from the catalogs of the slots they may use,
  * and the permission mode new conversations start with.
  */
-export default function AgentDefaultsSettings() {
+export default function AgentDefaultsSettings({ onChanged }: { onChanged?: () => void } = {}) {
   const [view, setView] = useState<AgentSettingsView | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -41,7 +41,7 @@ export default function AgentDefaultsSettings() {
       {!view && !error && <div className="loading-state">正在读取…</div>}
       {view && !engines.length && <p className="settings-description">你还没有获授权的槽位。</p>}
       {view && engines.map((engine) => (
-        <EngineDefaults key={engine} engine={engine} view={view} onSaved={setView} />
+        <EngineDefaults key={engine} engine={engine} view={view} onSaved={(next) => { setView(next); onChanged?.(); }} />
       ))}
       {error && <p className="inline-error" role="alert">{error}</p>}
     </>

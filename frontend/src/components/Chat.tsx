@@ -1,23 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  ArrowUpRight,
-  Code2,
-  Command,
-  FileSearch,
-  GitBranch,
-  LoaderCircle,
-  ShieldCheck,
-  Sparkles,
-  Terminal,
-} from "lucide-react";
+import { Command, LoaderCircle, ShieldCheck } from "lucide-react";
 import Welcome from "./Welcome";
 import MaintenanceBanner from "./MaintenanceBanner";
 import ConversationTurns from "./chat/ConversationTurns";
 import ModelPicker from "./chat/ModelPicker";
 import SlotPicker from "./chat/SlotPicker";
 import { useConversationSlot } from "./chat/useConversationSlot";
-import { defaultPermissionMode, defaultPermissionModeFor } from "./chat/PermissionPicker";
 import WorkspaceHeader from "./chat/WorkspaceHeader";
+import ProjectWelcome from "./chat/ProjectWelcome";
+import ClientPermissionDialog from "./chat/ClientPermissionDialog";
+import { getComposerWarning } from "./chat/composer-warning";
 import ChatComposer, { type ComposerHandle } from "./chat/ChatComposer";
 import ControlHub from "./chat/composer/ControlHub";
 import RuntimeStrip from "./chat/RuntimeStrip";
@@ -26,6 +18,9 @@ import { clearComposerDraft } from "./chat/composer/draftStorage";
 import { useComposerDraft } from "./chat/composer/useComposerDraft";
 import { maxComposerImages, prepareImage, type ComposerImage } from "./chat/composer/imageAttachments";
 import ConversationOutline from "./chat/ConversationOutline";
+import BtwPanel from "./chat/native/BtwPanel";
+import { parseBtwInput } from "./chat/native/btwTypes";
+import { useSessionBtw } from "./chat/native/useSessionBtw";
 import GoalPanel from "./chat/native/GoalPanel";
 import ArchivedNotice from "./chat/ArchivedNotice";
 import ForkOrigin from "./chat/ForkOrigin";
@@ -33,8 +28,9 @@ import ActionInbox from "./chat/agents/ActionInbox";
 import AgentOrigin from "./chat/agents/AgentOrigin";
 import AgentPanel from "./chat/agents/AgentPanel";
 import { useCodexGoal } from "./chat/native/useCodexGoal";
-import { useAgentBehavior } from "./chat/native/useAgentBehavior";
+import { useAgentBehavior, useChatPermissionMode } from "./chat/native/useAgentBehavior";
 import { useChatCommands } from "./chat/native/useChatCommands";
+import { isClientHost, isProjectWorkspaceReady } from "./hosts/client-device";
 import type {
   AccountSelection,
   Approval,
@@ -51,8 +47,7 @@ import type {
   ToolEvent,
   Turn,
 } from "../types";
-import { errorText, isActive, post, statusLabel } from "../api";
-import SyncProgressBar from "./projects/SyncProgressBar";
+import { errorText, isActive } from "../api";
 import { engineProfiles } from "../engines";
 
 interface Props {
@@ -90,11 +85,7 @@ interface Props {
   onOpenSession: (session: Session | string) => void;
   controlPending: boolean;
   stopPending: boolean;
-  onApproval: (
-    id: string,
-    decision: "allow" | "deny",
-    reason?: string,
-  ) => Promise<void>;
+  onApproval: (id: string, decision: "allow" | "deny", reason?: string) => Promise<void>;
 }
 
 export default function Chat(props: Props) {
@@ -112,48 +103,49 @@ export default function Chat(props: Props) {
     model: session?.model || null,
     reasoningEffort: session?.reasoning_effort || null,
   });
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(session?.permission_mode || defaultPermissionMode);
-  const [permissionSaving, setPermissionSaving] = useState(false);
-  const permissionRequestRef = useRef(0);
   const [stickToBottom, setStickToBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const sessionRuntime = useSessionRuntime(session?.id, props.streamConnected, props.onNotice);
+  const btw = useSessionBtw(session?.id, props.streamConnected, props.onNotice);
   const switching = !!sessionRuntime.runtime.switching;
   const settling = !!sessionRuntime.runtime.settling;
   const controlsBlocked = switching || settling;
   const currentTurn = [...props.turns].reverse().find((turn) => turn.session_id === session?.id && isActive(turn.status));
   const runStatus = controlsBlocked ? "running" : isActive(session?.status) ? session!.status : currentTurn?.status;
-  const active = controlsBlocked || props.sending || isActive(session?.status) ||
-    !!currentTurn;
+  const active = controlsBlocked || props.sending || isActive(session?.status) || !!currentTurn;
   const [sendMode, setSendMode] = useState<InputMode>("steer");
   // Locks the input from the moment a message is submitted until the server accepts it.
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const { slot, slotId, accountSelection, catalogSlot, slotAvailable, slotSaving, changeSlot } = useConversationSlot(overview, project?.id, session, props.onSlotChange);
-  const syncReady = project?.sync_status === "WATCHING" || project?.sync_status === "LOCAL";
-  const host = overview.hosts.find(
-    (item) => item.id === project?.dev_host_id,
-  );
+  const host = overview.hosts.find((item) => item.id === project?.dev_host_id);
+  const isClientProject = isClientHost(host);
+  const syncReady = isProjectWorkspaceReady(project, host);
   const currentEngine = accountSelection.engine;
+  const {
+    permissionMode, permissionSaving, pendingUnsafePermission, setPendingUnsafePermission,
+    applyPermissionChange, requestPermissionChange,
+  } = useChatPermissionMode({
+    session, projectId: project?.id, engine: currentEngine,
+    personalPermission: overview.agentDefaults?.[currentEngine]?.permissionMode,
+    isClientProject, active, onPermissionChange: props.onPermissionChange,
+  });
   const { behavior, behaviorSaving, changeBehavior } = useAgentBehavior(session, project?.id, currentEngine, active, props.onBehaviorChange);
   const goal = useCodexGoal({ sessionId: session?.id, enabled: engineProfiles[currentEngine].goal && !session?.archived_at, connected: props.streamConnected, executing: active, onNotice: props.onNotice });
-  const rollover = async (note?: string): Promise<boolean> => {
-    if (!session) return false;
-    try {
-      await post(`/sessions/${session.id}/rollover`, note ? { note } : {});
-      await props.onProjectRefresh();
-      props.onNotice("已完成无感上下文续接，下一条消息将启动全新底层会话", "success");
-      return true;
-    } catch (cause) { props.onNotice(errorText(cause)); return false; }
-  };
   const commands = useChatCommands({
     engine: currentEngine, session, active, switching, settling, busy: behaviorSaving || permissionSaving || slotSaving,
     behavior, selection, permissionMode, onBehavior: changeBehavior,
     onNew: () => { if (project && !maintenance) props.onSelectProject(project); },
     onStop: props.onStop, onDiff: props.onDiff, onNotice: props.onNotice,
-    onPause: props.onPause, onResume: props.onResume, onRollover: rollover, runStatus,
-    onGoalCommand: async arguments_ => {
+    onPause: props.onPause, onResume: props.onResume, onProjectRefresh: props.onProjectRefresh,
+    onBtw: (question) => btw.ask(question, {
+      model: selection.model,
+      reasoningEffort: selection.reasoningEffort,
+      slotId: accountSelection.slotMode === "manual" ? accountSelection.slotId : undefined,
+    }),
+    runStatus,
+    onGoalCommand: async (arguments_) => {
       const handled = await goal.handleCommand(arguments_);
       if (handled) setStickToBottom(true);
       return handled;
@@ -173,26 +165,12 @@ export default function Chat(props: Props) {
       reasoningEffort: session?.reasoning_effort || null,
     });
   }, [session?.id, project?.id, currentEngine, session?.model, session?.reasoning_effort, selectionAccountKey]);
-  // A new conversation starts with the user's default for its CLI, again whenever it switches CLI.
-  const personalPermission = overview.agentDefaults?.[currentEngine]?.permissionMode;
-  useEffect(() => {
-    permissionRequestRef.current += 1;
-    setPermissionMode(session?.permission_mode || personalPermission || defaultPermissionModeFor(currentEngine));
-    setPermissionSaving(false);
-  }, [session?.id, project?.id, session?.permission_mode, currentEngine, personalPermission]);
   useLayoutEffect(() => {
     if (stickToBottom && scrollRef.current)
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "instant" });
   }, [
-    props.messages,
-    props.turns,
-    props.streaming,
-    props.tools,
-    props.approvals,
-    goal.goal,
-    goal.visible,
-    goal.editing,
-    stickToBottom,
+    props.messages, props.turns, props.streaming, props.tools, props.approvals,
+    goal.goal, goal.visible, goal.editing, btw.exchanges, stickToBottom,
   ]);
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
@@ -262,47 +240,11 @@ export default function Chat(props: Props) {
       // The send handler reports failures and only clears drafts after server acceptance.
     }
   }
-  async function changePermission(mode: PermissionMode) {
-    if (active || permissionSaving) return;
-    const previous = permissionMode;
-    const request = ++permissionRequestRef.current;
-    setPermissionMode(mode);
-    if (!session) return;
-    setPermissionSaving(true);
-    try {
-      await props.onPermissionChange(session.id, mode);
-    } catch {
-      if (request === permissionRequestRef.current) setPermissionMode(previous);
-    } finally {
-      if (request === permissionRequestRef.current) setPermissionSaving(false);
-    }
-  }
-  const composerWarning = maintenance
-    ? active
-      ? "系统维护中，当前为只读模式：暂不支持发送消息，仍可暂停、继续或停止当前任务，以及处理待确认审批与提问。"
-      : "系统维护中，当前为只读模式，暂不支持发送消息或发起新对话。"
-    : !slotAvailable
-    ? accountSelection.slotMode === "auto"
-      ? "当前没有可用的 Claude 账号，请等待账号释放或联系管理员。"
-      : occupied
-      ? "此槽位正由其他用户使用，释放后可继续；也可选择其他已获授权的账号。"
-      : slot
-        ? `此槽位${statusLabel(slot.status)}，请选择其他可用账号或联系管理员。`
-        : slotId
-          ? "此对话原选槽位已不可访问，请选择同引擎的其他授权槽位。"
-          : "请选择已获授权的账号槽位；没有可用账号时请联系管理员。"
-    : project?.sync_status === "CREATING"
-      ? "项目正在同步，完成后即可发送任务。"
-    : !syncReady
-      ? project?.execution_mode === "local"
-        ? "本机项目目录不可用。恢复目录及其访问权限后，请在工作区点击「检查目录」。"
-        : "项目同步尚未就绪。请在工作区点击「立即同步」恢复后发送任务。"
-      : undefined;
-  const suggestions = [
-    { icon: FileSearch, title: "熟悉这个项目", text: "请阅读项目结构，介绍主要模块、技术栈和开发入口。" },
-    { icon: Code2, title: "一起实现新功能", text: "请先了解项目现状，再和我讨论要实现的新功能。" },
-    { icon: GitBranch, title: "审阅当前改动", text: "请审阅当前工作区的代码变更，指出潜在问题和改进建议。" },
-  ];
+  const isBtwDraft = parseBtwInput(draft).isBtw;
+  const composerWarning = getComposerWarning({
+    maintenance, active, slotAvailable, accountSelection, occupied, slot, slotId, project, host, syncReady,
+  });
+
   return (
     <main className="chat-panel">
       <WorkspaceHeader
@@ -315,110 +257,89 @@ export default function Chat(props: Props) {
         onSidebar={props.onSidebar}
         onInspector={props.onInspector}
         onProjectRefresh={props.onProjectRefresh}
+        onNotice={props.onNotice}
       />
       {overview.maintenance?.enabled && <MaintenanceBanner maintenance={overview.maintenance} />}
       <div className="chat-timeline">
-      <div
-        className="chat-scroll"
-        ref={scrollRef}
-        onScroll={() => {
-          const element = scrollRef.current;
-          if (element)
-            setStickToBottom(
-              element.scrollHeight - element.scrollTop - element.clientHeight <
-                100,
-            );
-        }}
-      >
-        {!project ? (
-          <Welcome
-            overview={overview}
-            onNewHost={props.onNewHost}
-            onNewProject={props.onNewProject}
-            onSelectProject={props.onSelectProject}
-          />
-        ) : (
-          <div className="conversation">
-            {props.loading ? (
-              <div className="loading-state">
-                <LoaderCircle className="spin" size={22} />
-                <span>正在加载对话…</span>
-              </div>
-            ) : props.messages.length === 0 && props.turns.length === 0 && !props.streaming ? (
-              <div className="project-welcome">
-                <div className="agent-glyph">
-                  <Sparkles size={28} strokeWidth={1.4} />
-                </div>
-                <div className="eyebrow">LET’S BUILD SOMETHING</div>
-                <h1>今天，想做些什么？</h1>
-                <p>
-                  你正在 <strong>{project.name}</strong> 中工作。
-                  <br />
-                  描述目标，剩下的我们一起完成。
-                </p>
-                {project.sync_status === "CREATING" && <SyncProgressBar progress={props.syncProgress} />}
-                <div className="prompt-suggestions">
-                  {suggestions.map(({ icon: Icon, title, text }) => (
-                    <button
-                      key={title}
-                      disabled={maintenance}
-                      title={maintenance ? "系统维护中，暂不支持发起新对话" : undefined}
-                      onClick={() => {
-                        setDraft(text);
-                        composerRef.current?.focus();
-                      }}
-                    >
-                      <Icon size={18} />
-                      <span>{title}</span>
-                      <ArrowUpRight size={14} />
-                    </button>
-                  ))}
-                </div>
-                <div className="project-location">
-                  <Terminal size={13} />
-                  <span>
-                    {host?.name} <span>/</span> {project.remote_path}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <>
-                {session && <ForkOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
-                {session && <AgentOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
-                <ConversationTurns
-                  messages={props.messages}
-                  turns={props.turns}
-                  streaming={props.streaming}
-                  tools={props.tools}
-                  username={overview.user.username}
-                  engine={session?.engine}
-                  onFork={session && !maintenance ? props.onFork : undefined}
-                />
-              </>
-            )}
-            <GoalPanel control={goal} />
-            <ActionInbox
-              session={session}
-              sessions={overview.sessions}
-              approvals={props.approvals}
-              connected={props.streamConnected}
-              onApproval={props.onApproval}
-              onOpenSession={props.onOpenSession}
+        <div
+          className="chat-scroll"
+          ref={scrollRef}
+          onScroll={() => {
+            const element = scrollRef.current;
+            if (element)
+              setStickToBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 100);
+          }}
+        >
+          {!project ? (
+            <Welcome
+              overview={overview}
+              onNewHost={props.onNewHost}
+              onNewProject={props.onNewProject}
+              onSelectProject={props.onSelectProject}
+              onRefresh={props.onProjectRefresh}
+              onNotice={props.onNotice}
             />
-            {active && runStatus !== "paused" && runStatus !== "pausing" && !props.streaming && !currentTurn && (
-              <div className="agent-working">
-                <span className="thinking-dots">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                <span>智能体正在处理任务</span>
-              </div>
-            )}
-          </div>
+          ) : (
+            <div className="conversation">
+              {props.loading ? (
+                <div className="loading-state">
+                  <LoaderCircle className="spin" size={22} />
+                  <span>正在加载对话…</span>
+                </div>
+              ) : props.messages.length === 0 && props.turns.length === 0 && !props.streaming ? (
+                <ProjectWelcome
+                  project={project}
+                  host={host}
+                  syncProgress={props.syncProgress}
+                  maintenance={maintenance}
+                  onPickPrompt={(text) => {
+                    setDraft(text);
+                    composerRef.current?.focus();
+                  }}
+                />
+              ) : (
+                <>
+                  {session && <ForkOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
+                  {session && <AgentOrigin session={session} sessions={overview.sessions} onOpen={props.onOpenSession} />}
+                  <ConversationTurns
+                    messages={props.messages}
+                    turns={props.turns}
+                    streaming={props.streaming}
+                    tools={props.tools}
+                    username={overview.user.username}
+                    engine={session?.engine}
+                    onFork={session && !maintenance ? props.onFork : undefined}
+                  />
+                </>
+              )}
+              <GoalPanel control={goal} />
+              <BtwPanel control={btw} readOnly={maintenance || !!session?.archived_at} />
+              <ActionInbox
+                session={session}
+                sessions={overview.sessions}
+                approvals={props.approvals}
+                connected={props.streamConnected}
+                onApproval={props.onApproval}
+                onOpenSession={props.onOpenSession}
+              />
+              {active && runStatus !== "paused" && runStatus !== "pausing" && !props.streaming && !currentTurn && (
+                <div className="agent-working">
+                  <span className="thinking-dots"><i /><i /><i /></span>
+                  <span>智能体正在处理任务</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {project && !props.loading && (
+          <ConversationOutline
+            key={`${project.id}:${session?.id || "new"}`}
+            messages={props.messages}
+            turns={props.turns}
+            scrollRef={scrollRef}
+            onNavigate={() => setStickToBottom(false)}
+          />
         )}
-      </div>
-      {project && !props.loading && <ConversationOutline key={`${project.id}:${session?.id || "new"}`} messages={props.messages} turns={props.turns} scrollRef={scrollRef} onNavigate={() => setStickToBottom(false)} />}
       </div>
       {project && commands.help}
       {project && session?.archived_at && <ArchivedNotice session={session} onRestore={props.onRestore} readOnly={maintenance} />}
@@ -455,8 +376,8 @@ export default function Chat(props: Props) {
           active={active}
           available={slotAvailable}
           readOnly={maintenance}
-          locked={submitting || props.sending}
-          sendDisabled={maintenance || (!draft.trim() && !images.length) || submitting || props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady || !props.streamConnected}
+          locked={submitting || (!isBtwDraft && props.sending)}
+          sendDisabled={maintenance || (!draft.trim() && !images.length) || submitting || !props.streamConnected || (!isBtwDraft && (props.sending || permissionSaving || behaviorSaving || slotSaving || controlsBlocked || !slotAvailable || !syncReady))}
           warning={[composerWarning, storageError].filter(Boolean).join(" ") || undefined}
           showScrollToBottom={!stickToBottom}
           onScrollToBottom={() => setStickToBottom(true)}
@@ -478,7 +399,8 @@ export default function Chat(props: Props) {
             permissionDisabled={maintenance || active || slotSaving || behaviorSaving || !slotAvailable}
             permissionSaving={permissionSaving}
             permissionOpenRequest={commands.permissionRequest}
-            onPermissionChange={(mode) => void changePermission(mode)}
+            clientHostWarning={isClientProject}
+            onPermissionChange={requestPermissionChange}
             behavior={behavior}
             behaviorDisabled={maintenance || active || slotSaving || permissionSaving || !slotAvailable}
             behaviorSaving={behaviorSaving}
@@ -491,7 +413,7 @@ export default function Chat(props: Props) {
                   : { scope: "toggle", reason: "Codex 对话在发送第一条消息后不能关闭编排，但可在协作编排与 Super Agent 之间切换。" }
                 : undefined}
             roster={{ profiles: overview.agentProfiles ?? [], session }}
-            onRollover={!maintenance && session && (session.native_session_id || props.messages.length > 0) ? () => void rollover() : undefined}
+            onRollover={!maintenance && session && (session.native_session_id || props.messages.length > 0) ? () => void commands.rollover() : undefined}
             onBehaviorChange={(value) => void changeBehavior(value)}
             questionDefaults={overview.questionDefaults}
             onQuestionsChange={props.onQuestionsChange}
@@ -512,14 +434,20 @@ export default function Chat(props: Props) {
       )}
       {!project && (
         <footer className="workspace-footer">
-          <span>
-            <ShieldCheck size={12} />
-            私有工作空间，原生智能体
-          </span>
-          <span>
-            <Command size={12} /> BUILD WITH INTENTION
-          </span>
+          <span><ShieldCheck size={12} />私有工作空间，原生智能体</span>
+          <span><Command size={12} /> BUILD WITH INTENTION</span>
         </footer>
+      )}
+      {pendingUnsafePermission && (
+        <ClientPermissionDialog
+          mode={pendingUnsafePermission}
+          onClose={() => setPendingUnsafePermission(null)}
+          onConfirm={() => {
+            const target = pendingUnsafePermission;
+            setPendingUnsafePermission(null);
+            void applyPermissionChange(target);
+          }}
+        />
       )}
     </main>
   );

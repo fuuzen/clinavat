@@ -9,11 +9,12 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { AlertCircle, ArrowDown, ArrowUp, ImagePlus, LoaderCircle, MessageSquare, Minus, Pause, Play, ShieldCheck, Square, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, ImagePlus, LoaderCircle, MessageCircleQuestion, MessageSquare, Minus, Pause, Play, ShieldCheck, Square, X } from "lucide-react";
 import CompletionMenu from "./composer/CompletionMenu";
 import type { ComposerImage } from "./composer/imageAttachments";
 import { useComposerCompletion } from "./composer/useComposerCompletion";
 import type { ComposerCommand } from "./composer/commands";
+import { parseBtwInput } from "./native/btwTypes";
 import type { InputMode } from "../../types";
 import "../../styles/completions.css";
 
@@ -81,6 +82,7 @@ export default function ChatComposer(props: Props) {
   const restoreRef = useRef<HTMLButtonElement>(null);
   const focusAfterExpand = useRef<"input" | "minimize" | null>(null);
   const hasDraft = !!props.draft.trim() || props.images.length > 0;
+  const isBtwDraft = parseBtwInput(props.draft).isBtw;
   const canAttach = props.available && !props.locked && !props.readOnly;
   const resumable = props.runStatus === "paused" || props.runStatus === "pausing";
   const pauseLabel = resumable ? "继续任务" : "暂停任务";
@@ -177,7 +179,14 @@ export default function ChatComposer(props: Props) {
     </button>
   );
   const mode = sendModes[props.sendMode];
-  const runningSend = (
+  const runningSend = isBtwDraft ? (
+    <>
+      <span className="btw-send-badge" title="旁路提问不会进入排队、不会引导或打断当前主轮次">旁路</span>
+      <button className="send-button" type="button" disabled={props.sendDisabled} onClick={props.onSend} title="发送旁路提问（不打断当前运行）" aria-label="发送旁路提问">
+        <span className="send-button-symbol"><ArrowUp size={18} aria-hidden="true" /></span>
+      </button>
+    </>
+  ) : (
     <>
       <button className="send-mode-button" type="button" onClick={() => props.onSendModeChange(mode.next)}
         title={`${mode.title}。点击切换`} aria-label={`发送方式：${mode.title}。点击切换`}>
@@ -207,6 +216,12 @@ export default function ChatComposer(props: Props) {
       >
         {props.showScrollToBottom && !minimized && latestButton}
         {props.warning && <div className="composer-warning"><ShieldCheck size={14} aria-hidden="true" />{props.warning}</div>}
+        {isBtwDraft && !props.readOnly && (
+          <div className="btw-composer-hint" role="status">
+            <MessageCircleQuestion size={14} aria-hidden="true" />
+            <span>旁路提问 · 不打断当前运行、不计入主上下文</span>
+          </div>
+        )}
         {props.status}
         <div
           className={`composer${props.active ? " composer-active" : ""}`}

@@ -26,6 +26,7 @@ interface Props {
   permissionDisabled: boolean;
   permissionSaving: boolean;
   permissionOpenRequest?: number;
+  clientHostWarning?: boolean;
   onPermissionChange: (mode: PermissionMode) => void;
   behavior: AgentBehavior;
   behaviorDisabled: boolean;
@@ -309,6 +310,7 @@ export default function ControlHub(props: Props) {
               onChange={props.onPermissionChange}
               close={close}
               headingPrefix={backButton}
+              clientHostWarning={props.clientHostWarning}
             />
           )}
           {view === "behavior" && (

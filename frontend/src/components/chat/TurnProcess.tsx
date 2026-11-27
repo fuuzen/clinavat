@@ -1,9 +1,10 @@
 import { useEffect, useId, useState } from "react";
-import { ChevronDown, Clock3, LoaderCircle, Pause } from "lucide-react";
+import { ChevronDown, Clock3, CornerDownRight, LoaderCircle, Pause } from "lucide-react";
 import { isActive } from "../../api";
 import type { ActivityItem, ToolEvent, Turn } from "../../types";
 import ExecutionGroup from "./ExecutionGroup";
 import { Markdown } from "./MessageView";
+import { displayableSegmentItems, type TurnSegment } from "./native/turnSegments";
 
 function durationLabel(milliseconds: number) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -28,10 +29,12 @@ function activityGroups(items: ActivityItem[]) {
   return groups;
 }
 
-export default function TurnProcess({ turn }: { turn: Turn }) {
-  const live = isActive(turn.status);
-  const paused = turn.status === "paused";
-  const running = turn.status === "running" || turn.status === "pausing";
+export default function TurnProcess({ turn, segment }: { turn: Turn; segment?: TurnSegment }) {
+  const steered = !!segment?.steered;
+  const segmented = !!segment && segment.total > 1;
+  const live = steered ? false : isActive(turn.status);
+  const paused = !steered && turn.status === "paused";
+  const running = !steered && (turn.status === "running" || turn.status === "pausing");
   const [open, setOpen] = useState(live);
   const [now, setNow] = useState(Date.now());
   const detailsId = useId();
@@ -44,15 +47,21 @@ export default function TurnProcess({ turn }: { turn: Turn }) {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [running]);
-  const elapsed = turn.duration_ms ?? (
-    (turn.completed_at ? Date.parse(turn.completed_at) : paused && turn.paused_at ? Date.parse(turn.paused_at) : now)
-      - Date.parse(turn.started_at) - (turn.paused_ms ?? 0)
-  );
-  const items = turn.items.filter((item) => (live || !item.final)
-    && !(item.kind === "reasoning" && !item.text?.trim()));
-  const status = paused ? " · 已暂停" : turn.status === "pausing" ? " · 正在暂停" : turn.status === "interrupted" ? " · 已停止" : turn.status === "error" ? " · 出错" : "";
+  const elapsed = segmented
+    ? Math.max(0, (
+      segment.endedAt ? Date.parse(segment.endedAt) : paused && turn.paused_at ? Date.parse(turn.paused_at) : now
+    ) - Date.parse(segment.startedAt) - (segment.isLast ? (turn.paused_ms ?? 0) : 0))
+    : (turn.duration_ms ?? (
+      (turn.completed_at ? Date.parse(turn.completed_at) : paused && turn.paused_at ? Date.parse(turn.paused_at) : now)
+        - Date.parse(turn.started_at) - (turn.paused_ms ?? 0)
+    ));
+  const items = displayableSegmentItems(segment ? segment.items : turn.items, live);
+  const status = steered
+    ? ""
+    : paused ? " · 已暂停" : turn.status === "pausing" ? " · 正在暂停" : turn.status === "interrupted" ? " · 已停止" : turn.status === "error" ? " · 出错" : "";
+  const stateClass = steered ? "turn-steered" : paused ? "turn-paused" : running ? "turn-running" : "turn-finished";
   return (
-    <section className={`turn-process ${paused ? "turn-paused" : running ? "turn-running" : "turn-finished"}`}>
+    <section className={`turn-process ${stateClass}`}>
       <button
         type="button"
         className="activity-toggle turn-toggle"
@@ -60,14 +69,15 @@ export default function TurnProcess({ turn }: { turn: Turn }) {
         aria-controls={detailsId}
         onClick={() => setOpen((value) => !value)}
       >
-        {paused ? <Pause size={13} /> : running ? <LoaderCircle size={13} className="spin" /> : <Clock3 size={13} />}
+        {steered ? <CornerDownRight size={13} /> : paused ? <Pause size={13} /> : running ? <LoaderCircle size={13} className="spin" /> : <Clock3 size={13} />}
         <span>{live ? "Working for" : "Worked for"} {durationLabel(Number.isFinite(elapsed) ? elapsed : 0)}{status}</span>
+        {steered && <span className="turn-steered-badge">已引导</span>}
         <ChevronDown size={13} className={open ? "rotate" : ""} />
       </button>
       {open && (
         <div className="turn-details" id={detailsId}>
           {activityGroups(items).map((group) => Array.isArray(group) ? (
-            <ExecutionGroup key={group[0].id} tools={group} paused={paused} />
+            <ExecutionGroup key={group[0].id} tools={group} paused={paused} sealed={steered} />
           ) : (
             <div key={group.id} className={`activity-text activity-${group.kind}`}>
               {group.kind === "reasoning" && <span className="reasoning-label">思考摘要</span>}
