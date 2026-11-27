@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { agentHostInfo, projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
-import { HttpError, type User } from '../models.js';
+import { HttpError, type Session, type User } from '../models.js';
 import { resolveAgentSelection, validateAgentSelection } from '../agent/model-catalog.js';
 import { permissionModes, validatePermissionMode } from '../agent/permissions.js';
 import { slotForUser } from '../accounts/access.js';
+import { nativeSessionLost } from '../accounts/session-state/index.js';
 import { agentModes, rolePresets, validateSessionSettings } from '../agent/session-settings.js';
 import { expandProjectReferences } from '../runtime/project-references.js';
 import { imageTypes, maxImagesPerMessage, messageImages, readImage, saveImage, storedImages } from '../message-images.js';
@@ -87,6 +88,16 @@ export interface MessageDelivery {
   prompt(expanded: string): string;
 }
 
+const nativeLostNotice = '原生会话文件已不存在，无法恢复原会话。已自动续接上下文：本条消息将启动全新底层会话，并附带近期对话记录。';
+
+/** Whether the native conversation this run would resume or fork from has disappeared from the engine's store. */
+async function nativeHistoryLost(dataDir: string, userId: string, session: Session): Promise<boolean> {
+  if (session.native_session_id) {
+    return nativeSessionLost(dataDir, userId, session.engine, session.native_session_id, session.jsonl_file_path);
+  }
+  return !!session.fork_native_id && nativeSessionLost(dataDir, userId, session.engine, session.fork_native_id);
+}
+
 /** Sends a message as the user would from the composer: it starts a turn, or joins the running one. */
 export async function sendSessionMessage(context: Context, user: User, id: string, input: z.infer<typeof messageInput>,
   delivery?: MessageDelivery) {
@@ -141,7 +152,10 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
     }
     if (compact && input.images.length) throw new HttpError(400, '/compact 不能附带图片');
     const images = messageImages(store, id, input.images);
-    const renewThread = !compact && codexInspectToolsChanged(session, project, host);
+    // A resident process already holds its native conversation; only a fresh process resumes from the store.
+    const nativeLost = !agents.view(id).resident && await nativeHistoryLost(config.dataDir, user.id, session);
+    if (compact && nativeLost) throw new HttpError(409, '原生会话文件已不存在，无法压缩；请直接发送消息以续接上下文');
+    const renewThread = !compact && (nativeLost || codexInspectToolsChanged(session, project, host));
     const runContext = {
       runtime_home: slot.home_dir,
       runtime_kind: 'conversation' as const,
@@ -183,8 +197,10 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       const expanded = compact ? input.content : await expandProjectReferences(workspaces, project, input.content);
       const expandedContent = delivery ? delivery.prompt(expanded) : expanded;
       if (auto) await context.slots.ensureEligible(slot, user.id, model);
+      const noticeId = nativeLost ? randomUUID() : undefined;
       store.transaction(() => {
         if (renewThread) turns.clearNativeSession(id);
+        if (noticeId) store.run("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'system',?)", noticeId, id, nativeLostNotice);
         store.run(`UPDATE sessions SET slot_id=?,model=?,reasoning_effort=?,permission_mode=?,agent_mode=?,role_preset=?,status='running',updated_at=datetime('now') WHERE id=?`,
           slot.id, model, reasoningEffort, permissionMode, agentMode, rolePreset, id);
         store.run("INSERT INTO messages(id,session_id,role,content,images,source) VALUES(?,?,'user',?,?,?)", messageId, id, input.content,
@@ -192,7 +208,9 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
       });
       if (!delivery?.source) resetReviewsForUserMessage(context, session);
       turns.start(id, messageId, { slotId: slot.id, credentialRevision: slot.credential_revision });
-      events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', messageId) });
+      for (const shown of noticeId ? [noticeId, messageId] : [messageId]) {
+        events.emit(user.id, { type: 'message', sessionId: id, payload: store.get('SELECT * FROM messages WHERE id=?', shown) });
+      }
       try {
         // A branch's first run forks its source's native history, which already holds the copied messages.
         // On rollover / native restart, skip raw child report dumps since synthesis replies, task board and memories already carry the state.
@@ -200,10 +218,10 @@ export async function sendSessionMessage(context: Context, user: User, id: strin
           ? store.all<{ role: string; content: string }>(
               `SELECT role,substr(content,1,2000) AS content FROM (
                  SELECT rowid,role,content FROM messages
-                 WHERE session_id=? AND id<>? AND (source IS NULL OR source<>'report')
+                 WHERE session_id=? AND id NOT IN (?,?) AND (source IS NULL OR source<>'report')
                  ORDER BY rowid DESC LIMIT 14
                ) ORDER BY rowid`,
-              id, messageId,
+              id, messageId, noticeId ?? messageId,
             )
           : [];
         const prompt = previousMessages.length && !expandedContent.startsWith('/')
