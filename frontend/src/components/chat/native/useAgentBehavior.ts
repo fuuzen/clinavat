@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentBehavior, OrchestrationMode, Session, SuperReadMode } from "../../../types";
+import type { AgentBehavior, OrchestrationMode, PermissionMode, Session, SuperReadMode } from "../../../types";
 import { engineProfiles, type AgentEngine } from "../../../engines";
+import { defaultPermissionMode, defaultPermissionModeFor } from "../PermissionPicker";
+import { isUnsafeClientPermission } from "../../hosts/client-device";
 
 function orchestrationModeOf(session: Session | undefined, engine: AgentEngine): OrchestrationMode {
   if (!engineProfiles[engine].orchestration || session?.parent_session_id) return "off";
@@ -54,4 +56,63 @@ export function useAgentBehavior(session: Session | undefined, projectId: string
     finally { if (request === requestRef.current) setSaving(false); }
   }
   return { behavior, behaviorSaving: saving, changeBehavior };
+}
+
+export function useChatPermissionMode(options: {
+  session?: Session;
+  projectId?: string;
+  engine: AgentEngine;
+  personalPermission?: PermissionMode | null;
+  isClientProject: boolean;
+  active: boolean;
+  onPermissionChange: (sessionId: string, mode: PermissionMode) => Promise<void>;
+}) {
+  const { session, projectId, engine, personalPermission, isClientProject, active, onPermissionChange } = options;
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(session?.permission_mode || defaultPermissionMode);
+  const [pendingUnsafePermission, setPendingUnsafePermission] = useState<PermissionMode | null>(null);
+  const [permissionSaving, setPermissionSaving] = useState(false);
+  const requestRef = useRef(0);
+
+  // New conversations start with the user's default for its CLI, except unsandboxed client hosts never default to YOLO/full-access.
+  useEffect(() => {
+    requestRef.current += 1;
+    setPendingUnsafePermission(null);
+    const safePersonal = isClientProject && isUnsafeClientPermission(personalPermission) ? null : personalPermission;
+    setPermissionMode(session?.permission_mode || safePersonal || defaultPermissionModeFor(engine));
+    setPermissionSaving(false);
+  }, [session?.id, projectId, session?.permission_mode, engine, personalPermission, isClientProject]);
+
+  async function applyPermissionChange(mode: PermissionMode) {
+    if (active || permissionSaving) return;
+    const previous = permissionMode;
+    const request = ++requestRef.current;
+    setPermissionMode(mode);
+    if (!session) return;
+    setPermissionSaving(true);
+    try {
+      await onPermissionChange(session.id, mode);
+    } catch {
+      if (request === requestRef.current) setPermissionMode(previous);
+    } finally {
+      if (request === requestRef.current) setPermissionSaving(false);
+    }
+  }
+
+  function requestPermissionChange(mode: PermissionMode) {
+    if (active || permissionSaving || mode === permissionMode) return;
+    if (isClientProject && isUnsafeClientPermission(mode)) {
+      setPendingUnsafePermission(mode);
+      return;
+    }
+    void applyPermissionChange(mode);
+  }
+
+  return {
+    permissionMode,
+    permissionSaving,
+    pendingUnsafePermission,
+    setPendingUnsafePermission,
+    applyPermissionChange,
+    requestPermissionChange,
+  };
 }
