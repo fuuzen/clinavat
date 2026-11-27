@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Clock, LoaderCircle, Plug, Plus, Server } from "lucide-react";
+import { Check, Clock, Laptop, LoaderCircle, Plug, Plus, Server } from "lucide-react";
 import { api, ApiError, errorText, post } from "../../api";
+import { hasClientDeviceIdentity, useClientShell } from "../../client";
 import type { DevHost, Overview } from "../../types";
 import { Modal } from "../Dialogs";
+import ClientDeviceCard from "./ClientDeviceCard";
+import { clientPlatformLabel, isClientHost } from "./client-device";
 import EndpointFields, { type SshEndpoint } from "./EndpointFields";
 import IdentityFields from "./IdentityFields";
 import JumpHostFields from "./JumpHostFields";
@@ -40,6 +43,7 @@ function readApprovalHint(value: unknown): HostApprovalHint | undefined {
 }
 
 export default function HostDialog({ overview, initialHost, onClose, onCreated }: Props) {
+  const shell = useClientShell();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [target, setTarget] = useState<SshEndpoint>({
@@ -53,8 +57,64 @@ export default function HostDialog({ overview, initialHost, onClose, onCreated }
   const [testResult, setTestResult] = useState<TestResultState | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const editing = Boolean(initialHost);
+  const editingClient = isClientHost(initialHost);
+  const [clientName, setClientName] = useState(initialHost?.name || "");
   const close = () => { if (!busy) onClose(); };
   useEffect(() => setTestResult(null), [target, jump, jumpEnabled]);
+  async function submitClientRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!initialHost || !clientName.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/hosts/${initialHost.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: clientName.trim() }),
+      });
+      await onCreated();
+      onClose();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (editingClient && initialHost) {
+    return (
+      <Modal
+        title="编辑客户端设备"
+        subtitle="连接参数由桌面客户端自动维护，仅支持修改显示名称。"
+        onClose={close}
+      >
+        <form className="modal-form host-form" onSubmit={submitClientRename}>
+          <div className="form-section-icon">
+            <Laptop size={22} />
+            <span>{clientPlatformLabel(initialHost.device?.platform)} · 客户端设备</span>
+          </div>
+          <label>
+            设备名称
+            <input
+              value={clientName}
+              onChange={(event) => setClientName(event.target.value)}
+              placeholder="例如：我的工作电脑"
+              maxLength={100}
+              disabled={busy}
+              required
+              autoFocus
+            />
+          </label>
+          {error && <div className="inline-error" role="alert">{error}</div>}
+          <div className="modal-actions">
+            <button type="button" className="button button-ghost" disabled={busy} onClick={close}>取消</button>
+            <button className="button button-primary" disabled={busy || !clientName.trim()}>
+              {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}
+              保存名称
+            </button>
+          </div>
+        </form>
+      </Modal>
+    );
+  }
   async function testConnection() {
     const form = formRef.current;
     if (!form) return;
@@ -105,12 +165,23 @@ export default function HostDialog({ overview, initialHost, onClose, onCreated }
       setBusy(false);
     }
   }
+  const showClientOnboarding = !editing && hasClientDeviceIdentity(shell)
+    && !overview.hosts.some((item) => item.kind === "client" && item.device?.id === shell.deviceId);
   return (
     <Modal
       title={editing ? "编辑开发机连接" : "连接开发机"}
       subtitle={editing ? "更新 SSH 连接和跳板机配置。" : "把你的计算环境，带到工作台。"}
       onClose={close}
     >
+      {showClientOnboarding && (
+        <div className="host-dialog-client-section">
+          <ClientDeviceCard
+            hosts={overview.hosts}
+            onRefresh={onCreated}
+            onEnabled={onClose}
+          />
+        </div>
+      )}
       <form ref={formRef} className="modal-form host-form" onSubmit={submit}>
         <fieldset className="host-fields" disabled={busy || testing}>
           <div className="form-section-icon"><Server size={22} /><span>SSH 远程连接</span></div>
