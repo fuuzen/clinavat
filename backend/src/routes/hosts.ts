@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { type Context, assertProjectIdle, hostFor, withResourceLocks } from '../context.js';
 import { HttpError, type Host, type Project } from '../models.js';
 import { isValidSshHost, isValidSshUsername } from '../runtime/types.js';
+import { mapClientRpcError } from '../client-host/workspace-adapter.js';
 import { ensureLocalHost } from '../local-host.js';
 import { localDirectories } from './local-projects.js';
 import { readLegacyRules } from '../runtime/sync-rules.js';
@@ -97,11 +98,58 @@ async function revokeHostApprovals(
   }
 }
 
+export interface HostWithClientDeviceRow extends Host {
+  device_id: string | null;
+  device_platform: string | null;
+  device_arch: string | null;
+  device_os_version: string | null;
+  device_default_shell: string | null;
+  device_homedir: string | null;
+  device_last_seen_at: string | null;
+}
+
+export function serializeHost(context: Context, row: HostWithClientDeviceRow) {
+  const {
+    device_id, device_platform, device_arch, device_os_version,
+    device_default_shell, device_homedir, device_last_seen_at, ...host
+  } = row;
+  if (host.kind !== 'client') return host;
+  const online = context.clientHostRegistry.isOnline(host.id);
+  return {
+    ...host,
+    status: online ? 'CONNECTED' : host.status,
+    device: device_id ? {
+      id: device_id,
+      platform: device_platform ?? '',
+      arch: device_arch ?? '',
+      os_version: device_os_version ?? '',
+      default_shell: device_default_shell ?? '',
+      homedir: device_homedir ?? '',
+      last_seen_at: device_last_seen_at,
+      online,
+    } : null,
+  };
+}
+
+export function listVisibleHosts(context: Context, userId: string, role: string) {
+  const rows = context.store.all<HostWithClientDeviceRow>(
+    `SELECT h.*, d.id AS device_id, d.platform AS device_platform, d.arch AS device_arch,
+            d.os_version AS device_os_version, d.default_shell AS device_default_shell,
+            d.homedir AS device_homedir, d.last_seen_at AS device_last_seen_at
+     FROM dev_hosts h
+     LEFT JOIN client_devices d ON d.dev_host_id = h.id
+     WHERE h.user_id=? AND (h.kind IN ('ssh','client') OR ?='admin')
+     ORDER BY h.kind, h.created_at`,
+    userId, role,
+  );
+  return rows.map(row => serializeHost(context, row));
+}
+
 export function hostRoutes(app: FastifyInstance, context: Context) {
-  const { store, ssh, events, sshRelay, devHostApprovals } = context;
+  const { store, ssh, events, sshRelay, devHostApprovals, clientHostRegistry, clientSsh } = context;
   app.get('/api/hosts', async request => {
     if (request.user.role === 'admin') ensureLocalHost(store, request.user.id);
-    return store.all("SELECT * FROM dev_hosts WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at", request.user.id, request.user.role);
+    return listVisibleHosts(context, request.user.id, request.user.role);
   });
   app.post('/api/hosts', async (request, reply) => {
     const input = hostInput.parse(request.body);
@@ -139,7 +187,24 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
   app.patch('/api/hosts/:id', async request => {
     const { id } = identifier.parse(request.params);
     const input = hostPatch.parse(request.body);
-    if (hostFor(context, id, request.user.id).kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能修改');
+    const existingHost = hostFor(context, id, request.user.id);
+    if (existingHost.kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能修改');
+    if (existingHost.kind === 'client') {
+      const hasUnsupportedFields = input.host !== undefined || input.port !== undefined || input.username !== undefined
+        || input.privateKey !== undefined || input.jumpHost !== undefined;
+      if (hasUnsupportedFields) throw new HttpError(400, '客户端设备连接参数由客户端自动维护，仅支持修改名称');
+      return withResourceLocks(context, [`host:${id}`, `user-hosts:${request.user.id}`], () => {
+        if (input.name !== undefined) store.run("UPDATE dev_hosts SET name=? WHERE id=? AND kind='client'", input.name, id);
+        const row = store.get<HostWithClientDeviceRow>(
+          `SELECT h.*, d.id AS device_id, d.platform AS device_platform, d.arch AS device_arch,
+                  d.os_version AS device_os_version, d.default_shell AS device_default_shell,
+                  d.homedir AS device_homedir, d.last_seen_at AS device_last_seen_at
+           FROM dev_hosts h LEFT JOIN client_devices d ON d.dev_host_id = h.id WHERE h.id=? AND h.user_id=?`,
+          id, request.user.id,
+        )!;
+        return serializeHost(context, row);
+      });
+    }
     const projects = store.all<Project>('SELECT * FROM projects WHERE dev_host_id=? AND user_id=?', id, request.user.id);
     return withResourceLocks(context, [`host:${id}`, `user-hosts:${request.user.id}`, ...projects.map(project => `project:${project.id}`)], async () => {
       const previous = hostFor(context, id, request.user.id);
@@ -208,6 +273,10 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
       if (host.kind === 'local') return { ok: true, status: 'CONNECTED', fingerprint: '' };
+      if (host.kind === 'client') {
+        if (!clientHostRegistry.isOnline(id)) throw new HttpError(409, '客户端设备由本地客户端主动连接，当前不在线');
+        return { ok: true, status: 'CONNECTED', fingerprint: clientSsh.getHostKeyFingerprint() };
+      }
       try {
         const result = await ssh.connect(request.user.id, host);
         if (result.pendingApproval) {
@@ -227,6 +296,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
     const input = hostTestInput.parse(request.body);
     const saved = input.hostId ? hostFor(context, input.hostId, request.user.id) : undefined;
     if (saved?.kind === 'local') throw new HttpError(400, '本机开发机为固定连接，无需测试');
+    if (saved?.kind === 'client') throw new HttpError(400, '客户端设备由本地客户端主动连接，无需 SSH 连接测试');
     await validateKeys(context, request.user.id, [input.privateKey, input.jumpHost?.privateKey]);
     const host = {
       id: saved?.id ?? randomUUID(), user_id: request.user.id, name: saved?.name ?? '连接测试',
@@ -243,10 +313,15 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
   });
   app.get('/api/hosts/:id/directories', async request => {
     const { id } = identifier.parse(request.params);
-    const { path } = z.object({ path: z.string().min(1).max(4096).optional() }).parse(request.query);
-    return withResourceLocks(context, [`host:${id}`], () => {
+    const { path } = z.object({ path: z.string().max(4096).optional() }).parse(request.query);
+    const requestedPath = path?.trim() || undefined;
+    return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
-      return host.kind === 'local' ? localDirectories(path ?? homedir()) : ssh.listDirectories(request.user.id, host, path);
+      if (host.kind === 'client') {
+        try { return await context.clientWorkspaceAdapter.listDirectories(host.id, requestedPath); }
+        catch (error) { throw mapClientRpcError(error); }
+      }
+      return host.kind === 'local' ? localDirectories(requestedPath ?? homedir()) : ssh.listDirectories(request.user.id, host, requestedPath);
     });
   });
   app.post('/api/hosts/:id/sync-scan', async request => {
@@ -255,6 +330,7 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
     return withResourceLocks(context, [`host:${id}`], async () => {
       const host = hostFor(context, id, request.user.id);
       if (host.kind === 'local') throw new HttpError(400, '本机项目直接使用实际目录，无需同步扫描');
+      if (host.kind === 'client') throw new HttpError(400, '客户端设备暂不支持 SSH 同步扫描');
       try {
         const rules = await readLegacyRules(ssh, request.user.id, host, remotePath) ?? '';
         return await scanSyncCandidates(context.config, ssh, request.user.id, host, remotePath, rules);
@@ -268,6 +344,12 @@ export function hostRoutes(app: FastifyInstance, context: Context) {
       const host = hostFor(context, id, request.user.id);
       if (host.kind === 'local') throw new HttpError(403, '本机开发机为固定连接，不能删除');
       if (store.get('SELECT id FROM projects WHERE dev_host_id=?', id)) throw new HttpError(409, '请先删除开发机下的项目');
+      if (host.kind === 'client') {
+        clientHostRegistry.disconnectHost(id, 'host_deleted');
+        revokeTerminalSockets({ userId: request.user.id, devHostId: id }, '开发机已删除');
+        store.run('DELETE FROM dev_hosts WHERE id=?', id);
+        return { ok: true };
+      }
       await sshRelay.revoke({ userId: request.user.id, devHostId: id }, 'host_deleted');
       revokeTerminalSockets({ userId: request.user.id, devHostId: id }, '开发机已删除');
       await revokeHostApprovals(context, request.user.id, id, 'host_deleted', '开发机已删除');

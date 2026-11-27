@@ -5,9 +5,13 @@ import type { SshManager } from './runtime/ssh.js';
 import type { SshTargetPolicy } from './runtime/target-policy.js';
 import type { DevHostApprovalStore } from './runtime/dev-host-approvals.js';
 import type { SshRelayServer } from './runtime/ssh-relay.js';
+import type { ClientHostRegistry } from './client-host/registry.js';
+import type { ClientSshServer } from './client-host/ssh-server.js';
+import type { ClientWorkspaceAdapter } from './client-host/workspace-adapter.js';
+import type { ClientMirrorSync } from './client-host/mirror-sync.js';
 import type { WorkspaceManager } from './runtime/workspace.js';
 import type { AgentManager } from './agent/manager.js';
-import type { AgentConfig } from './agent/types.js';
+import type { AgentConfig, AgentHostInfo } from './agent/types.js';
 import type { ConnectionRegistry } from './connections.js';
 import type { ConversationStore } from './conversation.js';
 import type { SlotSelector } from './accounts/selection.js';
@@ -18,16 +22,21 @@ import type { PriceBook } from './token-usage/price-book.js';
 import type { UsageSettingsStore } from './accounts/usage-settings.js';
 import type { AgentDefaults } from './agent-defaults.js';
 import type { OrchestrationSettingsStore } from './orchestration/limits.js';
-import type { Worktrees } from './orchestration/worktrees.js';
+import type { WorktreeManager } from './orchestration/worktrees/index.js';
 import type { MachineResourceHost, MachineResourceSettingsStore } from './execution/machine-resources.js';
 import type { MaintenanceService } from './runtime/maintenance.js';
-import { HttpError, type Host, type Project, type Session } from './models.js';
+import type { BtwService } from './agent/btw/service.js';
+import { HttpError, type ClientDevice, type Host, type Project, type Session } from './models.js';
 
 export interface Context {
   config: Config & AgentConfig; store: Store; events: EventBus; ssh: SshManager;
   targetPolicy: SshTargetPolicy;
   devHostApprovals: DevHostApprovalStore;
   sshRelay: SshRelayServer;
+  clientHostRegistry: ClientHostRegistry;
+  clientSsh: ClientSshServer;
+  clientWorkspaceAdapter: ClientWorkspaceAdapter;
+  clientMirrorSync: ClientMirrorSync;
   workspaces: WorkspaceManager; agents: AgentManager;
   connections: ConnectionRegistry;
   turns: ConversationStore;
@@ -39,13 +48,14 @@ export interface Context {
   usageSettings: UsageSettingsStore;
   orchestrationSettings: OrchestrationSettingsStore;
   /** Child agents' Git worktrees; set once the context exists, which it needs. */
-  worktrees?: Worktrees;
+  worktrees?: WorktreeManager;
   machineResourceSettings: MachineResourceSettingsStore;
   /** Only with slot machines and workspace containers. */
   machineResources?: MachineResourceHost;
   /** Only with slot machines; otherwise a local project's commands already run on the host. */
   hostCommands?: HostCommands;
   maintenance: MaintenanceService;
+  btw: BtwService;
 }
 const activeResources = new WeakMap<Context, Set<string>>();
 const sharedResources = new WeakMap<Context, Map<string, number>>();
@@ -80,6 +90,27 @@ export function hostFor(context: Context, id: string, userId: string): Host {
     throw new HttpError(403, '仅管理员可使用本机开发机');
   }
   return host;
+}
+export function agentHostInfo(context: Context, hostId: string, userId: string): AgentHostInfo {
+  const host = hostFor(context, hostId, userId);
+  if (host.kind !== 'client') {
+    return {
+      id: host.id, kind: host.kind, platform: null, os_version: null, arch: null,
+      default_shell: null, homedir: null, device_name: host.name || null,
+    };
+  }
+  const live = context.clientHostRegistry.getSession(host.id);
+  const device = context.store.get<ClientDevice>('SELECT * FROM client_devices WHERE dev_host_id=?', host.id);
+  return {
+    id: host.id,
+    kind: 'client',
+    platform: live?.platform ?? device?.platform ?? null,
+    os_version: live?.osVersion || device?.os_version || null,
+    arch: live?.arch ?? device?.arch ?? null,
+    default_shell: live?.defaultShell || device?.default_shell || null,
+    homedir: live?.homedir || device?.homedir || null,
+    device_name: host.name || null,
+  };
 }
 export function projectFor(context: Context, id: string, userId: string): Project {
   const project = owned<Project>(context.store, 'projects', id, userId);

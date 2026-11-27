@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
+import { agentHostInfo, projectFor, sessionFor, withResourceLocks, type Context } from '../context.js';
 import { HttpError, type Session } from '../models.js';
 import { slotForUser } from '../accounts/access.js';
 import { accessCodexGoal, codexInspectToolsChanged, type CodexGoal } from '../agent/codex/goal.js';
@@ -31,8 +31,9 @@ function goalContext(context: Context, session: Session): AgentContext {
   if (!session.slot_id) throw new HttpError(409, '请先为当前对话选择授权槽位');
   const slot = slotForUser(context.store, session.slot_id, session.user_id, 'codex');
   const project = projectFor(context, session.project_id, session.user_id);
+  const host = agentHostInfo(context, project.dev_host_id, session.user_id);
   return { runtime_home: slot.home_dir, runtime_kind: 'conversation', user: { id: session.user_id },
-    project, slot, session };
+    project, host, slot, session };
 }
 
 async function requireIdle(context: Context, session: Session): Promise<void> {
@@ -61,7 +62,9 @@ async function startGoal(context: Context, session: Session, action: Extract<Goa
   const runtime = goalContext(context, session);
   const project = projectFor(context, session.project_id, session.user_id);
   const { slot } = runtime;
-  if (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING') {
+  const host = runtime.host;
+  const isClientDirect = host?.kind === 'client' && project.client_mode !== 'mirrored';
+  if (!isClientDirect && (project.execution_mode === 'local' ? project.sync_status !== 'LOCAL' : project.sync_status !== 'WATCHING')) {
     throw new HttpError(409, project.execution_mode === 'local' ? '请先检查本机项目目录是否可访问' : '请先恢复项目同步');
   }
   const { agentMode, rolePreset } = validateSessionSettings('codex', session.agent_mode, session.role_preset);
@@ -74,7 +77,7 @@ async function startGoal(context: Context, session: Session, action: Extract<Goa
     const existingGoal = session.native_session_id ? await accessCodexGoal(config, runtime) : null;
     if (action.action === 'resume' && !existingGoal) throw new HttpError(409, '当前对话尚未设置 Goal');
     if (action.action === 'create' && existingGoal) throw new HttpError(409, '当前目标已存在，请使用 /goal edit 修改');
-    const renewThread = codexInspectToolsChanged(session);
+    const renewThread = codexInspectToolsChanged(session, project, host);
     if (renewThread) runtime.session = { ...runtime.session, native_session_id: null, jsonl_file_path: null,
       fork_native_id: null, fork_native_anchor: null,
       ...(existingGoal ? { goal: { action: 'create', objective: existingGoal.objective } } : {}) };

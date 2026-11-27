@@ -5,9 +5,12 @@ import { copyImages } from './message-images.js';
 export interface ActivityItem {
   id: string;
   /** `notice` reports the CLI retrying an API request; it is replaced in place, never part of the answer. */
-  kind: 'text' | 'reasoning' | 'notice' | 'tool';
+  kind: 'text' | 'reasoning' | 'notice' | 'tool' | 'steer';
   text?: string;
   final?: boolean;
+  /** Set on `steer` markers: the persisted user message consumed mid-turn, and when the engine consumed it. */
+  messageId?: string;
+  at?: string;
   /** `agent` names the subagent that made the call; absent for the conversation's own agent. */
   tool?: { id: string; name: string; input?: unknown; output?: string; status?: string; agent?: string };
 }
@@ -26,7 +29,7 @@ export interface ConversationTurn {
   credential_revision: number | null;
   native_ref: string | null;
   native_session_id: string | null;
-  native_inspect_tools: 0 | 1;
+  native_inspect_tools: number;
   status: 'running' | 'pausing' | 'paused' | 'completed' | 'interrupted' | 'error';
   items: ActivityItem[];
 }
@@ -37,6 +40,33 @@ const outputLimit = 128 * 1024;
 const turnTextLimit = 2 * 1024 * 1024;
 const truncated = '[此前输出已截断]\n';
 const tail = (text: string, limit: number) => text.length > limit ? truncated + text.slice(-limit) : text;
+/** Turn-level singleton items that always stay at the end of a turn, never sealed inside an earlier steer segment. */
+const isTurnTailItem = (item: Pick<ActivityItem, 'id'>) => item.id === 'turn-diff' || item.id === 'native-plan';
+
+function upsertActivityItem(items: ActivityItem[], next: ActivityItem): void {
+  const index = items.findIndex(item => item.id === next.id);
+  if (isTurnTailItem(next)) {
+    if (index >= 0) items.splice(index, 1);
+    items.push(next);
+    return;
+  }
+  if (index >= 0) {
+    Object.assign(items[index], next);
+    return;
+  }
+  let insertAt = items.length;
+  while (insertAt > 0 && isTurnTailItem(items[insertAt - 1])) insertAt--;
+  items.splice(insertAt, 0, next);
+}
+
+function keepTurnTailAtEnd(items: ActivityItem[]): void {
+  const head: ActivityItem[] = [];
+  const trailing: ActivityItem[] = [];
+  for (const item of items) (isTurnTailItem(item) ? trailing : head).push(item);
+  if (!trailing.length) return;
+  items.length = 0;
+  items.push(...head, ...trailing);
+}
 
 export class ConversationStore {
   private active = new Map<string, PendingTurn>();
@@ -86,8 +116,7 @@ export class ConversationStore {
         agent: typeof payload.agent === 'string' ? payload.agent : previous?.agent,
       };
       const item: ActivityItem = { id, kind: 'tool', tool };
-      if (existing) Object.assign(existing, item);
-      else pending.turn.items.push(item);
+      upsertActivityItem(pending.turn.items, item);
     } else if (payload.kind === 'text' || payload.kind === 'reasoning' || payload.kind === 'notice') {
       const update = typeof payload.text === 'string' ? payload.text : '';
       const text = payload.append === true ? (existing?.text || '') + update : update || existing?.text || '';
@@ -95,16 +124,27 @@ export class ConversationStore {
         id, kind: payload.kind, text: tail(text, 256 * 1024),
         final: typeof payload.final === 'boolean' ? payload.final : existing?.final,
       };
-      if (existing) Object.assign(existing, item);
-      else pending.turn.items.push(item);
+      upsertActivityItem(pending.turn.items, item);
     } else return false;
     const textSize = this.limitStoredText(pending.turn);
     if (!pending.timer) pending.timer = setTimeout(() => this.flush(sessionId), textSize > 128 * 1024 ? 500 : 250);
     return true;
   }
 
+  /** Marks the exact point in the running turn where the engine consumed a mid-turn steering message. */
+  steer(sessionId: string, messageId: string, turnId?: string): boolean {
+    const pending = this.active.get(sessionId);
+    if (!pending || !messageId || (turnId && pending.turn.id !== turnId)) return false;
+    if (messageId === pending.turn.user_message_id) return false;
+    const id = `steer:${messageId}`;
+    if (pending.turn.items.some(item => item.id === id || (item.kind === 'steer' && item.messageId === messageId))) return false;
+    upsertActivityItem(pending.turn.items, { id, kind: 'steer', messageId, at: new Date().toISOString() });
+    this.flush(sessionId);
+    return true;
+  }
+
   /** Records where the running turn ends in the CLI's history, so that a branch can start there. */
-  anchor(sessionId: string, turnId: string, ref: string, nativeSessionId: string, nativeInspectTools: 0 | 1): void {
+  anchor(sessionId: string, turnId: string, ref: string, nativeSessionId: string, nativeInspectTools: number): void {
     const pending = this.active.get(sessionId);
     if (pending?.turn.id === turnId) Object.assign(pending.turn,
       { native_ref: ref, native_session_id: nativeSessionId, native_inspect_tools: nativeInspectTools });
@@ -135,10 +175,16 @@ export class ConversationStore {
     for (const turn of turns.slice(0, index + 1)) {
       const userMessageId = copies.get(turn.user_message_id);
       if (!userMessageId) continue;
+      const items = (JSON.parse(turn.items) as ActivityItem[]).flatMap(item => {
+        if (item.kind !== 'steer') return [item];
+        const mapped = item.messageId ? copies.get(item.messageId) : undefined;
+        return mapped && mapped !== userMessageId ? [{ ...item, id: `steer:${mapped}`, messageId: mapped }] : [];
+      });
+      keepTurnTailAtEnd(items);
       this.store.run(`INSERT INTO session_turns(id,session_id,user_message_id,assistant_message_id,started_at,completed_at,duration_ms,
         status,items,slot_id,credential_revision,paused_at,paused_ms,native_ref,native_session_id,native_inspect_tools) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       randomUUID(), targetId, userMessageId, turn.assistant_message_id ? copies.get(turn.assistant_message_id) ?? null : null,
-      turn.started_at, turn.completed_at, turn.duration_ms, turn.status, turn.items, turn.slot_id, turn.credential_revision,
+      turn.started_at, turn.completed_at, turn.duration_ms, turn.status, JSON.stringify(items), turn.slot_id, turn.credential_revision,
       turn.paused_at, turn.paused_ms, turn.native_ref, turn.native_session_id, turn.native_inspect_tools);
     }
   }
@@ -178,8 +224,41 @@ export class ConversationStore {
       if (item.tool && ['running', 'waiting'].includes(item.tool.status || ''))
         item.tool.status = status === 'completed' ? 'completed' : status;
     }
+    this.cleanSteerMarkers(sessionId, pending.turn);
+    keepTurnTailAtEnd(pending.turn.items);
     this.flush(sessionId);
     this.active.delete(sessionId);
+  }
+
+  /**
+   * Removes invalid or orphan `steer` markers while keeping valid ones whenever the turn recorded any activity,
+   * including when a steer occurred right before the final reply so pre-steer items stay above the steer message.
+   */
+  private cleanSteerMarkers(sessionId: string, turn: ConversationTurn): void {
+    const candidateIds = [...new Set(turn.items
+      .filter(item => item.kind === 'steer' && typeof item.messageId === 'string' && item.messageId && item.messageId !== turn.user_message_id)
+      .map(item => item.messageId!))];
+    if (!candidateIds.length && !turn.items.some(item => item.kind === 'steer')) return;
+    const hasActivity = turn.items.some(item => item.kind !== 'steer');
+    if (!hasActivity) {
+      turn.items = [];
+      return;
+    }
+    const existingIds = candidateIds.length
+      ? new Set(this.store.all<{ id: string }>(
+        `SELECT id FROM messages WHERE session_id=? AND id IN (${candidateIds.map(() => '?').join(',')})`,
+        sessionId, ...candidateIds,
+      ).map(row => row.id))
+      : new Set<string>();
+    const seen = new Set<string>();
+    turn.items = turn.items.filter(item => {
+      if (item.kind !== 'steer') return true;
+      if (!item.messageId || item.messageId === turn.user_message_id || !existingIds.has(item.messageId) || seen.has(item.messageId)) {
+        return false;
+      }
+      seen.add(item.messageId);
+      return true;
+    });
   }
 
   private flush(sessionId: string): void {

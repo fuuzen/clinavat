@@ -24,6 +24,7 @@ import { defaultTimezone, guestEnvironment, saveSlotTimezone, timezoneScript, mi
 import { workspaceCgroups } from './machine-processes.js';
 import type { ExecutionBinary, ExecutionHost, ExecutionRunOptions, ExecutionScope, ExecutionSpawnOptions } from './types.js';
 import type { SkippedLinks } from '../runtime/sync-status.js';
+import type { ClientExecBarrierReply, ClientExecBarrierRequest } from '../client-host/exec-barrier.js';
 
 export interface LxdConfig {
   dataDir: string; workspaceDir?: string; lxcBinary: string; lxdRemote: string; lxdProject: string; lxdImage: string;
@@ -36,6 +37,7 @@ export interface LxdServices {
   syncProject(userId: string, syncName: string): string | undefined;
   mutagenEnvironment(userId: string): Promise<NodeJS.ProcessEnv>;
   reportSkippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
+  clientExec?(userId: string, request: ClientExecBarrierRequest): Promise<ClientExecBarrierReply>;
   resources(kind: MachineKind): MachineResources;
   onBeforeMachineRevoke?: (address: string, reason: string) => Promise<void>;
 }
@@ -72,6 +74,7 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
       project: (userId, syncName) => this.services.syncProject(userId, syncName),
       prepareProject: async (userId, path) => { await this.attach({ userId, paths: [path] }); },
       skippedLinks: (userId, syncName, skipped) => this.services.reportSkippedLinks(userId, syncName, skipped),
+      clientExec: this.services.clientExec ? (userId, req) => this.services.clientExec!(userId, req) : undefined,
     });
   }
 

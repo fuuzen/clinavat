@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readJsonLines } from '../agent/ndjson.js';
+import type { ClientExecBarrierReply, ClientExecBarrierRequest } from '../client-host/exec-barrier.js';
 import { parseSkippedLinks, type SkippedLinks } from '../runtime/sync-status.js';
 import type { Machine } from './lxd-host.js';
 
@@ -13,8 +14,20 @@ interface BarrierHooks {
   prepareProject(userId: string, path: string): Promise<void>;
   /** Records the links the sync skips after a command, returning a notice about new ones for the command's output. */
   skippedLinks(userId: string, syncName: string, skipped: SkippedLinks): string | undefined;
+  /** Runs a Mode 2 (`mirrored`) client command with pre/post sync barriers. */
+  clientExec?(userId: string, request: ClientExecBarrierRequest): Promise<ClientExecBarrierReply>;
 }
-interface Request { id: number; op: 'ready' | 'begin' | 'end' | 'abort'; conn?: number; sync?: string; lock?: boolean }
+interface Request {
+  id: number;
+  op: 'ready' | 'begin' | 'end' | 'abort' | 'client_exec';
+  conn?: number;
+  sync?: string;
+  lock?: boolean;
+  projectId?: string;
+  command?: string;
+  cwd?: string;
+  background?: boolean;
+}
 interface Relay { child: ChildProcessWithoutNullStreams; userId: string; closed: boolean; connections: Map<number, { sync: string; release?: () => void }> }
 interface Worker { child: Promise<ChildProcessWithoutNullStreams>; pending: Map<number, { resolve(session?: string): void; reject(error: Error): void }> }
 
@@ -68,6 +81,8 @@ export class SyncBarriers {
     if (existing) this.stop(existing);
     const relay: Relay = { child: this.hooks.relay(machine), userId, closed: false, connections: new Map() };
     this.relays.set(machine.name, relay);
+    relay.child.stdin.on('error', () => undefined);
+    relay.child.on('error', () => relay.child.kill());
     const lines = readJsonLines(relay.child.stdout, message => { void this.handle(relay, message as Request); }, () => relay.child.kill());
     relay.child.stderr.resume();
     relay.child.once('close', () => {
@@ -99,11 +114,30 @@ export class SyncBarriers {
       : { id, ok: false, error: error instanceof Error ? error.message : String(error) }) + '\n');
   }
 
+  private replyRaw(relay: Relay, id: number, payload: Record<string, unknown>): void {
+    if (relay.closed || relay.child.stdin.destroyed) return;
+    relay.child.stdin.write(JSON.stringify({ id, ...payload }) + '\n');
+  }
+
   private async handle(relay: Relay, message: Request): Promise<void> {
     const conn = Number(message.conn);
     if (message.op === 'abort') {
       relay.connections.get(conn)?.release?.();
       relay.connections.delete(conn);
+      return;
+    }
+    if (message.op === 'client_exec') {
+      if (!this.hooks.clientExec) {
+        this.reply(relay, message.id, new Error('客户端命令执行屏障尚未启用'));
+        return;
+      }
+      const reply = await this.hooks.clientExec(relay.userId, {
+        projectId: String(message.projectId ?? ''),
+        command: String(message.command ?? ''),
+        cwd: String(message.cwd ?? ''),
+        background: message.background === true,
+      });
+      this.replyRaw(relay, message.id, reply as unknown as Record<string, unknown>);
       return;
     }
     if (message.op !== 'begin' && message.op !== 'end') return;
@@ -149,6 +183,8 @@ export class SyncBarriers {
       pending.clear();
     };
     created.child.then(child => {
+      child.stdin.on('error', () => undefined);
+      child.on('error', () => child.kill());
       const lines = readJsonLines(child.stdout, value => {
         const message = value as { id: number; ok: boolean; error?: string; session?: string };
         const entry = pending.get(message.id);

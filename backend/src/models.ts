@@ -91,7 +91,7 @@ export interface Session {
   /** 'off' for plain conversations, 'hybrid' for full-access master, 'super' for read-only delegate-first coordinator. */
   orchestration_mode?: OrchestrationMode | null;
   super_read_mode?: SuperReadMode;
-  native_inspect_tools?: 0 | 1;
+  native_inspect_tools?: number;
   agent_profile?: string | null;
   /** A child agent's working directory relative to its project's root; NULL for the root. */
   agent_directory: string | null;

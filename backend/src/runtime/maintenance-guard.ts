@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { MaintenanceService } from './maintenance.js';
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const BLOCKED_READ_ROUTES = new Set(['/api/projects/:id/terminal']);
+const BLOCKED_READ_ROUTES = new Set(['/api/projects/:id/terminal', '/api/client-devices/tunnel']);
 
 // Running sessions must still be able to stop, pause/resume, cancel queued inputs, or answer in-flight approvals/questions.
 const WRAP_UP_ROUTES = new Set([
@@ -15,6 +15,7 @@ const WRAP_UP_ROUTES = new Set([
   'POST /api/discussions/:id/stop',
   'POST /api/approvals/:id',
   'POST /api/sessions/:id/questions/:requestId',
+  'POST /api/sessions/:id/btw/:btwId/cancel',
 ]);
 
 export function sendMaintenanceBlocked(reply: FastifyReply, maintenance: MaintenanceService): FastifyReply {
@@ -31,6 +32,7 @@ function isAllowedDuringMaintenance(method: string, routeUrl: string | undefined
   if (!routeUrl) return READ_METHODS.has(method);
   if (routeUrl === '/api/auth' || routeUrl.startsWith('/api/auth/')) return true;
   if (routeUrl === '/api/admin' || routeUrl.startsWith('/api/admin/')) return true;
+  if (routeUrl === '/api/client-devices/bootstrap') return true;
   if (BLOCKED_READ_ROUTES.has(routeUrl)) return false;
   if (READ_METHODS.has(method)) return true;
   return WRAP_UP_ROUTES.has(`${method} ${routeUrl}`);

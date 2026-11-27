@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { join } from 'node:path';
 import { findExecutable } from '../agent/environment.js';
 import { assertSlotProcessesStopped } from '../accounts/slot-runtime/processes.js';
 import { childEnvironment, runCommand } from '../runtime/process.js';
@@ -28,8 +29,15 @@ export class ProcessExecutionHost implements ExecutionHost {
   }
 
   async spawn(binary: string, args: string[], options: ExecutionSpawnOptions): Promise<ChildProcessWithoutNullStreams> {
+    let cwd = options.cwd;
+    for (const mount of options.scope.mounts ?? []) {
+      const target = mount.target ?? mount.source;
+      if (target === mount.source) continue;
+      if (cwd === target) { cwd = mount.source; break; }
+      if (cwd.startsWith(`${target}/`)) { cwd = join(mount.source, cwd.slice(target.length + 1)); break; }
+    }
     return spawn(binary, args, {
-      cwd: options.cwd, env: { ...options.env, ...options.secrets }, detached: process.platform !== 'win32',
+      cwd, env: { ...options.env, ...options.secrets }, detached: process.platform !== 'win32',
       stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
   }

@@ -198,6 +198,14 @@ def serve(connection, number):
         stream = connection.makefile('rwb')
         try:
             first = json.loads(stream.readline() or b'{}')
+            if first.get('op') == 'client_exec':
+                reply = request({
+                    'op': 'client_exec', 'conn': number,
+                    'projectId': first.get('projectId'), 'command': first.get('command'),
+                    'cwd': first.get('cwd'), 'background': first.get('background') is True,
+                })
+                stream.write((json.dumps(reply) + '\n').encode()); stream.flush()
+                return
             sync, lock = first.get('sync'), first.get('lock') is True
             if first.get('op') != 'begin' or not isinstance(sync, str): return
             reply = request({'op': 'begin', 'conn': number, 'sync': sync, 'lock': lock})

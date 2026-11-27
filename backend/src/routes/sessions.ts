@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
+import { agentHostInfo, type Context, projectFor, sessionFor, withResourceLocks } from '../context.js';
+import { codexNativeToolsState } from '../agent/codex/goal.js';
 import { HttpError, type Project, type Session, type Slot, type User } from '../models.js';
 import { publicUser } from '../auth.js';
 import { validateAgentSelection } from '../agent/model-catalog.js';
 import { defaultPermissionModeFor, permissionModes, validatePermissionMode } from '../agent/permissions.js';
 import { ensureLocalHost } from '../local-host.js';
+import { listVisibleHosts } from './hosts.js';
 import { availableSlots, serializeUserSlot, slotForUser } from '../accounts/access.js';
 import { sessionMessageRoutes, selectedSlotId, selectionFields } from './session-messages.js';
 import { sessionGoalRoutes } from './session-goals.js';
@@ -139,7 +141,10 @@ export async function createSession(context: Context, user: User, input: z.infer
 
 /** Archives or restores a conversation after reclaiming its idle resident CLI; caller holds `session:${id}` when needed. */
 export async function setSessionArchived(context: Context, userId: string, id: string, archive: boolean): Promise<Session> {
-  if (archive) await releaseSession(context, id, userId);
+  if (archive) {
+    context.btw?.cancelSession(id);
+    await releaseSession(context, id, userId);
+  }
   context.store.run(archive ? "UPDATE sessions SET archived_at=COALESCE(archived_at,datetime('now')) WHERE id=?"
     : 'UPDATE sessions SET archived_at=NULL WHERE id=?', id);
   const updated = sessionFor(context, id, userId);
@@ -154,6 +159,7 @@ export async function stopSession(context: Context, userId: string, id: string):
   sessionFor(context, id, userId);
   await withResourceLocks(context, [`session:${id}`], async () => {
     events.cancelSession(userId, id);
+    context.btw?.cancelSession(id);
     try { await agents.stop(id); }
     catch (error) {
       if (agents.isBusy(id)) throw error;
@@ -179,16 +185,16 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     return {
       user: publicUser(request.user, key.publicKey),
       slots: availableSlots(store, request.user.id).map(slot => serializeUserSlot(context, slot, request.user.id)),
-      hosts: store.all("SELECT * FROM dev_hosts WHERE user_id=? AND (kind='ssh' OR ?='admin') ORDER BY kind,created_at", request.user.id, request.user.role),
+      hosts: listVisibleHosts(context, request.user.id, request.user.role),
       projects: store.all(`SELECT projects.* FROM projects JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
-        WHERE projects.user_id=? AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY projects.created_at`, request.user.id, request.user.role),
+        WHERE projects.user_id=? AND (dev_hosts.kind IN ('ssh','client') OR ?='admin') ORDER BY projects.created_at`, request.user.id, request.user.role),
       sessions: store.all(`SELECT sessions.* FROM sessions JOIN projects ON projects.id=sessions.project_id
         JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id WHERE sessions.user_id=? AND sessions.archived_at IS NULL
-        AND (dev_hosts.kind='ssh' OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
+        AND (dev_hosts.kind IN ('ssh','client') OR ?='admin') ORDER BY sessions.updated_at DESC`, request.user.id, request.user.role),
       archivedSessionsCount: store.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sessions
         JOIN projects ON projects.id=sessions.project_id JOIN dev_hosts ON dev_hosts.id=projects.dev_host_id
         WHERE sessions.user_id=? AND sessions.archived_at IS NOT NULL
-        AND (dev_hosts.kind='ssh' OR ?='admin')`, request.user.id, request.user.role)?.count ?? 0,
+        AND (dev_hosts.kind IN ('ssh','client') OR ?='admin')`, request.user.id, request.user.role)?.count ?? 0,
       questionDefaults: questionDefaults.forUser(request.user.id),
       agentDefaults: context.agentDefaults.user(request.user.id),
       agentProfiles: store.all('SELECT * FROM agent_profiles WHERE user_id=? ORDER BY name', request.user.id),
@@ -208,22 +214,28 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const source = sessionFor(context, id, request.user.id);
     // The source may keep running: only finished turns, whose native history no longer changes, can be branched from.
     return withResourceLocks(context, [], async () => {
-      const turn = store.get<{ status: string; native_ref: string | null; native_session_id: string | null; native_inspect_tools: 0 | 1 }>(
+      const turn = store.get<{ status: string; native_ref: string | null; native_session_id: string | null; native_inspect_tools: number }>(
         'SELECT status,native_ref,native_session_id,native_inspect_tools FROM session_turns WHERE id=? AND session_id=?', turnId, id);
       if (!turn) throw new HttpError(404, '轮次不存在');
       if (!['completed', 'interrupted', 'error'].includes(turn.status)) throw new HttpError(409, '请等这一轮结束后再从这里分支');
       if (!turn.native_ref || !turn.native_session_id) throw new HttpError(409, '这一轮没有记录原生会话位置，无法从这里分支');
       const forkId = randomUUID();
       // Codex forks inherit the saved tool list. A new branch starts as a non-orchestrating conversation.
-      const forkNative = !turn.native_inspect_tools;
+      const project = projectFor(context, source.project_id, request.user.id);
+      const host = agentHostInfo(context, project.dev_host_id, request.user.id);
+      const expectedForkTools = source.engine === 'codex'
+        ? codexNativeToolsState({ engine: 'codex', orchestration: 0, orchestration_mode: 'off', parent_session_id: null, agent_access: null }, project, host)
+        : 0;
+      const forkNative = turn.native_inspect_tools === expectedForkTools;
       store.transaction(() => {
         store.run(`INSERT INTO sessions(id,project_id,user_id,engine,slot_id,slot_mode,title,model,reasoning_effort,permission_mode,
-          agent_mode,role_preset,question_mode,question_timeout_ms,forked_from_session_id,forked_from_turn_id,fork_native_id,fork_native_anchor)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          agent_mode,role_preset,question_mode,question_timeout_ms,forked_from_session_id,forked_from_turn_id,fork_native_id,fork_native_anchor,native_inspect_tools)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         forkId, source.project_id, request.user.id, source.engine, source.slot_id, source.slot_mode,
         `${source.title.slice(0, 190)} · 分支`, source.model, source.reasoning_effort, source.permission_mode, source.agent_mode,
         source.role_preset, source.question_mode, source.question_timeout_ms, id, turnId,
-        forkNative ? turn.native_session_id : null, forkNative ? turn.native_ref : null);
+        forkNative ? turn.native_session_id : null, forkNative ? turn.native_ref : null,
+        forkNative ? turn.native_inspect_tools : 0);
         turns.copyHistory(id, forkId, turnId);
       });
       const created = sessionFor(context, forkId, request.user.id);
@@ -307,6 +319,7 @@ export function sessionRoutes(app: FastifyInstance, context: Context) {
     const { id } = identifier.parse(request.params);
     const session = sessionFor(context, id, request.user.id);
     return withResourceLocks(context, [`project:${session.project_id}`, `session:${id}`], async () => {
+      context.btw?.cancelSession(id);
       await releaseSession(context, id, request.user.id);
       store.run('DELETE FROM sessions WHERE id=?', id);
       context.config.orchestration?.sessionDeleted(id, session.parent_session_id);

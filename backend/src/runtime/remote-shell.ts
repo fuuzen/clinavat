@@ -181,3 +181,74 @@ ${sshExecution('HOST_RUNNER', 'command_cwd')}
 exit "$command_status"
 `;
 }
+
+const clientExecBridgeProgram = String.raw`
+import json, os, socket, sys
+sock_path, project_id, cwd, bg, command = sys.argv[1:6]
+# Read the project-scoped HMAC token from stdin so it never appears in /proc/*/cmdline or environ.
+token = sys.stdin.readline().rstrip('\r\n')
+conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    conn.connect(sock_path)
+except OSError as err:
+    sys.stderr.write('remote-shell: client barrier unavailable: ' + str(err) + '\n')
+    sys.exit(74)
+payload = {'op': 'client_exec', 'projectId': project_id, 'cwd': cwd, 'command': command, 'background': bg == 'true'}
+if token:
+    payload['token'] = token
+stream = conn.makefile('rwb')
+stream.write((json.dumps(payload) + '\n').encode('utf-8'))
+stream.flush()
+line = stream.readline()
+if not line:
+    sys.stderr.write('remote-shell: client barrier closed unexpectedly\n')
+    sys.exit(74)
+reply = json.loads(line)
+if not reply.get('ok'):
+    msg = str(reply.get('error') or 'client execution failed')
+    sys.stderr.write('remote-shell: ' + msg + '\n')
+    sys.exit(75 if 'lock acquisition timed out' in msg else 74)
+if reply.get('stdout'):
+    sys.stdout.write(reply['stdout'])
+    sys.stdout.flush()
+if reply.get('stderr'):
+    sys.stderr.write(reply['stderr'])
+    sys.stderr.flush()
+if reply.get('notice'):
+    sys.stderr.write(str(reply['notice']) + '\n')
+    sys.stderr.flush()
+sys.exit(int(reply.get('exitCode', 0)))
+`;
+
+/**
+ * Renders `.bin/remote-shell` for Mode 2 (`mirrored`) client projects.
+ * Sends `client_exec` over the Hub barrier socket (`/run/clinavat-relay/barrier.sock` in LXD or local Unix socket in process mode).
+ */
+export function renderClientRemoteShell(project: WorkspaceProject, socketPath: string, token?: string): string {
+  const vmRoot = project.vm_path || project.local_path;
+  const variables = {
+    PROJECT_ID: project.id,
+    LOCAL_ROOT: project.local_path,
+    VM_ROOT: vmRoot,
+    BARRIER_SOCKET: socketPath,
+    BARRIER_TOKEN: token ?? '',
+    CLIENT_EXEC_BRIDGE: clientExecBridgeProgram,
+  };
+  return `#!/bin/bash
+set -uo pipefail
+${Object.entries(variables).map(([key, value]) => `readonly ${key}=${shellQuote(value)}`).join('\n')}
+
+${shellArguments('remote-shell')}
+if [[ "$command_mode" != true ]]; then
+  printf '%s\\n' 'remote-shell: interactive shell requires a command in client mirrored mode' >&2
+  exit 64
+fi
+local_cwd="$(pwd -P)" || exit 72
+case "$local_cwd" in
+  "$VM_ROOT"|"$VM_ROOT/"*|"$LOCAL_ROOT"|"$LOCAL_ROOT/"*) ;;
+  *) printf '%s\\n' 'remote-shell: working directory is outside the project' >&2; exit 72 ;;
+esac
+printf '%s\\n' "$BARRIER_TOKEN" | python3 -I -c "$CLIENT_EXEC_BRIDGE" "$BARRIER_SOCKET" "$PROJECT_ID" "$local_cwd" "$background" "$command_text"
+exit $?
+`;
+}
