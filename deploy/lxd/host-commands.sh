@@ -1,18 +1,21 @@
 #!/bin/bash
 # Lets slot machines log in to this host's sshd over the VM bridge as the Hub user: in VM mode, the administrator's
 # local projects run their shell commands here. It also manages and verifies the egress ACL rule for the Hub's
-# single-port SSH relay (default TCP 22100, or CLINAVAT_SSH_RELAY_PORT) used for approved private dev hosts.
+# single-port SSH relay (default TCP 22100, or CLINAVAT_SSH_RELAY_PORT) used for approved private dev hosts,
+# plus opt-in host firewall rules for optional native TCP desktop client SSH (default TCP 2222).
 # setup.sh runs apply; run apply or apply-relay yourself on an existing installation. Run as root; see docs/vm-isolation.md.
 #
 #   sudo deploy/lxd/host-commands.sh apply --hub-user <user> [--port 22] [--relay-port 22100]
 #   sudo deploy/lxd/host-commands.sh check --hub-user <user> [--port 22] [--relay-port 22100]
 #   sudo deploy/lxd/host-commands.sh apply-relay [--relay-port 22100]
+#   sudo deploy/lxd/host-commands.sh apply-client-ssh [--client-ssh-port 2222] [--zone <zone>] [--source <cidr>]
+#   sudo deploy/lxd/host-commands.sh check-client-ssh [--client-ssh-port 2222] [--zone <zone>] [--source <cidr>]
 #
 # apply lets the VM network log in with keys only, opens the sshd and Hub SSH relay ports in the egress ACL and
 # active firewalld zone, then runs check. apply-relay only ensures the Hub SSH relay ACL and firewalld rules exist
-# (idempotent, without touching sshd_config). It never changes where sshd listens, so a mistake cannot lock out
-# other logins. The Hub itself keeps the key and its entry in the Hub user's authorized_keys, and logs in once at
-# start; the admin panel shows the result.
+# (idempotent, without touching sshd_config). Neither apply nor check opens external client SSH ports.
+# apply-client-ssh / check-client-ssh manage optional external/LAN firewall rules for native TCP desktop client SSH;
+# they never modify clinavat-egress and refuse to expose the port on VM isolation zone cv-users.
 set -euo pipefail
 
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -25,17 +28,22 @@ END='# END clinavat host commands'
 
 command="${1:-}"; shift || true
 hub_user="" port=22 relay_port="${CLINAVAT_SSH_RELAY_PORT:-22100}"
+client_ssh_port="${CLINAVAT_CLIENT_SSH_PORT:-2222}" client_ssh_zone="" client_ssh_source=""
 while (($#)); do
   case "$1" in
-    --hub-user) hub_user="$2"; shift 2 ;;
-    --port) port="$2"; shift 2 ;;
-    --relay-port) relay_port="$2"; shift 2 ;;
+    --hub-user) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; hub_user="$2"; shift 2 ;;
+    --port) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; port="$2"; shift 2 ;;
+    --relay-port) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; relay_port="$2"; shift 2 ;;
+    --client-ssh-port) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; client_ssh_port="$2"; shift 2 ;;
+    --zone) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; client_ssh_zone="$2"; shift 2 ;;
+    --source) (($# >= 2)) || { echo "$1 requires a value" >&2; exit 64; }; client_ssh_source="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { echo "invalid --port $port" >&2; exit 64; }
 [[ "$relay_port" =~ ^[0-9]+$ ]] && (( relay_port >= 1 && relay_port <= 65535 )) || { echo "invalid --relay-port $relay_port" >&2; exit 64; }
+[[ "$client_ssh_port" =~ ^[0-9]+$ ]] && (( client_ssh_port >= 1 && client_ssh_port <= 65535 )) || { echo "invalid --client-ssh-port $client_ssh_port" >&2; exit 64; }
 
 lxc() { /snap/bin/lxc "$@" </dev/null; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -52,10 +60,12 @@ require_host_command_prereqs() {
 }
 
 # The bridge address, its network, and a guest address inside it to evaluate sshd's Match rules with.
-read -r bridge subnet guest < <(lxc network get "$NETWORK" ipv4.address | python3 -I -c '
+load_bridge_network() {
+  read -r bridge subnet guest < <(lxc network get "$NETWORK" ipv4.address | python3 -I -c '
 import ipaddress, sys
 interface = ipaddress.ip_interface(sys.stdin.read().strip())
 print(interface.ip, interface.network, interface.network.network_address + 10)') || fail "cannot read the address of $NETWORK"
+}
 
 # A Match block lasts until the next Match line or the end of the file, so it goes last. AuthenticationMethods
 # alone already refuses passwords and keyboard-interactive logins.
@@ -148,6 +158,40 @@ check_ufw_port() {
   fi
 }
 
+check_ufw_external_port() {
+  local target_port="$1" label="$2" source_cidr="${3:-}" status allow_cmd port_lines source_display matched=0
+  if [[ -n "$source_cidr" ]]; then
+    allow_cmd="sudo ufw allow from $source_cidr to any port $target_port proto tcp"
+  else
+    allow_cmd="sudo ufw allow ${target_port}/tcp"
+  fi
+  if command -v ufw >/dev/null && status="$(ufw status 2>/dev/null)" && grep -q '^Status: active' <<<"$status"; then
+    port_lines="$(grep -E "(^|[[:space:]])${target_port}/tcp([[:space:]]|$).*ALLOW" <<<"$status" || true)"
+    if [[ -n "$source_cidr" ]]; then
+      source_display="${source_cidr%/32}"
+      source_display="${source_display%/128}"
+      if grep -Fq -- "$source_display" <<<"$port_lines" || grep -Eq 'ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere([[:space:]]|$)' <<<"$port_lines"; then
+        matched=1
+      fi
+    elif grep -Eq 'ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere([[:space:]]|$)' <<<"$port_lines"; then
+      matched=1
+    fi
+    if (( matched )); then
+      ok "ufw has an allow rule for tcp/$target_port${source_cidr:+ from $source_cidr} ($label)"
+    else
+      warn "ufw is active and may block $label on tcp/$target_port${source_cidr:+ from $source_cidr}; run: $allow_cmd"
+    fi
+  fi
+}
+
+check_client_ssh() {
+  echo "== check-client-ssh: external TCP desktop client SSH port $client_ssh_port${client_ssh_zone:+ (zone $client_ssh_zone)}${client_ssh_source:+ (source $client_ssh_source)}"
+  firewalld_check_external_port "$client_ssh_port" "desktop client SSH" "$client_ssh_zone" "$client_ssh_source"
+  check_ufw_external_port "$client_ssh_port" "desktop client SSH" "$client_ssh_source"
+  ((problems == 0)) || fail "$problems problem(s) found"
+  echo "Client SSH firewall checks passed (tcp/$client_ssh_port; $FIREWALLD_ZONE and $ACL remain isolated)."
+}
+
 check_key_path_modes() {
   local home="$1" keys="$2" path owner mode hub_uid
   home="$(realpath -m -- "$home")" || { problem "cannot resolve $home (sshd StrictModes)"; return; }
@@ -206,12 +250,20 @@ check() {
   echo "Host-side checks passed. The Hub uses $hub_user@$bridge:$port (SSH relay: $bridge:$relay_port); the admin panel's 宿主机 page shows whether it logs in."
 }
 
+normalize_client_ssh_source() {
+  [[ -n "$client_ssh_source" ]] || return 0
+  local raw_source="$client_ssh_source"
+  read -r _ client_ssh_source < <(firewalld_normalize_cidr "$raw_source") || { echo "invalid --source $raw_source" >&2; exit 64; }
+}
+
 case "$command" in
   check)
     require_host_command_prereqs
+    load_bridge_network
     check ;;
   apply)
     require_host_command_prereqs
+    load_bridge_network
     echo "== apply"
     apply_sshd
     ok "logins from $subnet accept keys only (previous file: $SSHD_CONFIG.clinavat-backup)"
@@ -226,9 +278,18 @@ case "$command" in
     firewalld_ensure_port "$relay_port" "Hub SSH relay"
     check ;;
   apply-relay)
+    load_bridge_network
     echo "== apply-relay: allow guests on $subnet to reach Hub SSH relay $bridge:$relay_port"
     ensure_relay_acl
     firewalld_ensure_port "$relay_port" "Hub SSH relay"
     check_ufw_port "$relay_port" "Hub SSH relay" ;;
-  *) sed -n '2,15p' "$0"; exit 64 ;;
+  apply-client-ssh)
+    normalize_client_ssh_source
+    echo "== apply-client-ssh: allow external TCP desktop client SSH port $client_ssh_port${client_ssh_zone:+ (zone $client_ssh_zone)}${client_ssh_source:+ (source $client_ssh_source)}"
+    firewalld_ensure_external_port "$client_ssh_port" "desktop client SSH" "$client_ssh_zone" "$client_ssh_source"
+    check_client_ssh ;;
+  check-client-ssh)
+    normalize_client_ssh_source
+    check_client_ssh ;;
+  *) sed -n '2,18p' "$0"; exit 64 ;;
 esac
