@@ -128,6 +128,8 @@ export type AgentPreferences = Record<AgentEngine, AgentPreference>;
 export interface ModelCatalog {
   models: AgentModel[];
   refreshedAt: string;
+  /** The slot user whose profile an administrator without access borrowed for the refresh. */
+  runAs?: string;
 }
 
 export interface Message {

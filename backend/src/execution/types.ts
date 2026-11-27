@@ -76,6 +76,8 @@ export interface ExecutionHost {
   loginCommand(slotId: string, home: string, argv: string[], env: Record<string, string>): Promise<string>;
   /** Revokes a user's access to paths that can be handed to another user or moved, such as slot homes. */
   revoke(userId: string, paths: string[]): Promise<void>;
+  /** The user whose files a slot's machine still holds; running as anyone else hands the machine over first. */
+  slotOccupant(slotId: string): Promise<string | undefined>;
   /**
    * Stops a user's workspace or a slot's machine, or with `remove` deletes it. Its address and identity stay reserved:
    * the gateway binds egress by address, and a reused address would inherit another account's egress.

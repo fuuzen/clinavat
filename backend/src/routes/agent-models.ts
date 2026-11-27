@@ -44,15 +44,18 @@ export function agentModelRoutes(app: FastifyInstance, context: Context) {
     if (!assigned.includes(request.user.id) && !admin) throw new HttpError(403, '无权使用该授权槽位，请联系管理员授予访问权限');
     const slot = store.get<Slot>('SELECT * FROM account_slots WHERE id=?', id);
     if (!slot) throw new HttpError(404, '槽位不存在');
-    // The CLI runs with a user's profile in the slot; an administrator without access borrows the one already there.
-    const active = config.credentials.activeUserId(id);
-    const userId = assigned.includes(request.user.id) ? request.user.id : active && assigned.includes(active) ? active : assigned[0];
+    // The CLI runs with a user's profile in the slot. An administrator without access borrows the profile already
+    // there, running or left in the slot's machine, so refreshing does not hand the machine over to another user.
+    const present = [config.credentials.activeUserId(id), await config.execution.slotOccupant(id)];
+    const userId = assigned.includes(request.user.id) ? request.user.id
+      : present.find(candidate => candidate && assigned.includes(candidate)) ?? assigned[0];
     if (!userId) throw new HttpError(409, '槽位尚未分配给用户，分配后再刷新模型列表');
     const current = slotForUser(store, id, userId, slot.engine);
     try {
       const catalog = await refreshModelCatalog(config, { user: { id: userId }, slot: current, session: { engine: current.engine } });
       announceSlotChange(context, assigned);
-      return catalog;
+      if (userId === request.user.id) return catalog;
+      return { ...catalog, runAs: store.get<{ username: string }>('SELECT username FROM users WHERE id=?', userId)?.username ?? userId };
     } catch (error) { throw catalogError(error); }
   });
 }

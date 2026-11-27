@@ -133,7 +133,7 @@ function SlotResetAccess({ slot, usage, disabled, onChange }: {
 
 /** The slot's saved model list, read from its CLI again only on request. */
 function SlotModels({ slot }: { slot: Slot }) {
-  const [catalog, setCatalog] = useState<{ count: number | null; refreshedAt: string | null }>({ count: null, refreshedAt: slot.model_catalog_at ?? null });
+  const [catalog, setCatalog] = useState<{ count: number | null; refreshedAt: string | null; runAs?: string }>({ count: null, refreshedAt: slot.model_catalog_at ?? null });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function refresh() {
@@ -141,7 +141,7 @@ function SlotModels({ slot }: { slot: Slot }) {
     setError("");
     try {
       const result = await post<ModelCatalog>(`/slots/${slot.id}/models/refresh`);
-      setCatalog({ count: result.models.length, refreshedAt: result.refreshedAt });
+      setCatalog({ count: result.models.length, refreshedAt: result.refreshedAt, runAs: result.runAs });
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -156,6 +156,7 @@ function SlotModels({ slot }: { slot: Slot }) {
           模型列表：{catalog.refreshedAt
             ? `${catalog.count === null ? "" : `${catalog.count} 个模型 · `}更新于 ${new Date(catalog.refreshedAt).toLocaleString("zh-CN")}`
             : "尚未读取，首次使用时自动读取"}
+          {catalog.runAs && ` · 以槽位用户 ${catalog.runAs} 的配置读取`}
         </small>
         <button type="button" className="icon-button" disabled={busy} aria-busy={busy} aria-label={label} title={label}
           onClick={() => void refresh()}>

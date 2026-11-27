@@ -308,6 +308,11 @@ export class LxdExecutionHost implements ExecutionHost, MachineResourceHost {
     }
   }
 
+  async slotOccupant(slotId: string): Promise<string | undefined> {
+    await this.load();
+    return this.machines.get(machineName('slot', slotId))?.occupant;
+  }
+
   async retire(kind: MachineKind, owner: string, remove: boolean): Promise<void> {
     await this.load();
     const name = machineName(kind, owner);

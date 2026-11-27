@@ -59,6 +59,7 @@ export class ProcessExecutionHost implements ExecutionHost {
   }
 
   async revoke(): Promise<void> { /* Host processes already share one filesystem view. */ }
+  async slotOccupant(): Promise<string | undefined> { return undefined; }
 
   async retire(): Promise<void> { /* Host processes have no machine of their own. */ }
 
