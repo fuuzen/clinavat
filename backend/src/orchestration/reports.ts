@@ -10,7 +10,9 @@ import { messageInput, sendSessionMessage } from '../routes/session-messages.js'
 import { rolloverSession } from '../routes/sessions.js';
 import { reportBlock, type ReportSource } from './instructions.js';
 import { orchestrationConstants } from './limits.js';
+import type { WorkBoard } from './board.js';
 import type { AgentTask, AgentTasks } from './tasks.js';
+import type { CommitContext } from './worktrees/index.js';
 
 const finishedStatuses = new Set(['completed', 'interrupted', 'error']);
 const fallbackReports: Record<string, string> = {
@@ -68,6 +70,7 @@ export class ReportDelivery {
   constructor(
     private readonly context: Context,
     private readonly tasks: AgentTasks,
+    private readonly board: WorkBoard,
     private readonly changed: (masterId: string) => void,
     private readonly deliveredTasks?: (user: User, master: Session, tasks: AgentTask[]) => void,
   ) {}
@@ -201,13 +204,21 @@ export class ReportDelivery {
     else this.finishChild(child, 'interrupted', entry.turnId, '\n\n[子智能体的进程在后台工作结束前退出]');
   }
 
+  private settleCommitContext(child: Session, running: AgentTask[], report: string): CommitContext {
+    const workItemId = [...running].reverse().find(task => task.work_item_id)?.work_item_id ?? this.tasks.latestWorkItem(child.id);
+    const task = child.parent_session_id ? this.board.commitTask(child.parent_session_id, workItemId, child.agent_name) : undefined;
+    return { agentName: child.agent_name, task, report };
+  }
+
   /** Ends the child's tasks; a child in its own worktree first gets its work committed, and the report says where it is. */
   async complete(child: Session, status: 'completed' | 'interrupted' | 'error', report: string): Promise<void> {
     this.clearDeferred(child.id);
-    const ending = this.tasks.running(child.id).map(task => task.id);
+    const running = this.tasks.running(child.id);
+    const ending = running.map(task => task.id);
     if (!ending.length) return;
     const worktree = child.agent_isolation === 'worktree' && this.context.worktrees
-      ? await this.context.worktrees.settle(child).catch((error: unknown) => `[worktree] 无法检查子智能体的修改：${error instanceof Error ? error.message : String(error)}`)
+      ? await this.context.worktrees.settle(child, this.settleCommitContext(child, running, report))
+        .catch((error: unknown) => `[worktree] 无法检查子智能体的修改：${error instanceof Error ? error.message : String(error)}`)
       : '';
     const finished = this.tasks.finish(child.id, status, worktree ? `${report}\n\n${worktree}` : report, ending);
     if (!finished.length || !child.parent_session_id) return;

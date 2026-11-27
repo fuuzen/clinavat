@@ -330,6 +330,25 @@ export class WorkBoard {
     return reference ? this.find(masterId, reference) : undefined;
   }
 
+  /** Looks up a task's metadata for commit message generation, including recently archived items when referenced by ID. */
+  commitTask(masterId: string, workItemId?: string | null, agentName?: string | null): { code: string; title: string; description: string | null } | undefined {
+    if (workItemId) {
+      const byId = this.store.get<Pick<WorkItemRow, 'seq' | 'title' | 'description'>>(
+        'SELECT seq,title,description FROM work_items WHERE id=? AND master_session_id=?',
+        workItemId, masterId,
+      );
+      if (byId) return { code: codeOf(byId.seq), title: byId.title, description: byId.description };
+    }
+    if (agentName) {
+      const byAgent = this.store.get<Pick<WorkItemRow, 'seq' | 'title' | 'description'>>(
+        'SELECT seq,title,description FROM work_items WHERE master_session_id=? AND assigned_agent=? AND archived_at IS NULL ORDER BY updated_at DESC,rowid DESC LIMIT 1',
+        masterId, agentName,
+      );
+      if (byAgent) return { code: codeOf(byAgent.seq), title: byAgent.title, description: byAgent.description };
+    }
+    return undefined;
+  }
+
   reviewTask(masterId: string, agentName: string | null): WorkItemRow | undefined {
     const tasks = this.rows(masterId).filter(item => agentName ? item.assigned_agent === agentName : item.status === 'verifying');
     if (tasks.length > 1) throw new HttpError(400, '有多个相关看板任务，请用 task 指定本次审查对应的任务。');

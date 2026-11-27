@@ -70,6 +70,8 @@ export const toolInputs = {
     mode: z.enum(['merge', 'squash']).default('merge').describe('"merge" keeps the child\'s commits; "squash" makes them one commit.'),
     onConflict: z.enum(['abort', 'leave']).default('abort')
       .describe('"abort" leaves the project as it was and lists the conflicting files; "leave" keeps the conflict markers in the project for you to resolve and commit.'),
+    commitMessage: z.string().trim().min(1).max(4000).optional()
+      .describe('Optional Conventional Commit message (supports multi-line body and trailers); omit to auto-generate from the linked task, child report, and changed files.'),
     archive: z.boolean().optional()
       .describe('Archive the child conversation after a successful merge; defaults to true for ephemeral children.'),
   }),
