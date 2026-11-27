@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { agentEnvironment, agentScope, terminateProcess } from '../environment.js';
 import { readJsonLines } from '../ndjson.js';
-import { answerHubMcp, hubToolNamespace } from '../orchestration-tools.js';
+import { answerHubMcp, hubToolNamespace, hubToolsFor } from '../orchestration-tools.js';
 import type { RunServices } from '../types.js';
 
 /**
@@ -82,8 +82,8 @@ export interface ToolBridge {
 
 /** Starts the bridge for one run; its calls end with the run's signal. */
 export async function startToolBridge(services: RunServices, shim: string, signal: AbortSignal): Promise<ToolBridge> {
-  const { execution } = services.config;
-  const scope = agentScope(services.context);
+  const { execution, workspaceDir } = services.config;
+  const scope = agentScope(services.context, workspaceDir);
   const socket = `/tmp/clinavat-tools-${randomUUID()}.sock`;
   const token = randomBytes(24).toString('hex');
   const child = await execution.spawn('python3', ['-I', '-c', bridgeProgram, socket], {
@@ -98,6 +98,7 @@ export async function startToolBridge(services: RunServices, shim: string, signa
   let diagnostics = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-4096); });
+  child.stdin.on('error', () => undefined);
   child.once('error', error => fail(error));
   child.once('close', code => fail(new Error(`编排工具通道已退出（${code}）：${diagnostics.trim()}`)));
   readJsonLines(child.stdout, (event: { ready?: boolean; conn?: number; line?: string }) => {
@@ -124,7 +125,7 @@ export async function startToolBridge(services: RunServices, shim: string, signa
 
 /** A permission request for one of the Hub's tools; the Hub approves those itself when they run. */
 export function isHubToolCall(call: { name?: unknown; title?: unknown; kind?: unknown }, services: RunServices): boolean {
-  const tools = services.config.orchestration?.toolsFor(services.context) ?? [];
+  const tools = hubToolsFor(services.config, services.context);
   const names = [call.name, call.title].filter((value): value is string => typeof value === 'string');
   return names.some(name => {
     const match = new RegExp(`^(?:mcp[_:./]+)?${hubToolNamespace}[_:./]+([a-z_]+)$`).exec(name.trim());

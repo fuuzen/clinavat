@@ -5,6 +5,7 @@ import { startAntigravity } from './antigravity/run.js';
 import { engineProfiles, type AgentEngine } from './engines.js';
 import { UserInputRequests } from './user-input.js';
 import { HttpError } from '../models.js';
+import { isClientDirect } from './orchestration-tools.js';
 import {
   attachRunCompletion, createActiveRun, createCredentialLeaseTracker, handleStartupFailure, prepareRunServices,
 } from './run-context.js';
@@ -12,8 +13,8 @@ import { RuntimeFailovers } from './runtime-failover.js';
 import { readResidentUsage } from './resident-usage.js';
 import type { UsageSlot } from '../accounts/usage.js';
 import {
-  acceptsResidentContext, buildAgentErrorPayload, hasResidentBackgroundWork, isIdleResidentRun, runtimeViewOf,
-  summarizeActiveRuns, type ActiveRun, type RunContinuation, type RuntimeView,
+  acceptsResidentContext, buildAgentErrorPayload, hasResidentBackgroundWork, isIdleResidentRun, rescueUnconsumedSteers,
+  runtimeViewOf, summarizeActiveRuns, type ActiveRun, type RunContinuation, type RuntimeView,
 } from './resident-run.js';
 export type { RuntimeView } from './resident-run.js';
 import type {
@@ -62,6 +63,14 @@ export class AgentManager {
     return runtimeViewOf(state);
   }
 
+  /** Returns the live unpaused resident process when it can serve a `/btw` side question directly. */
+  residentForBtw(sessionId: string): { run: AgentRun; context: AgentContext } | undefined {
+    const state = this.active.get(sessionId);
+    if (!state?.run?.sideQuestion || state.finishing || state.closing || state.abort.signal.aborted) return undefined;
+    if (this.failovers.has(sessionId) || state.control.state !== 'running') return undefined;
+    return { run: state.run, context: state.context };
+  }
+
   /** `images` are the IDs of the images attached to the first message. */
   async start(context: AgentContext, prompt: string, continuation?: RunContinuation, images: string[] = []): Promise<void> {
     if (this.closing) throw new DOMException('服务正在关闭', 'AbortError');
@@ -89,6 +98,7 @@ export class AgentManager {
         config: this.config, callbacks: this.callbacks, questions: this.questions, state,
         turnEnded: outcome => this.turnEnded(state, outcome),
         automaticTurn: origin => this.automaticTurn(state, origin),
+        steered: messageId => this.steered(state, messageId),
         activityChanged: () => { this.publish(state); this.scheduleIdle(state); },
       }, lease);
       await this.callbacks.updateSession(sessionId, { status: 'running' });
@@ -134,7 +144,16 @@ export class AgentManager {
     }
     const promptImages = this.callbacks.loadImages(sessionId, images);
     this.callbacks.saveUserMessage(sessionId, content, images, source, messageId);
-    if (await run.steer({ text: prompt, images: promptImages }, messageId)) return 'steered';
+    state.pendingSteers.push({ ...input, messageId });
+    let accepted = false;
+    try {
+      accepted = await run.steer({ text: prompt, images: promptImages }, messageId);
+    } catch (error) {
+      state.pendingSteers = state.pendingSteers.filter(item => item.messageId !== messageId);
+      throw error;
+    }
+    if (accepted) return 'steered';
+    state.pendingSteers = state.pendingSteers.filter(item => item.messageId !== messageId);
     // The turn ended while steering; the saved message becomes the next turn.
     if (state.turnActive) {
       state.queue.unshift({ ...input, messageId });
@@ -233,11 +252,15 @@ export class AgentManager {
     this.callbacks.event({ type: 'turn-state', sessionId, payload: { turnId, status: outcome.status } });
     if (!switching) this.callbacks.event({ type: 'done', sessionId,
       payload: { turnId, stopped: outcome.status === 'interrupted', failed: outcome.status === 'error' } });
-    state.flushes = state.flushes.then(() => this.callbacks.flushWorkspace(sessionId)).catch((error: unknown) => {
-      state.flushError = error instanceof Error ? error : new Error('工作区同步失败');
-      this.callbacks.event({ type: 'error', sessionId, payload: { message: error instanceof Error ? error.message : '工作区同步失败' } });
-    });
+    if (!isClientDirect(state.context)) {
+      state.flushes = state.flushes.then(() => this.callbacks.flushWorkspace(sessionId)).catch((error: unknown) => {
+        state.flushError = error instanceof Error ? error : new Error('工作区同步失败');
+        this.callbacks.event({ type: 'error', sessionId, payload: { message: error instanceof Error ? error.message : '工作区同步失败' } });
+      });
+    }
     if (switching || state.halted) { this.publish(state); return; }
+    // Non-failover normal completion: clear any accepted steers whose consumption marker never fired so idle teardown won't replay them.
+    if (outcome.status === 'completed') state.pendingSteers = [];
     if (state.context.session.command) { this.closeRuntime(state); return; }
     const next = !state.closing && !state.abort.signal.aborted && !this.closing ? state.queue.shift() : undefined;
     if (next && !state.closing) {
@@ -256,7 +279,14 @@ export class AgentManager {
     this.scheduleIdle(state);
   }
 
+  private steered(state: ActiveRun, messageId: string): void {
+    state.pendingSteers = state.pendingSteers.filter(item => item.messageId !== messageId);
+    if (!state.turnActive || state.finishing) return;
+    this.callbacks.steered?.(state.context.session.id, messageId, state.context.session.turn_id);
+  }
+
   private automaticTurn(state: ActiveRun, origin: TurnOrigin): void {
+    if ('messageId' in origin) state.pendingSteers = state.pendingSteers.filter(item => item.messageId !== origin.messageId);
     if (state.turnActive || state.finishing || state.abort.signal.aborted || this.closing) return;
     const sessionId = state.context.session.id;
     try {
@@ -300,12 +330,15 @@ export class AgentManager {
 
   async stop(sessionId: string): Promise<void> {
     const state = this.active.get(sessionId);
-    if (this.closing && state) this.failovers.retainQueue(sessionId, state.queue);
+    if (this.closing && state) {
+      rescueUnconsumedSteers(state, state.queue);
+      this.failovers.retainQueue(sessionId, state.queue);
+    }
     if (!this.closing) this.callbacks.saveQueuedInputs?.(sessionId, []);
     const switching = this.failovers.stop(sessionId, this.closing);
     if (state) {
       state.abort.abort();
-      if (!this.closing) state.queue = [];
+      if (!this.closing) { state.queue = []; state.pendingSteers = []; }
       state.control.close(); state.run?.stop();
       await state.startup;
       await state.completion;

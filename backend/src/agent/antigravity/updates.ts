@@ -1,4 +1,85 @@
+import { randomUUID } from 'node:crypto';
+import type { RunServices } from '../types.js';
 import { unansweredNotice, type UserInputOutcome, type UserInputQuestion } from '../user-input.js';
+
+const TEXT_LIMIT = 8 * 1024 * 1024;
+
+/**
+ * Tracks an Antigravity turn's text/thinking blocks and steering epochs.
+ * Text and thinking split at every tool call and at every consumed mid-turn steer so
+ * post-steer chunks always receive fresh item IDs and never append to pre-steer items.
+ */
+export class AntigravityStream {
+  turnKey = randomUUID();
+  private steerEpoch = 0;
+  private segment = 0;
+  private segmentOpen = false;
+  private thinking = 0;
+  private thinkingOpen = false;
+  private textSize = 0;
+  private texts = new Map<string, string>();
+  private lastTextId: string | undefined;
+
+  constructor(private services: RunServices) {}
+
+  reset(): void {
+    this.turnKey = randomUUID();
+    this.steerEpoch = 0;
+    this.segment = 0;
+    this.thinking = 0;
+    this.segmentOpen = false;
+    this.thinkingOpen = false;
+    this.textSize = 0;
+    this.texts.clear();
+    this.lastTextId = undefined;
+  }
+
+  breakBlocks(): void {
+    this.segmentOpen = false;
+    this.thinkingOpen = false;
+  }
+
+  /** Advances the steering epoch and resets current-segment text state so post-steer chunks get fresh IDs. */
+  steer(): void {
+    this.steerEpoch += 1;
+    this.segment = 0;
+    this.thinking = 0;
+    this.segmentOpen = false;
+    this.thinkingOpen = false;
+    this.texts.clear();
+    this.lastTextId = undefined;
+  }
+
+  /** Returns false when accumulated text exceeds the per-turn limit. */
+  append(kind: 'text' | 'reasoning', text: string): boolean {
+    if (this.textSize + text.length > TEXT_LIMIT) return false;
+    this.textSize += text.length;
+    const prefix = this.steerEpoch ? `s${this.steerEpoch}:` : '';
+    if (kind === 'text') {
+      if (!this.segmentOpen) { this.segment++; this.segmentOpen = true; }
+      const id = `${this.turnKey}:${prefix}text:${this.segment}`;
+      this.texts.set(id, (this.texts.get(id) ?? '') + text);
+      this.lastTextId = id;
+      this.services.event('activity', { id, kind: 'text', text, append: true });
+    } else {
+      if (!this.thinkingOpen) { this.thinking++; this.thinkingOpen = true; }
+      this.services.event('activity', { id: `${this.turnKey}:${prefix}thinking:${this.thinking}`, kind: 'reasoning', text, append: true });
+    }
+    return true;
+  }
+
+  finish(): string {
+    const output = this.lastTextId ? this.texts.get(this.lastTextId)?.trim() ?? '' : '';
+    if (this.lastTextId && output) {
+      this.services.event('activity', { id: this.lastTextId, kind: 'text', text: this.texts.get(this.lastTextId), final: true });
+    }
+    this.texts.clear();
+    this.lastTextId = undefined;
+    this.textSize = 0;
+    this.steerEpoch = 0;
+    return output;
+  }
+}
 
 /** A tool call as agy reports it over ACP. */
 export interface AcpToolCall {

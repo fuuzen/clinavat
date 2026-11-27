@@ -36,6 +36,11 @@ export function readJsonLines(stream: Readable, onValue: (value: Record<string, 
     if (closed) return;
     closed = true;
     buffer = '';
+    if (!stream.destroyed) {
+      const swallowLateError = () => undefined;
+      stream.on('error', swallowLateError);
+      stream.once('close', () => stream.off('error', swallowLateError));
+    }
     stream.off('data', onData);
     stream.off('end', onEnd);
     stream.off('error', fail);
