@@ -192,11 +192,11 @@ jobs:
             security import "$P12_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
             rm -f "$P12_PATH"
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-            EXISTING_KEYCHAINS=()
+            KEYCHAINS=("$KEYCHAIN_PATH")
             while IFS= read -r kc; do
-              [ -n "$kc" ] && EXISTING_KEYCHAINS+=("$kc")
+              [ -n "$kc" ] && KEYCHAINS+=("$kc")
             done < <(security list-keychains -d user | tr -d '"' | sed 's/^[[:space:]]*//')
-            security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
+            security list-keychains -d user -s "${KEYCHAINS[@]}"
 
             IDENTITY="$APPLE_SIGNING_IDENTITY_SECRET"
             if [ -z "$IDENTITY" ]; then
@@ -301,13 +301,13 @@ jobs:
           [ -n "${APPLE_API_ISSUER:-}" ] || unset APPLE_API_ISSUER
           [ -n "${APPLE_API_KEY_PATH:-}" ] || unset APPLE_API_KEY_PATH
 
-          CONFIG_ARGS=()
+          TAURI_CMD=(npx --no-install tauri build --ci --target "$BUILD_TARGET" --bundles "$BUILD_BUNDLES")
           if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
-            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
+            TAURI_CMD+=(--config "$TAURI_CONFIG_PATH")
           fi
           (
             cd client
-            npx --no-install tauri build --ci --target "$BUILD_TARGET" --bundles "$BUILD_BUNDLES" "${CONFIG_ARGS[@]}"
+            "${TAURI_CMD[@]}"
           )
 
           cargo build --manifest-path client/daemon/Cargo.toml --release --locked --target "$BUILD_TARGET"
@@ -317,12 +317,12 @@ jobs:
           BUNDLE_DIR="$PWD/client/src-tauri/target/$BUILD_TARGET/release/bundle"
 
           if [ "$PLATFORM_SLUG" = "macos" ]; then
-            DMG_FILE="$(find "$BUNDLE_DIR/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+            DMG_FILE="$(find "$BUNDLE_DIR/dmg" -maxdepth 1 -type f -name '*.dmg' | sed -n '1p')"
             [ -n "$DMG_FILE" ] || { echo "::error::Missing .dmg bundle in $BUNDLE_DIR/dmg"; exit 1; }
             cp "$DMG_FILE" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_macos_${BUILD_ARCH}.dmg"
           else
-            DEB_FILE="$(find "$BUNDLE_DIR/deb" -maxdepth 1 -type f -name '*.deb' | head -n 1)"
-            APPIMAGE_FILE="$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
+            DEB_FILE="$(find "$BUNDLE_DIR/deb" -maxdepth 1 -type f -name '*.deb' | sed -n '1p')"
+            APPIMAGE_FILE="$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -type f -name '*.AppImage' | sed -n '1p')"
             [ -n "$DEB_FILE" ] || { echo "::error::Missing .deb bundle in $BUNDLE_DIR/deb"; exit 1; }
             [ -n "$APPIMAGE_FILE" ] || { echo "::error::Missing .AppImage bundle in $BUNDLE_DIR/appimage"; exit 1; }
             cp "$DEB_FILE" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_linux_${BUILD_ARCH}.deb"
@@ -505,11 +505,6 @@ jobs:
           STAGE_DIR="$PWD/dist-artifacts"
           mkdir -p "$STAGE_DIR"
 
-          CONFIG_ARGS=()
-          if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
-            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
-          fi
-
           FORMAL_SIGNING="false"
           if [ -n "$ANDROID_KEYSTORE_BASE64" ] || [ -n "$ANDROID_KEYSTORE_PASSWORD" ] || [ -n "$ANDROID_KEY_ALIAS" ]; then
             if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ]; then
@@ -524,17 +519,21 @@ jobs:
           fi
 
           if [ "$FORMAL_SIGNING" = "true" ]; then
+            ANDROID_CMD=(npx --no-install tauri android build --ci --apk --aab)
+            if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
+              ANDROID_CMD+=(--config "$TAURI_CONFIG_PATH")
+            fi
             (
               cd client
-              npx --no-install tauri android build --ci --apk --aab "${CONFIG_ARGS[@]}"
+              "${ANDROID_CMD[@]}"
             )
-            APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' ! -name '*-unsigned.apk' | head -n 1)"
+            APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' ! -name '*-unsigned.apk' | sed -n '1p')"
             if [ -z "$APK_SRC" ]; then
-              APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
+              APK_SRC="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*-unsigned.apk' | sed -n '1p')"
             fi
-            AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*universal*.aab' | head -n 1)"
+            AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*universal*.aab' | sed -n '1p')"
             if [ -z "$AAB_SRC" ]; then
-              AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' | head -n 1)"
+              AAB_SRC="$(find client/src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' | sed -n '1p')"
             fi
             [ -n "$APK_SRC" ] || { echo "::error::Missing signed universal APK"; exit 1; }
             [ -n "$AAB_SRC" ] || { echo "::error::Missing signed universal AAB"; exit 1; }
@@ -542,13 +541,17 @@ jobs:
             cp "$APK_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_android_universal.apk"
             cp "$AAB_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_android_universal.aab"
           else
+            ANDROID_CMD=(npx --no-install tauri android build --ci --apk)
+            if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
+              ANDROID_CMD+=(--config "$TAURI_CONFIG_PATH")
+            fi
             (
               cd client
-              npx --no-install tauri android build --ci --apk "${CONFIG_ARGS[@]}"
+              "${ANDROID_CMD[@]}"
             )
-            UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' | head -n 1)"
+            UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*universal*release*.apk' | sed -n '1p')"
             if [ -z "$UNSIGNED_APK" ]; then
-              UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+              UNSIGNED_APK="$(find client/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | sed -n '1p')"
             fi
             [ -n "$UNSIGNED_APK" ] || { echo "::error::Missing universal APK"; exit 1; }
 
@@ -680,18 +683,18 @@ jobs:
           set -euo pipefail
           node client/prepare-mobile.mjs ios
 
-          CONFIG_ARGS=()
+          IOS_CMD=(npx --no-install tauri ios build --ci --export-method "$APPLE_IOS_EXPORT_METHOD")
           if [ -n "${TAURI_CONFIG_PATH:-}" ]; then
-            CONFIG_ARGS+=(--config "$TAURI_CONFIG_PATH")
+            IOS_CMD+=(--config "$TAURI_CONFIG_PATH")
           fi
           (
             cd client
-            npx --no-install tauri ios build --ci --export-method "$APPLE_IOS_EXPORT_METHOD" "${CONFIG_ARGS[@]}"
+            "${IOS_CMD[@]}"
           )
 
           STAGE_DIR="$PWD/dist-artifacts"
           mkdir -p "$STAGE_DIR"
-          IPA_SRC="$(find client/src-tauri/gen/apple/build -type f -name '*.ipa' | head -n 1)"
+          IPA_SRC="$(find client/src-tauri/gen/apple/build -type f -name '*.ipa' | sed -n '1p')"
           [ -n "$IPA_SRC" ] || { echo "::error::Missing signed .ipa output"; exit 1; }
           cp "$IPA_SRC" "$STAGE_DIR/Clinavat_${ARTIFACT_VERSION}_ios_arm64.ipa"
 
@@ -743,7 +746,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM=""
 
-          APP_BUNDLE="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          APP_BUNDLE="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' | sed -n '1p')"
           [ -n "$APP_BUNDLE" ] || { echo "::error::Missing .app inside $ARCHIVE_PATH/Products/Applications"; exit 1; }
 
           STAGE_DIR="$PWD/dist-artifacts"
